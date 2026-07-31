@@ -33,11 +33,11 @@ DirectX 12 + C++ 기반 게임 엔진을 **단계적으로 직접 구현하며 �
 
 **목표**: 개발 환경과 저장소를 준비하고, 빈 프로젝트가 빌드되는 것을 확인한다.
 
-- [ ] Visual Studio 2026 + "C++를 사용한 데스크톱 개발" 워크로드, 최신 Windows SDK 확인
-- [ ] Win32 빈 프로젝트 생성 (`Dx12Engine.sln`)
-- [ ] `git init` + `.gitignore` 작성 (`.vs/`, `x64/`, `out/`, `*.user` 등 제외)
-- [ ] GitHub 원격 저장소 연결, 첫 커밋/푸시
-- [ ] 폴더 구조 잡기 (처음엔 단순하게 시작)
+- [o] Visual Studio 2026 + "C++를 사용한 데스크톱 개발" 워크로드, 최신 Windows SDK 확인
+- [o] Win32 빈 프로젝트 생성 (`Dx12Engine.sln`)
+- [o] `git init` + `.gitignore` 작성 (`.vs/`, `x64/`, `out/`, `*.user` 등 제외)
+- [o] GitHub 원격 저장소 연결, 첫 커밋/푸시
+- [o] 폴더 구조 잡기 (처음엔 단순하게 시작)
 
 ```
 Dx12Engine/                  # 저장소 루트
@@ -59,10 +59,10 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: DirectX 이전에, 윈도우가 뜨는 원리(창 클래스, 메시지 루프)를 이해한다.
 
-- [ ] `WNDCLASSEX` 등록, `CreateWindow`로 창 생성
-- [ ] 윈도우 프로시저(`WndProc`)와 메시지 루프 (`PeekMessage` 방식 — 게임 루프용)
-- [ ] `WM_DESTROY`, `WM_SIZE` 등 기본 메시지 처리
-- [ ] 창 크기/타이틀 상수화
+- [o] `WNDCLASSEX` 등록, `CreateWindow`로 창 생성
+- [o] 윈도우 프로시저(`WndProc`)와 메시지 루프 (`PeekMessage` 방식 — 게임 루프용)
+- [o] `WM_DESTROY`, `WM_SIZE` 등 기본 메시지 처리
+- [o] 창 크기/타이틀 상수화
 
 **핵심 개념**: 메시지 기반 구조, `GetMessage` vs `PeekMessage`(블로킹 여부가 게임 루프에 왜 중요한지)
 
@@ -74,13 +74,13 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: DX12 초기화 전 과정을 한 줄씩 이해한다. **엔진 전체에서 가장 학습량이 많은 단계** — 서두르지 말 것.
 
-- [ ] Debug Layer 활성화 (디버그 빌드에서만)
-- [ ] `DXGIFactory` → `Adapter` 열거 → `D3D12CreateDevice`
-- [ ] Command Queue / Command Allocator / Command List 생성
-- [ ] Swap Chain 생성 (더블 버퍼링, `DXGI_SWAP_EFFECT_FLIP_DISCARD`)
-- [ ] RTV Descriptor Heap 생성, 백버퍼마다 RTV 생성
-- [ ] Fence 기반 CPU-GPU 동기화 (`Signal` / `WaitForFenceValue`)
-- [ ] 렌더 루프: 리소스 배리어(Present→RenderTarget) → Clear → 배리어(→Present) → Present
+- [o] Debug Layer 활성화 (디버그 빌드에서만)
+- [o] `DXGIFactory` → `Adapter` 열거 → `D3D12CreateDevice`
+- [o] Command Queue / Command Allocator / Command List 생성
+- [o] Swap Chain 생성 (더블 버퍼링, `DXGI_SWAP_EFFECT_FLIP_DISCARD`)
+- [o] RTV Descriptor Heap 생성, 백버퍼마다 RTV 생성
+- [o] Fence 기반 CPU-GPU 동기화 (`Signal` / `WaitForFenceValue`)
+- [o] 렌더 루프: 리소스 배리어(Present→RenderTarget) → Clear → 배리어(→Present) → Present
 
 **핵심 개념**:
 - DX11과 달리 **커맨드를 기록해서 큐에 제출**하는 구조인 이유
