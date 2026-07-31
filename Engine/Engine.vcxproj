@@ -70,6 +70,13 @@
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
   </ImportGroup>
   <PropertyGroup Label="UserMacros" />
+  <PropertyGroup>
+    <!-- Build output goes to <repo>\Output. Anchored to $(ProjectDir), NOT
+         $(SolutionDir), so the exe lands in the same place whether the .slnx
+         or the .vcxproj is built. -->
+    <OutDir>$([MSBuild]::NormalizeDirectory('$(ProjectDir)..\Output\$(Platform)\$(Configuration)'))</OutDir>
+    <IntDir>$([MSBuild]::NormalizeDirectory('$(ProjectDir)..\Output\Intermediate\$(ProjectName)\$(Platform)\$(Configuration)'))</IntDir>
+  </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
@@ -140,6 +147,11 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Source\Main.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="Shaders\Basic.hlsl">
+      <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
+    </None>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

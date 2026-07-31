@@ -18,6 +18,9 @@
 mono_crash.*
 
 # Build results
+# Dx12Engine: all build output (exe + intermediates) goes here, see Engine.vcxproj
+Output/
+
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/

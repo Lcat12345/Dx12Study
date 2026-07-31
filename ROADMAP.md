@@ -96,12 +96,12 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: 렌더링 파이프라인 전체(입력 → 셰이더 → 출력)를 한 번 관통한다.
 
-- [ ] HLSL 정점/픽셀 셰이더 작성 (`Shaders/`)
-- [ ] 셰이더 컴파일 (일단 `D3DCompileFromFile`로 시작, DXC 전환은 나중에)
-- [ ] Root Signature 생성 (처음엔 빈 것으로)
-- [ ] PSO(Pipeline State Object) 생성 — Input Layout, 셰이더, 래스터라이저/블렌드/뎁스 상태
-- [ ] Vertex Buffer 생성 (일단 Upload Heap에) + Vertex Buffer View
-- [ ] Viewport / Scissor Rect 설정, `DrawInstanced` 호출
+- [o] HLSL 정점/픽셀 셰이더 작성 (`Shaders/`)
+- [o] 셰이더 컴파일 (일단 `D3DCompileFromFile`로 시작, DXC 전환은 나중에)
+- [o] Root Signature 생성 (처음엔 빈 것으로)
+- [o] PSO(Pipeline State Object) 생성 — Input Layout, 셰이더, 래스터라이저/블렌드/뎁스 상태
+- [o] Vertex Buffer 생성 (일단 Upload Heap에) + Vertex Buffer View
+- [o] Viewport / Scissor Rect 설정, `DrawInstanced` 호출
 
 **핵심 개념**: 파이프라인 상태를 PSO 하나에 미리 굽는 이유, Root Signature = 셰이더가 받는 리소스의 "함수 시그니처", NDC 좌표계
 
