@@ -163,11 +163,11 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: 셰이더 프로그래밍 본격 입문. 표면이 빛에 반응하게 만든다.
 
-- [ ] 정점에 노멀 추가, 노멀 변환(월드 행렬의 역전치) 이해
-- [ ] 방향광(Directional Light) + Blinn-Phong 반사 모델 (ambient / diffuse / specular)
-- [ ] 머티리얼 개념 도입 (색상, specular power 등을 CB로 전달)
-- [ ] 점광(Point Light) 추가, 감쇠(attenuation)
-- [ ] 조명용 상수 버퍼 구조 정리 (프레임 단위 CB vs 오브젝트 단위 CB 분리)
+- [o] 정점에 노멀 추가, 노멀 변환(월드 행렬의 역전치) 이해
+- [o] 방향광(Directional Light) + Blinn-Phong 반사 모델 (ambient / diffuse / specular)
+- [o] 머티리얼 개념 도입 (색상, specular power 등을 CB로 전달)
+- [o] 점광(Point Light) 추가, 감쇠(attenuation)
+- [o] 조명용 상수 버퍼 구조 정리 (프레임 단위 CB vs 오브젝트 단위 CB 분리)
 
 **핵심 개념**: 노멀과 내적으로 표현하는 빛의 세기, 왜 노멀은 역전치 행렬로 변환하는가, 상수 버퍼를 갱신 빈도별로 나누는 설계
 

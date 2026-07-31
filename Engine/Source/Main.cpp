@@ -1,6 +1,6 @@
 // Main.cpp : Application entry point.
-// Phase 6 - timer, input, free-look camera, multi-object scene, resize.
-// (see ROADMAP.md)
+// Phase 7 - Blinn-Phong lighting: vertex normals, materials, directional +
+// point light, constant buffers split by update frequency. (see ROADMAP.md)
 //
 // Controls: WASD = move, Q/E = down/up, hold RIGHT MOUSE = look around,
 //           Shift = move faster, Esc = quit.
@@ -40,26 +40,59 @@ namespace
     constexpr wchar_t kWindowTitle[] = L"Dx12Engine";
 
     constexpr UINT  kFrameCount    = 2;
-    constexpr float kClearColor[4] = { 0.0f, 0.2f, 0.4f, 1.0f };
+    constexpr float kClearColor[4] = { 0.02f, 0.04f, 0.08f, 1.0f };
 
     constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
     constexpr DXGI_FORMAT kDepthFormat      = DXGI_FORMAT_D32_FLOAT;
 
-    constexpr UINT kMaxObjects = 32; // constant buffer holds one slot each
+    constexpr UINT kMaxObjects = 32;
 
-    constexpr float kMoveSpeed      = 8.0f;   // units per second
+    constexpr float kMoveSpeed      = 8.0f;
     constexpr float kFastMultiplier = 3.0f;
-    constexpr float kMouseSpeed     = 0.004f; // radians per pixel
+    constexpr float kMouseSpeed     = 0.004f;
 
+    // Phase 7: normals join the vertex. Stride is now 32 bytes.
     struct Vertex
     {
         XMFLOAT3 position;
+        XMFLOAT3 normal;
         XMFLOAT2 uv;
     };
 
-    struct ObjectConstants
+    // How light bounces off a surface. Passed through the per-object CB.
+    struct Material
     {
-        XMFLOAT4X4 worldViewProj;
+        XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
+        XMFLOAT3 specularColor = { 0.3f, 0.3f, 0.3f };
+        float    shininess     = 32.0f;
+    };
+
+    // --- constant buffers, split BY UPDATE FREQUENCY (the Phase 7 lesson) ---
+    // Lights and camera are identical for every object in a frame, so
+    // uploading them once (pass CB) instead of once per object (object CB)
+    // is both less work and a clearer separation of concerns.
+
+    struct ObjectConstants // b0 - written once per object per frame
+    {
+        XMFLOAT4X4 world;
+        XMFLOAT4X4 worldInvTranspose;
+        XMFLOAT4   diffuseAlbedo;
+        XMFLOAT3   specularColor;
+        float      shininess;
+    };
+
+    // Layout must match the HLSL cbuffer exactly. In HLSL a float3 followed
+    // by a float packs into one 16-byte register, which is why every pair
+    // below is written together.
+    struct PassConstants // b1 - written once per frame
+    {
+        XMFLOAT4X4 viewProj;
+        XMFLOAT3   eyePosW;           float pad0 = 0.0f;
+        XMFLOAT3   ambientLight;      float pad1 = 0.0f;
+        XMFLOAT3   dirLightDirection; float pad2 = 0.0f;
+        XMFLOAT3   dirLightColor;     float pad3 = 0.0f;
+        XMFLOAT3   pointLightPos;     float pointLightRange = 0.0f;
+        XMFLOAT3   pointLightColor;   float pad4 = 0.0f;
     };
 
     constexpr UINT Align(UINT size, UINT alignment)
@@ -67,9 +100,8 @@ namespace
         return (size + alignment - 1) & ~(alignment - 1);
     }
     constexpr UINT kObjectCBSize = Align(sizeof(ObjectConstants), 256);
+    constexpr UINT kPassCBSize   = Align(sizeof(PassConstants), 256);
 
-    // Two meshes now (cube + floor), so grouping the buffers is worth it.
-    // Still a plain struct - the real Mesh class arrives in Phase 8.
     struct Mesh
     {
         ComPtr<ID3D12Resource>   vertexBuffer;
@@ -83,17 +115,16 @@ namespace
     {
         const Mesh* mesh      = nullptr;
         XMFLOAT3    position  = { 0, 0, 0 };
-        float       scale     = 1.0f;
-        float       spinSpeed = 0.0f; // radians per second around Y
+        XMFLOAT3    scale     = { 1, 1, 1 }; // non-uniform on purpose (see below)
+        float       spinSpeed = 0.0f;
+        Material    material;
     };
 
-    // A free-look camera is just a position plus two angles. The view
-    // matrix is derived from them every frame.
     struct Camera
     {
         XMFLOAT3 position = { 0.0f, 3.5f, -22.0f };
-        float    yaw      = 0.0f; // left/right, radians
-        float    pitch    = 0.0f; // up/down, radians
+        float    yaw      = 0.0f;
+        float    pitch    = 0.0f;
     };
 
     // ---------------------------------------------------------------- state
@@ -117,11 +148,13 @@ namespace
     ComPtr<ID3D12Resource>       g_depthStencilBuffer;
     ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
 
-    ComPtr<ID3D12Resource>       g_constantBuffer;
-    uint8_t*                     g_constantBufferMapped = nullptr;
-    ComPtr<ID3D12DescriptorHeap> g_srvHeap; // texture only now (see below)
+    ComPtr<ID3D12Resource> g_objectCB;
+    uint8_t*               g_objectCBMapped = nullptr;
+    ComPtr<ID3D12Resource> g_passCB;
+    uint8_t*               g_passCBMapped = nullptr;
 
-    ComPtr<ID3D12Resource> g_texture;
+    ComPtr<ID3D12DescriptorHeap> g_srvHeap;
+    ComPtr<ID3D12Resource>       g_texture;
 
     ComPtr<ID3D12Fence> g_fence;
     UINT64              g_fenceValue = 0;
@@ -133,12 +166,11 @@ namespace
     D3D12_RECT     g_scissorRect = {};
 
     Mesh                     g_cubeMesh;
+    Mesh                     g_pyramidMesh;
     Mesh                     g_floorMesh;
     std::vector<SceneObject> g_scene;
     Camera                   g_camera;
 
-    // Input: mouse look is active only while the right button is held, so
-    // the cursor stays usable for anything else.
     bool  g_lookActive  = false;
     POINT g_lastMouse   = {};
     float g_mouseDeltaX = 0.0f;
@@ -431,7 +463,7 @@ namespace
         g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
     }
 
-    // [6] Descriptor heaps that OUTLIVE a resize (only their contents change).
+    // [6] Descriptor heaps that OUTLIVE a resize.
     void CreateDescriptorHeaps()
     {
         D3D12_DESCRIPTOR_HEAP_DESC rtvDesc = {};
@@ -448,9 +480,6 @@ namespace
         ThrowIfFailed(g_device->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(&g_dsvHeap)),
                       "CreateDescriptorHeap(DSV)");
 
-        // Shader-visible heap: just the texture SRV. The per-object matrices
-        // now go through a ROOT DESCRIPTOR instead (see CreateRootSignature),
-        // which needs no heap slot at all.
         D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
         srvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
         srvDesc.NumDescriptors = 1;
@@ -472,11 +501,9 @@ namespace
         }
     }
 
-    // [7] Everything whose SIZE depends on the window. Called once at
-    //     startup and again after every resize.
+    // [7] Everything whose SIZE depends on the window.
     void CreateSizeDependentResources()
     {
-        // Back buffer RTVs (buffers themselves belong to the swap chain).
         D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle =
             g_rtvHeap->GetCPUDescriptorHandleForHeapStart();
         for (UINT i = 0; i < kFrameCount; ++i)
@@ -487,7 +514,6 @@ namespace
             rtvHandle.ptr += g_rtvDescriptorSize;
         }
 
-        // Depth buffer - this one we own, so it must be recreated by hand.
         D3D12_HEAP_PROPERTIES heapProps = {};
         heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
@@ -520,11 +546,7 @@ namespace
         g_scissorRect = { 0, 0, LONG(g_clientWidth), LONG(g_clientHeight) };
     }
 
-    // Resize procedure, in the only order that is safe:
-    //   1. wait for the GPU  2. release every reference to the old buffers
-    //   3. ResizeBuffers     4. recreate views and the depth buffer
-    // Skipping step 1 or 2 makes ResizeBuffers fail - the swap chain cannot
-    // free buffers anyone still holds.
+    // Resize: wait -> release every reference -> ResizeBuffers -> recreate.
     void OnResize()
     {
         if (!g_device || g_minimized || g_clientWidth == 0 || g_clientHeight == 0)
@@ -561,17 +583,21 @@ namespace
         }
     }
 
-    // [9] One constant buffer big enough for every object in the scene.
-    //     Each object gets its own 256-byte slot, so a draw just points the
-    //     root CBV at a different offset.
-    void CreateConstantBuffer()
+    // [9] TWO constant buffers now - one per update frequency.
+    void CreateConstantBuffers()
     {
-        g_constantBuffer = CreateUploadBuffer(nullptr, UINT64(kObjectCBSize) * kMaxObjects,
-                                              "CreateCommittedResource(CB)");
+        g_objectCB = CreateUploadBuffer(nullptr, UINT64(kObjectCBSize) * kMaxObjects,
+                                        "CreateCommittedResource(ObjectCB)");
         D3D12_RANGE readRange = {};
-        ThrowIfFailed(g_constantBuffer->Map(
-                          0, &readRange, reinterpret_cast<void**>(&g_constantBufferMapped)),
-                      "CB Map");
+        ThrowIfFailed(g_objectCB->Map(0, &readRange,
+                                      reinterpret_cast<void**>(&g_objectCBMapped)),
+                      "ObjectCB Map");
+
+        g_passCB = CreateUploadBuffer(nullptr, kPassCBSize,
+                                      "CreateCommittedResource(PassCB)");
+        ThrowIfFailed(g_passCB->Map(0, &readRange,
+                                    reinterpret_cast<void**>(&g_passCBMapped)),
+                      "PassCB Map");
     }
 
     // [10] Texture: CPU -> upload heap -> default heap (see Phase 5).
@@ -646,7 +672,7 @@ namespace
         ThrowIfFailed(g_commandList->Close(), "CommandList Close (texture)");
         ID3D12CommandList* lists[] = { g_commandList.Get() };
         g_commandQueue->ExecuteCommandLists(1, lists);
-        WaitForGpu(); // uploadBuffer dies below - GPU must be done with it
+        WaitForGpu();
 
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
         srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
@@ -658,9 +684,9 @@ namespace
             g_srvHeap->GetCPUDescriptorHandleForHeapStart());
     }
 
-    // [11] Root signature. The CBV is now a ROOT DESCRIPTOR, not a table:
-    //      with many objects per frame, pointing at a GPU address directly
-    //      is simpler and cheaper than allocating a descriptor per object.
+    // [11] Root signature: b0 object CB, b1 pass CB, t0 texture, s0 sampler.
+    //      Both CBs are visible to ALL stages now - the VS needs the
+    //      matrices, the PS needs the material and the lights.
     void CreateRootSignature()
     {
         D3D12_DESCRIPTOR_RANGE srvRange = {};
@@ -668,19 +694,23 @@ namespace
         srvRange.NumDescriptors     = 1;
         srvRange.BaseShaderRegister = 0; // t0
 
-        D3D12_ROOT_PARAMETER rootParams[2] = {};
+        D3D12_ROOT_PARAMETER rootParams[3] = {};
         rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
-        rootParams[0].Descriptor.ShaderRegister = 0; // b0
-        rootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_VERTEX;
+        rootParams[0].Descriptor.ShaderRegister = 0; // b0 - per object
+        rootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
 
-        rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
-        rootParams[1].DescriptorTable.pDescriptorRanges   = &srvRange;
-        rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+        rootParams[1].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
+        rootParams[1].Descriptor.ShaderRegister = 1; // b1 - per frame
+        rootParams[1].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
+
+        rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[2].DescriptorTable.pDescriptorRanges   = &srvRange;
+        rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_STATIC_SAMPLER_DESC sampler = {};
         sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-        sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP; // floor tiles
+        sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
         sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
@@ -711,7 +741,7 @@ namespace
                       "CreateRootSignature");
     }
 
-    // [12] PSO.
+    // [12] PSO - input layout gains NORMAL between POSITION and TEXCOORD.
     void CreatePipelineState()
     {
         const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
@@ -719,9 +749,11 @@ namespace
         ComPtr<ID3DBlob> ps = CompileShader(shaderFile, "PSMain", "ps_5_0");
 
         const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0,
               D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 12,
+            { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+              D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24,
               D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         };
 
@@ -766,23 +798,37 @@ namespace
                       "CreateGraphicsPipelineState");
     }
 
-    // [13] Meshes and the scene layout.
+    // [13] Meshes and scene. Each cube face carries its own flat normal -
+    //      possible only because the 24-vertex layout already gives every
+    //      face its own copy of each corner.
     void CreateScene()
     {
-        // --- cube: 24 vertices, a corner per face (see Phase 5) ---
+        const XMFLOAT3 nFront = {  0,  0, -1 };
+        const XMFLOAT3 nBack  = {  0,  0, +1 };
+        const XMFLOAT3 nLeft  = { -1,  0,  0 };
+        const XMFLOAT3 nRight = { +1,  0,  0 };
+        const XMFLOAT3 nUp    = {  0, +1,  0 };
+        const XMFLOAT3 nDown  = {  0, -1,  0 };
+
         const Vertex cubeVertices[] = {
-            { { -1, +1, -1 }, { 0, 0 } }, { { +1, +1, -1 }, { 1, 0 } },  // front
-            { { +1, -1, -1 }, { 1, 1 } }, { { -1, -1, -1 }, { 0, 1 } },
-            { { +1, +1, +1 }, { 0, 0 } }, { { -1, +1, +1 }, { 1, 0 } },  // back
-            { { -1, -1, +1 }, { 1, 1 } }, { { +1, -1, +1 }, { 0, 1 } },
-            { { -1, +1, +1 }, { 0, 0 } }, { { -1, +1, -1 }, { 1, 0 } },  // left
-            { { -1, -1, -1 }, { 1, 1 } }, { { -1, -1, +1 }, { 0, 1 } },
-            { { +1, +1, -1 }, { 0, 0 } }, { { +1, +1, +1 }, { 1, 0 } },  // right
-            { { +1, -1, +1 }, { 1, 1 } }, { { +1, -1, -1 }, { 0, 1 } },
-            { { -1, +1, +1 }, { 0, 0 } }, { { +1, +1, +1 }, { 1, 0 } },  // top
-            { { +1, +1, -1 }, { 1, 1 } }, { { -1, +1, -1 }, { 0, 1 } },
-            { { -1, -1, -1 }, { 0, 0 } }, { { +1, -1, -1 }, { 1, 0 } },  // bottom
-            { { +1, -1, +1 }, { 1, 1 } }, { { -1, -1, +1 }, { 0, 1 } },
+            // front (-Z)
+            { { -1, +1, -1 }, nFront, { 0, 0 } }, { { +1, +1, -1 }, nFront, { 1, 0 } },
+            { { +1, -1, -1 }, nFront, { 1, 1 } }, { { -1, -1, -1 }, nFront, { 0, 1 } },
+            // back (+Z)
+            { { +1, +1, +1 }, nBack,  { 0, 0 } }, { { -1, +1, +1 }, nBack,  { 1, 0 } },
+            { { -1, -1, +1 }, nBack,  { 1, 1 } }, { { +1, -1, +1 }, nBack,  { 0, 1 } },
+            // left (-X)
+            { { -1, +1, +1 }, nLeft,  { 0, 0 } }, { { -1, +1, -1 }, nLeft,  { 1, 0 } },
+            { { -1, -1, -1 }, nLeft,  { 1, 1 } }, { { -1, -1, +1 }, nLeft,  { 0, 1 } },
+            // right (+X)
+            { { +1, +1, -1 }, nRight, { 0, 0 } }, { { +1, +1, +1 }, nRight, { 1, 0 } },
+            { { +1, -1, +1 }, nRight, { 1, 1 } }, { { +1, -1, -1 }, nRight, { 0, 1 } },
+            // top (+Y)
+            { { -1, +1, +1 }, nUp,    { 0, 0 } }, { { +1, +1, +1 }, nUp,    { 1, 0 } },
+            { { +1, +1, -1 }, nUp,    { 1, 1 } }, { { -1, +1, -1 }, nUp,    { 0, 1 } },
+            // bottom (-Y)
+            { { -1, -1, -1 }, nDown,  { 0, 0 } }, { { +1, -1, -1 }, nDown,  { 1, 0 } },
+            { { +1, -1, +1 }, nDown,  { 1, 1 } }, { { -1, -1, +1 }, nDown,  { 0, 1 } },
         };
 
         std::vector<uint16_t> cubeIndices;
@@ -797,26 +843,73 @@ namespace
         g_cubeMesh = CreateMesh(cubeVertices, _countof(cubeVertices),
                                 cubeIndices.data(), UINT(cubeIndices.size()));
 
-        // --- floor: one big quad. UVs run 0..kTile so the texture REPEATS
-        //     (the sampler is set to WRAP). Without a textured floor there
-        //     is nothing to judge movement against.
+        // --- pyramid: SLANTED faces, which is the whole point.
+        //     A cube's normals all point straight down an axis, so an
+        //     axis-aligned squash leaves them pointing the same way once
+        //     renormalized - the inverse transpose changes nothing there.
+        //     A diagonal normal is different: squash it with the world
+        //     matrix and it stops being perpendicular to its own surface.
+        //     This is the shape that makes the inverse transpose visible.
+        const float kSlope = 0.4472f; // normalize(1, 2) -> y component
+        const float kSide  = 0.8944f; // ...and the sideways component
+        const XMFLOAT3 pFront = {  0,      kSlope, -kSide };
+        const XMFLOAT3 pRight = {  kSide,  kSlope,  0     };
+        const XMFLOAT3 pBack  = {  0,      kSlope,  kSide };
+        const XMFLOAT3 pLeft  = { -kSide,  kSlope,  0     };
+
+        const Vertex pyramidVertices[] = {
+            // each side face: apex, then the two base corners (clockwise
+            // seen from outside), with its own flat normal
+            { {  0, +1,  0 }, pFront, { 0.5f, 0 } },
+            { { +1, -1, -1 }, pFront, { 1,    1 } },
+            { { -1, -1, -1 }, pFront, { 0,    1 } },
+
+            { {  0, +1,  0 }, pRight, { 0.5f, 0 } },
+            { { +1, -1, +1 }, pRight, { 1,    1 } },
+            { { +1, -1, -1 }, pRight, { 0,    1 } },
+
+            { {  0, +1,  0 }, pBack,  { 0.5f, 0 } },
+            { { -1, -1, +1 }, pBack,  { 1,    1 } },
+            { { +1, -1, +1 }, pBack,  { 0,    1 } },
+
+            { {  0, +1,  0 }, pLeft,  { 0.5f, 0 } },
+            { { -1, -1, -1 }, pLeft,  { 1,    1 } },
+            { { -1, -1, +1 }, pLeft,  { 0,    1 } },
+
+            // base, facing down
+            { { -1, -1, -1 }, nDown,  { 0, 0 } }, { { +1, -1, -1 }, nDown, { 1, 0 } },
+            { { +1, -1, +1 }, nDown,  { 1, 1 } }, { { -1, -1, +1 }, nDown, { 0, 1 } },
+        };
+        const uint16_t pyramidIndices[] = {
+            0, 1, 2,   3, 4, 5,   6, 7, 8,   9, 10, 11, // sides
+            12, 13, 14,  12, 14, 15,                    // base
+        };
+        g_pyramidMesh = CreateMesh(pyramidVertices, _countof(pyramidVertices),
+                                   pyramidIndices, _countof(pyramidIndices));
+
         constexpr float kHalf = 40.0f;
-        constexpr float kTile = 40.0f;
+        constexpr float kTile = 20.0f;
         const Vertex floorVertices[] = {
-            { { -kHalf, 0, +kHalf }, { 0,     0     } },
-            { { +kHalf, 0, +kHalf }, { kTile, 0     } },
-            { { +kHalf, 0, -kHalf }, { kTile, kTile } },
-            { { -kHalf, 0, -kHalf }, { 0,     kTile } },
+            { { -kHalf, 0, +kHalf }, nUp, { 0,     0     } },
+            { { +kHalf, 0, +kHalf }, nUp, { kTile, 0     } },
+            { { +kHalf, 0, -kHalf }, nUp, { kTile, kTile } },
+            { { -kHalf, 0, -kHalf }, nUp, { 0,     kTile } },
         };
         const uint16_t floorIndices[] = { 0, 1, 2, 0, 2, 3 };
         g_floorMesh = CreateMesh(floorVertices, _countof(floorVertices),
                                  floorIndices, _countof(floorIndices));
 
-        // --- scene layout ---
-        g_scene.push_back({ &g_floorMesh, { 0, 0, 0 }, 1.0f, 0.0f });
+        // --- scene ---
+        // Floor: rough and wide, barely any highlight.
+        SceneObject floor;
+        floor.mesh                    = &g_floorMesh;
+        floor.material.specularColor  = { 0.05f, 0.05f, 0.05f };
+        floor.material.shininess      = 8.0f;
+        g_scene.push_back(floor);
 
-        // A 3x3 grid of cubes with the middle left open, so you can walk
-        // through the gap and feel the parallax.
+        // Cubes with deliberately different materials, so the same lights
+        // produce visibly different surfaces.
+        int index = 0;
         for (int z = -1; z <= 1; ++z)
         {
             for (int x = -1; x <= 1; ++x)
@@ -825,19 +918,56 @@ namespace
                 {
                     continue;
                 }
-                g_scene.push_back({ &g_cubeMesh,
-                                    { x * 8.0f, 1.0f, z * 8.0f },
-                                    1.0f,
-                                    0.3f + 0.15f * float(x + z * 3) });
+                SceneObject cube;
+                cube.mesh      = &g_cubeMesh;
+                cube.position  = { x * 8.0f, 1.0f, z * 8.0f };
+                cube.spinSpeed = 0.3f + 0.15f * float(x + z * 3);
+
+                // Shininess ramps 4 -> 256 across the grid: the low end is a
+                // broad dull sheen, the high end a small sharp highlight.
+                cube.material.shininess     = 4.0f * std::pow(2.0f, float(index) * 0.75f);
+                cube.material.specularColor = { 0.6f, 0.6f, 0.6f };
+                g_scene.push_back(cube);
+                ++index;
             }
         }
-        // One tall landmark cube far away - a fixed reference point.
-        g_scene.push_back({ &g_cubeMesh, { 0.0f, 3.0f, 24.0f }, 3.0f, 0.0f });
+
+        // A wide flat billboard, just to have a big surface catching light.
+        SceneObject wall;
+        wall.mesh                   = &g_cubeMesh;
+        wall.position               = { 0.0f, 3.0f, 20.0f };
+        wall.scale                  = { 6.0f, 3.0f, 0.5f };
+        wall.material.diffuseAlbedo = { 1.0f, 0.85f, 0.7f, 1.0f };
+        wall.material.specularColor = { 0.4f, 0.4f, 0.4f };
+        wall.material.shininess     = 64.0f;
+        g_scene.push_back(wall);
+
+        // Two pyramids side by side: one untouched, one squashed flat on Y.
+        // The squashed one only shades correctly because its normals go
+        // through the inverse transpose. Replace gWorldInvTranspose with
+        // gWorld in Basic.hlsl and re-run (shaders compile at startup, so
+        // no rebuild needed) - the squashed pyramid changes, the plain one
+        // and every cube stay exactly the same.
+        SceneObject pyramid;
+        pyramid.mesh                   = &g_pyramidMesh;
+        pyramid.position               = { -6.0f, 2.0f, -13.0f };
+        pyramid.scale                  = { 2.0f, 2.0f, 2.0f }; // uniform
+        pyramid.material.specularColor = { 0.5f, 0.5f, 0.5f };
+        pyramid.material.shininess     = 48.0f;
+        g_scene.push_back(pyramid);
+
+        // Squashed flat: its slanted faces are now nearly horizontal, so
+        // their normals must swing to nearly straight up. Using gWorld
+        // instead swings them the opposite way (nearly horizontal), and the
+        // pyramid shades as if it were still steep.
+        SceneObject squashed = pyramid;
+        squashed.position = { 6.0f, 0.9f, -13.0f };
+        squashed.scale    = { 4.0f, 0.8f, 4.0f };
+        g_scene.push_back(squashed);
     }
 
     // ---------------------------------------------------------------- per frame
 
-    // Yaw/pitch -> a forward direction. Yaw 0 looks down +Z.
     XMVECTOR CameraForward()
     {
         const float cosPitch = std::cos(g_camera.pitch);
@@ -849,23 +979,18 @@ namespace
 
     void UpdateCamera(float dt)
     {
-        // Mouse look: deltas were accumulated by WndProc since last frame.
         g_camera.yaw   += g_mouseDeltaX * kMouseSpeed;
         g_camera.pitch -= g_mouseDeltaY * kMouseSpeed;
         g_mouseDeltaX = 0.0f;
         g_mouseDeltaY = 0.0f;
 
-        // Clamp just short of straight up/down, where the camera would flip.
         constexpr float kPitchLimit = XM_PIDIV2 - 0.01f;
         g_camera.pitch = std::clamp(g_camera.pitch, -kPitchLimit, kPitchLimit);
 
         const XMVECTOR forward = CameraForward();
         const XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-        // Left-handed: cross(up, forward) points right.
-        const XMVECTOR right = XMVector3Normalize(XMVector3Cross(worldUp, forward));
+        const XMVECTOR right   = XMVector3Normalize(XMVector3Cross(worldUp, forward));
 
-        // GetAsyncKeyState polls the physical key state - good enough here;
-        // WM_INPUT (raw input) is the upgrade path for precise handling.
         auto down = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
 
         XMVECTOR move = XMVectorZero();
@@ -883,8 +1008,6 @@ namespace
             {
                 speed *= kFastMultiplier;
             }
-            // Normalize first: otherwise moving diagonally would be faster.
-            // Multiplying by dt is what makes speed frame-rate independent.
             move = XMVectorScale(XMVector3Normalize(move), speed * dt);
 
             XMVECTOR pos = XMLoadFloat3(&g_camera.position);
@@ -892,42 +1015,77 @@ namespace
         }
     }
 
-    // Writes one 256-byte constant slot per object.
-    void UpdateScene(float totalSeconds)
+    // Written ONCE per frame: camera and lights are shared by every object.
+    void UpdatePassConstants(float totalSeconds)
     {
         const XMVECTOR eye     = XMLoadFloat3(&g_camera.position);
         const XMVECTOR forward = CameraForward();
         const XMVECTOR up      = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
 
-        // LookTo (not LookAt): we have a direction, not a target point.
-        // The view matrix is the INVERSE of the camera's world transform -
-        // moving the camera right shifts the whole world left.
         const XMMATRIX view = XMMatrixLookToLH(eye, forward, up);
-
-        // Aspect ratio comes from the CURRENT client size, so resizing the
-        // window keeps the image correctly proportioned.
         const XMMATRIX proj = XMMatrixPerspectiveFovLH(
             XM_PIDIV4,
             float(g_clientWidth) / float(g_clientHeight),
             0.1f, 200.0f);
 
-        const XMMATRIX viewProj = view * proj;
+        PassConstants constants;
+        XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
+        constants.eyePosW = g_camera.position;
 
+        // Ambient: a cheap stand-in for global bounced light.
+        constants.ambientLight = { 0.18f, 0.19f, 0.22f };
+
+        // Directional light: only a DIRECTION, no position - it models a
+        // source so far away (the sun) that all its rays are parallel.
+        XMVECTOR dir = XMVector3Normalize(XMVectorSet(0.6f, -0.75f, 0.3f, 0.0f));
+        XMStoreFloat3(&constants.dirLightDirection, dir);
+        constants.dirLightColor = { 0.85f, 0.82f, 0.75f };
+
+        // Point light: orbits the scene so the falloff is easy to see.
+        constants.pointLightPos   = { 14.0f * std::cos(totalSeconds * 0.7f),
+                                      4.0f,
+                                      14.0f * std::sin(totalSeconds * 0.7f) };
+        constants.pointLightRange = 30.0f;
+        constants.pointLightColor = { 1.0f, 0.55f, 0.2f }; // warm orange
+
+        memcpy(g_passCBMapped, &constants, sizeof(constants));
+    }
+
+    // Written once per OBJECT: its transform and material.
+    void UpdateObjectConstants(float totalSeconds)
+    {
         for (size_t i = 0; i < g_scene.size() && i < kMaxObjects; ++i)
         {
             const SceneObject& obj = g_scene[i];
 
             const XMMATRIX world =
-                XMMatrixScaling(obj.scale, obj.scale, obj.scale) *
+                XMMatrixScaling(obj.scale.x, obj.scale.y, obj.scale.z) *
                 XMMatrixRotationY(obj.spinSpeed * totalSeconds) *
                 XMMatrixTranslation(obj.position.x, obj.position.y, obj.position.z);
 
-            ObjectConstants constants;
-            XMStoreFloat4x4(&constants.worldViewProj,
-                            XMMatrixTranspose(world * viewProj));
+            // Normals need the INVERSE TRANSPOSE, not the world matrix.
+            // Why: squashing a surface tilts it one way, but squashing its
+            // normal the same way tilts it the OTHER way - the two stop
+            // being perpendicular. The inverse transpose is exactly the
+            // matrix that undoes that. For uniform scale it reduces to the
+            // world matrix (up to a scale factor that normalize() removes),
+            // which is why the bug stays hidden until something is both
+            // non-uniformly scaled AND has faces that are not axis-aligned
+            // - hence the squashed pyramid in the scene.
+            const XMMATRIX worldInvTranspose =
+                XMMatrixTranspose(XMMatrixInverse(nullptr, world));
 
-            memcpy(g_constantBufferMapped + i * kObjectCBSize,
-                   &constants, sizeof(constants));
+            ObjectConstants constants;
+            // The extra transpose on both is the usual row-major -> HLSL
+            // column-major fix from Phase 4.
+            XMStoreFloat4x4(&constants.world, XMMatrixTranspose(world));
+            XMStoreFloat4x4(&constants.worldInvTranspose,
+                            XMMatrixTranspose(worldInvTranspose));
+            constants.diffuseAlbedo = obj.material.diffuseAlbedo;
+            constants.specularColor = obj.material.specularColor;
+            constants.shininess     = obj.material.shininess;
+
+            memcpy(g_objectCBMapped + i * kObjectCBSize, &constants, sizeof(constants));
         }
     }
 
@@ -961,25 +1119,28 @@ namespace
 
         ID3D12DescriptorHeap* heaps[] = { g_srvHeap.Get() };
         g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-        // The texture is shared by everything, so bind it once per frame.
         g_commandList->SetGraphicsRootDescriptorTable(
-            1, g_srvHeap->GetGPUDescriptorHandleForHeapStart());
+            2, g_srvHeap->GetGPUDescriptorHandleForHeapStart());
+
+        // Bound ONCE for the whole frame - that is the payoff of splitting
+        // the constant buffers by update frequency.
+        g_commandList->SetGraphicsRootConstantBufferView(
+            1, g_passCB->GetGPUVirtualAddress());
 
         g_commandList->RSSetViewports(1, &g_viewport);
         g_commandList->RSSetScissorRects(1, &g_scissorRect);
         g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-        const D3D12_GPU_VIRTUAL_ADDRESS cbBase =
-            g_constantBuffer->GetGPUVirtualAddress();
+        const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase =
+            g_objectCB->GetGPUVirtualAddress();
 
         for (size_t i = 0; i < g_scene.size() && i < kMaxObjects; ++i)
         {
             const Mesh& mesh = *g_scene[i].mesh;
 
-            // Point the root CBV at this object's slot - no descriptor heap
-            // juggling, just an address.
+            // Only this changes per object.
             g_commandList->SetGraphicsRootConstantBufferView(
-                0, cbBase + UINT64(i) * kObjectCBSize);
+                0, objectCBBase + UINT64(i) * kObjectCBSize);
 
             g_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
             g_commandList->IASetIndexBuffer(&mesh.ibv);
@@ -1017,8 +1178,6 @@ namespace
             {
                 g_clientWidth  = width;
                 g_clientHeight = height;
-                // Don't resize here: WM_SIZE arrives continuously while the
-                // user drags. Flag it and handle it once in the main loop.
                 g_resizePending = true;
             }
             return 0;
@@ -1027,7 +1186,7 @@ namespace
         case WM_RBUTTONDOWN:
             g_lookActive = true;
             GetCursorPos(&g_lastMouse);
-            SetCapture(hWnd); // keep receiving moves outside the window
+            SetCapture(hWnd);
             return 0;
 
         case WM_RBUTTONUP:
@@ -1086,9 +1245,6 @@ namespace
             nullptr, nullptr, hInstance, nullptr);
     }
 
-    // High-resolution timing. GetTickCount64 (Phase 4) only has ~15 ms
-    // resolution - useless when a frame takes 16 ms. QueryPerformanceCounter
-    // ticks millions of times per second.
     class Timer
     {
     public:
@@ -1099,7 +1255,6 @@ namespace
             m_previous = m_start;
         }
 
-        // Seconds since the previous call.
         float Tick()
         {
             LARGE_INTEGER now;
@@ -1122,7 +1277,6 @@ namespace
         LARGE_INTEGER m_previous  = {};
     };
 
-    // Averages over a whole second - a per-frame number would be unreadable.
     void UpdateTitleFps(float dt)
     {
         static float accumulated = 0.0f;
@@ -1132,8 +1286,6 @@ namespace
         ++frames;
         if (accumulated >= 1.0f)
         {
-            // %ls, not %s: in the wide printf family %s means a NARROW
-            // string under ISO rules, which would print just "D".
             wchar_t title[128];
             std::swprintf(title, _countof(title),
                           L"%ls   %d fps   %.2f ms   %ux%u",
@@ -1172,7 +1324,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         CreateDescriptorHeaps();                         // [6]
         CreateSyncObjects();                             // [8] (needed by [7])
         CreateSizeDependentResources();                  // [7]
-        CreateConstantBuffer();                          // [9]
+        CreateConstantBuffers();                         // [9]
         CreateTexture();                                 // [10]
         CreateRootSignature();                           // [11]
         CreatePipelineState();                           // [12]
@@ -1201,7 +1353,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
         if (g_minimized)
         {
-            Sleep(16); // nothing to draw - don't spin the CPU
+            Sleep(16);
             continue;
         }
 
@@ -1213,7 +1365,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
         const float dt = timer.Tick();
         UpdateCamera(dt);
-        UpdateScene(timer.TotalSeconds());
+        UpdatePassConstants(timer.TotalSeconds());
+        UpdateObjectConstants(timer.TotalSeconds());
         Render();
         UpdateTitleFps(dt);
     }
