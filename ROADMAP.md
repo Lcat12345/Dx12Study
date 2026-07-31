@@ -113,12 +113,12 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: 정적인 2D에서 움직이는 3D로. 상수 버퍼로 CPU 데이터를 매 프레임 셰이더에 공급한다.
 
-- [ ] Index Buffer 도입
-- [ ] Constant Buffer 생성 (256바이트 정렬) + CBV Descriptor Heap
-- [ ] Root Signature에 CBV 바인딩 추가
-- [ ] DirectXMath로 World / View / Projection 행렬 구성, 매 프레임 갱신
-- [ ] Depth Buffer(DSV) 생성 및 뎁스 테스트 활성화
-- [ ] 큐브 지오메트리 직접 정의, 회전 애니메이션
+- [o] Index Buffer 도입
+- [o] Constant Buffer 생성 (256바이트 정렬) + CBV Descriptor Heap
+- [o] Root Signature에 CBV 바인딩 추가
+- [o] DirectXMath로 World / View / Projection 행렬 구성, 매 프레임 갱신
+- [o] Depth Buffer(DSV) 생성 및 뎁스 테스트 활성화
+- [o] 큐브 지오메트리 직접 정의, 회전 애니메이션
 
 **핵심 개념**: WVP 변환 파이프라인, 행 우선/열 우선과 HLSL `mul` 순서, 뎁스 버퍼가 없으면 생기는 현상 확인, Upload Heap에 CPU가 쓸 때의 동기화 문제(프레임마다 같은 버퍼를 덮어쓰면 왜 위험한가)
 
@@ -130,11 +130,11 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: 이미지 리소스를 GPU에 올리는 전 과정(업로드 힙 → 디폴트 힙 복사)을 이해한다.
 
-- [ ] 이미지 로딩 (stb_image 또는 DirectXTex — 첫 외부 라이브러리 도입)
-- [ ] Default Heap에 텍스처 리소스 생성, Upload Heap 경유 복사 (`UpdateSubresources`)
-- [ ] SRV 생성, Descriptor Table로 Root Signature에 바인딩
-- [ ] Static Sampler 설정, 셰이더에서 UV 샘플링
-- [ ] 큐브에 UV 좌표 추가
+- [o] 이미지 로딩 (stb_image 또는 DirectXTex — 첫 외부 라이브러리 도입)
+- [o] Default Heap에 텍스처 리소스 생성, Upload Heap 경유 복사 (`UpdateSubresources`)
+- [o] SRV 생성, Descriptor Table로 Root Signature에 바인딩
+- [o] Static Sampler 설정, 셰이더에서 UV 샘플링
+- [o] 큐브에 UV 좌표 추가
 
 **핵심 개념**: Upload vs Default Heap(왜 두 번 거치는가), 복사 완료를 기다리는 동기화, Descriptor Table vs Root Descriptor
 

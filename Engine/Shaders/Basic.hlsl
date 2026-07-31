@@ -1,40 +1,40 @@
-// Basic.hlsl : Phase 4 - transform vertices by the WVP matrix.
+// Basic.hlsl : Phase 5 - sample a texture instead of interpolating colors.
 
-// Constant buffer bound to register b0 (see the root signature).
-// Layout here must match the CPU-side ObjectConstants struct exactly.
 cbuffer ObjectConstants : register(b0)
 {
     float4x4 gWorldViewProj;
 };
 
+// t0 = the SRV we put in the shader-visible heap.
+// s0 = a STATIC sampler declared in the root signature itself, so it costs
+//      no descriptor heap space and never needs binding at draw time.
+Texture2D    gDiffuse : register(t0);
+SamplerState gSampler : register(s0);
+
 struct VSInput
 {
     float3 position : POSITION;
-    float4 color    : COLOR;
+    float2 uv       : TEXCOORD;
 };
 
 struct PSInput
 {
     float4 position : SV_Position;
-    float4 color    : COLOR;
+    float2 uv       : TEXCOORD;
 };
 
 PSInput VSMain(VSInput input)
 {
     PSInput output;
-
-    // Object space -> clip space in one multiply. The CPU pre-multiplied
-    // World * View * Projection so the GPU only does this once per vertex.
-    //
-    // mul(vector, matrix) treats the vector as a ROW vector, which is the
-    // DirectXMath convention. The C++ side transposes the matrix before
-    // uploading, because HLSL reads matrices column-major by default.
     output.position = mul(float4(input.position, 1.0), gWorldViewProj);
-    output.color    = input.color;
+    // UVs are interpolated across the triangle just like colors were.
+    output.uv = input.uv;
     return output;
 }
 
 float4 PSMain(PSInput input) : SV_Target
 {
-    return input.color;
+    // The sampler decides how to read between texels (filtering) and what
+    // happens outside [0,1] (addressing) - both configured in the root sig.
+    return gDiffuse.Sample(gSampler, input.uv);
 }

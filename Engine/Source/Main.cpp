@@ -1,6 +1,6 @@
 // Main.cpp : Application entry point.
-// Phase 4 - index buffer, constant buffer, depth buffer, rotating cube.
-// (see ROADMAP.md; earlier phases' comments trimmed - git history keeps them)
+// Phase 5 - texture mapping: image loading, upload heap -> default heap,
+// SRV + static sampler. (see ROADMAP.md)
 //
 // Everything lives in this one file on purpose: no abstraction until the
 // repetition shows up (Phase 9). Initialization functions appear in the
@@ -11,15 +11,18 @@
 #include <dxgi1_6.h>
 #include <d3dcompiler.h>
 #include <DirectXMath.h>
+#include <wincodec.h>   // WIC - the image decoder built into Windows
 #include <wrl/client.h>
 #include <stdexcept>
 #include <string>
+#include <vector>
 #include <filesystem>
 #include <cstdio>
 
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
 #pragma comment(lib, "d3dcompiler.lib")
+#pragma comment(lib, "windowscodecs.lib")
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -36,32 +39,35 @@ namespace
     constexpr UINT  kFrameCount    = 2;
     constexpr float kClearColor[4] = { 0.0f, 0.2f, 0.4f, 1.0f };
 
-    constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
+    constexpr DXGI_FORMAT kDepthFormat   = DXGI_FORMAT_D32_FLOAT;
+    constexpr DXGI_FORMAT kTextureFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
+
+    // Slots inside the one shader-visible descriptor heap.
+    constexpr UINT kCbvHeapIndex = 0;
+    constexpr UINT kSrvHeapIndex = 1;
+    constexpr UINT kSrvCbvHeapSize = 2;
 
     constexpr D3D12_VIEWPORT kViewport = {
         0.0f, 0.0f, float(kClientWidth), float(kClientHeight), 0.0f, 1.0f };
     constexpr D3D12_RECT kScissorRect = { 0, 0, kClientWidth, kClientHeight };
 
+    // Phase 5: color is gone, UV takes its place.
     struct Vertex
     {
         XMFLOAT3 position;
-        XMFLOAT4 color;
+        XMFLOAT2 uv;
     };
 
-    // Mirrors the cbuffer in Basic.hlsl. Constant buffers must be a multiple
-    // of 256 bytes, so this is padded up - see CreateConstantBuffer.
     struct ObjectConstants
     {
         XMFLOAT4X4 worldViewProj;
     };
 
-    // Round a size up to the next multiple of 256 (hardware requirement for
-    // constant buffer views).
-    constexpr UINT Align256(UINT size)
+    constexpr UINT Align(UINT size, UINT alignment)
     {
-        return (size + 255) & ~255u;
+        return (size + alignment - 1) & ~(alignment - 1);
     }
-    constexpr UINT kObjectCBSize = Align256(sizeof(ObjectConstants));
+    constexpr UINT kObjectCBSize = Align(sizeof(ObjectConstants), 256);
 
     // ---------------------------------------------------------------- D3D12 state
 
@@ -83,15 +89,16 @@ namespace
     D3D12_INDEX_BUFFER_VIEW  g_indexBufferView = {};
     UINT                     g_indexCount = 0;
 
-    // Phase 4: depth buffer and its descriptor heap.
     ComPtr<ID3D12Resource>       g_depthStencilBuffer;
     ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
 
-    // Phase 4: constant buffer. Kept permanently mapped - Map/Unmap every
-    // frame would be pure overhead for an upload-heap resource.
+    // One shader-visible heap now holds BOTH the CBV and the texture SRV.
     ComPtr<ID3D12Resource>       g_constantBuffer;
-    ComPtr<ID3D12DescriptorHeap> g_cbvHeap;
+    ComPtr<ID3D12DescriptorHeap> g_srvCbvHeap;
+    UINT                         g_srvCbvDescriptorSize = 0;
     uint8_t*                     g_constantBufferMapped = nullptr;
+
+    ComPtr<ID3D12Resource> g_texture;
 
     ComPtr<ID3D12Fence> g_fence;
     UINT64              g_fenceValue = 0;
@@ -125,9 +132,22 @@ namespace
         return barrier;
     }
 
-    // Assets live in the source tree, but where the exe ends up depends on
-    // how it was built. Walk UP from the exe until we find the solution
-    // file - that directory is the repo root.
+    D3D12_CPU_DESCRIPTOR_HANDLE SrvCbvCpuHandle(UINT index)
+    {
+        D3D12_CPU_DESCRIPTOR_HANDLE h =
+            g_srvCbvHeap->GetCPUDescriptorHandleForHeapStart();
+        h.ptr += SIZE_T(index) * g_srvCbvDescriptorSize;
+        return h;
+    }
+
+    D3D12_GPU_DESCRIPTOR_HANDLE SrvCbvGpuHandle(UINT index)
+    {
+        D3D12_GPU_DESCRIPTOR_HANDLE h =
+            g_srvCbvHeap->GetGPUDescriptorHandleForHeapStart();
+        h.ptr += UINT64(index) * g_srvCbvDescriptorSize;
+        return h;
+    }
+
     std::filesystem::path GetProjectRoot()
     {
         wchar_t exePath[MAX_PATH];
@@ -150,10 +170,8 @@ namespace
             "Could not find Dx12Engine.slnx above the exe - cannot locate assets");
     }
 
-    std::filesystem::path GetShaderDir()
-    {
-        return GetProjectRoot() / L"Engine" / L"Shaders";
-    }
+    std::filesystem::path GetShaderDir() { return GetProjectRoot() / L"Engine" / L"Shaders"; }
+    std::filesystem::path GetAssetDir()  { return GetProjectRoot() / L"Engine" / L"Assets"; }
 
     ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& path,
                                    const char* entryPoint, const char* target)
@@ -185,10 +203,7 @@ namespace
         return bytecode;
     }
 
-    // Creates an upload-heap buffer and copies initData into it. Upload heap
-    // = CPU-writable, GPU-readable. Fine for small/static data; Phase 5
-    // introduces the upload -> default heap copy for real GPU-local memory.
-    ComPtr<ID3D12Resource> CreateUploadBuffer(const void* initData, UINT byteSize,
+    ComPtr<ID3D12Resource> CreateUploadBuffer(const void* initData, UINT64 byteSize,
                                               const char* debugWhat)
     {
         D3D12_HEAP_PROPERTIES heapProps = {};
@@ -214,12 +229,66 @@ namespace
         if (initData)
         {
             void* mapped = nullptr;
-            D3D12_RANGE readRange = {}; // we never read back
+            D3D12_RANGE readRange = {};
             ThrowIfFailed(buffer->Map(0, &readRange, &mapped), "Map");
-            memcpy(mapped, initData, byteSize);
+            memcpy(mapped, initData, static_cast<size_t>(byteSize));
             buffer->Unmap(0, nullptr);
         }
         return buffer;
+    }
+
+    // ---------------------------------------------------------------- image load
+
+    struct ImageData
+    {
+        std::vector<uint8_t> pixels; // tightly packed RGBA8
+        UINT width  = 0;
+        UINT height = 0;
+    };
+
+    // Decoded with WIC, the imaging component that ships with Windows - no
+    // third-party library needed, and it handles PNG/JPG/BMP/TIFF alike.
+    // (Swapping in stb_image later means replacing only this function.)
+    ImageData LoadImageRGBA(const std::filesystem::path& path)
+    {
+        if (!std::filesystem::exists(path))
+        {
+            throw std::runtime_error("Texture file not found:\n" + path.string());
+        }
+
+        ComPtr<IWICImagingFactory> factory;
+        ThrowIfFailed(CoCreateInstance(CLSID_WICImagingFactory, nullptr,
+                                       CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&factory)),
+                      "WIC factory");
+
+        ComPtr<IWICBitmapDecoder> decoder;
+        ThrowIfFailed(factory->CreateDecoderFromFilename(
+                          path.c_str(), nullptr, GENERIC_READ,
+                          WICDecodeMetadataCacheOnDemand, &decoder),
+                      "WIC CreateDecoderFromFilename");
+
+        ComPtr<IWICBitmapFrameDecode> frame;
+        ThrowIfFailed(decoder->GetFrame(0, &frame), "WIC GetFrame");
+
+        // Whatever the file's native format is, force it to plain RGBA8 so
+        // it matches DXGI_FORMAT_R8G8B8A8_UNORM on the GPU side.
+        ComPtr<IWICFormatConverter> converter;
+        ThrowIfFailed(factory->CreateFormatConverter(&converter), "WIC CreateFormatConverter");
+        ThrowIfFailed(converter->Initialize(frame.Get(), GUID_WICPixelFormat32bppRGBA,
+                                            WICBitmapDitherTypeNone, nullptr, 0.0,
+                                            WICBitmapPaletteTypeCustom),
+                      "WIC converter Initialize");
+
+        ImageData image;
+        ThrowIfFailed(converter->GetSize(&image.width, &image.height), "WIC GetSize");
+
+        const UINT rowPitch = image.width * 4;
+        image.pixels.resize(size_t(rowPitch) * image.height);
+        ThrowIfFailed(converter->CopyPixels(nullptr, rowPitch,
+                                            UINT(image.pixels.size()),
+                                            image.pixels.data()),
+                      "WIC CopyPixels");
+        return image;
     }
 
     // ---------------------------------------------------------------- init steps
@@ -249,7 +318,7 @@ namespace
         return factory;
     }
 
-    // [3] Device - first hardware adapter that speaks D3D12.
+    // [3] Device.
     void CreateDevice(IDXGIFactory6* factory)
     {
         ComPtr<IDXGIAdapter1> adapter;
@@ -346,9 +415,7 @@ namespace
         }
     }
 
-    // [7] Depth buffer. Unlike the back buffers (owned by the swap chain),
-    //     WE create this one: a DEFAULT-heap texture the GPU reads/writes
-    //     every pixel, plus a DSV describing it.
+    // [7] Depth buffer (we own this one, unlike the back buffers).
     void CreateDepthStencilBuffer()
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
@@ -359,7 +426,7 @@ namespace
                       "CreateDescriptorHeap(DSV)");
 
         D3D12_HEAP_PROPERTIES heapProps = {};
-        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT; // GPU-local memory
+        heapProps.Type = D3D12_HEAP_TYPE_DEFAULT;
 
         D3D12_RESOURCE_DESC desc = {};
         desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
@@ -371,11 +438,9 @@ namespace
         desc.SampleDesc.Count = 1;
         desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
 
-        // Telling the driver the expected clear value up front lets it pick
-        // a faster clear path. It must match what ClearDepthStencilView uses.
         D3D12_CLEAR_VALUE clearValue = {};
         clearValue.Format               = kDepthFormat;
-        clearValue.DepthStencil.Depth   = 1.0f; // 1.0 = farthest
+        clearValue.DepthStencil.Depth   = 1.0f;
         clearValue.DepthStencil.Stencil = 0;
 
         ThrowIfFailed(g_device->CreateCommittedResource(
@@ -402,37 +467,149 @@ namespace
         }
     }
 
-    // [9] Constant buffer + CBV. This heap is SHADER_VISIBLE (unlike the RTV
-    //     and DSV heaps): the GPU reads descriptors from it while drawing,
-    //     so the list must bind it with SetDescriptorHeaps.
+    void WaitForGpu()
+    {
+        const UINT64 valueToWait = ++g_fenceValue;
+        ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), valueToWait),
+                      "Queue Signal");
+        if (g_fence->GetCompletedValue() < valueToWait)
+        {
+            ThrowIfFailed(g_fence->SetEventOnCompletion(valueToWait, g_fenceEvent),
+                          "SetEventOnCompletion");
+            WaitForSingleObject(g_fenceEvent, INFINITE);
+        }
+    }
+
+    // [9] Shader-visible heap (CBV at slot 0, SRV at slot 1) + constant buffer.
     void CreateConstantBuffer()
     {
         D3D12_DESCRIPTOR_HEAP_DESC heapDesc = {};
         heapDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-        heapDesc.NumDescriptors = 1;
+        heapDesc.NumDescriptors = kSrvCbvHeapSize;
         heapDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
         ThrowIfFailed(g_device->CreateDescriptorHeap(&heapDesc,
-                                                     IID_PPV_ARGS(&g_cbvHeap)),
-                      "CreateDescriptorHeap(CBV)");
+                                                     IID_PPV_ARGS(&g_srvCbvHeap)),
+                      "CreateDescriptorHeap(SRV/CBV)");
+
+        g_srvCbvDescriptorSize = g_device->GetDescriptorHandleIncrementSize(
+            D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
 
         g_constantBuffer = CreateUploadBuffer(nullptr, kObjectCBSize,
                                               "CreateCommittedResource(CB)");
 
         D3D12_CONSTANT_BUFFER_VIEW_DESC cbvDesc = {};
         cbvDesc.BufferLocation = g_constantBuffer->GetGPUVirtualAddress();
-        cbvDesc.SizeInBytes    = kObjectCBSize; // must be 256-byte aligned
-        g_device->CreateConstantBufferView(
-            &cbvDesc, g_cbvHeap->GetCPUDescriptorHandleForHeapStart());
+        cbvDesc.SizeInBytes    = kObjectCBSize;
+        g_device->CreateConstantBufferView(&cbvDesc, SrvCbvCpuHandle(kCbvHeapIndex));
 
-        // Map once and keep the pointer for the lifetime of the app.
         D3D12_RANGE readRange = {};
         ThrowIfFailed(g_constantBuffer->Map(
                           0, &readRange, reinterpret_cast<void**>(&g_constantBufferMapped)),
                       "CB Map");
     }
 
-    // [10] Root signature - no longer empty: slot 0 is a descriptor table
-    //      pointing at one CBV (register b0 in the shader).
+    // [10] Texture. THE Phase 5 lesson: a GPU-local (default heap) resource
+    //      cannot be written by the CPU, so the data takes two hops:
+    //        CPU memory -> upload heap (CPU-writable) -> default heap (GPU-local)
+    //      The second hop is a GPU copy command, so it must be recorded,
+    //      submitted, and waited on before the texture can be sampled.
+    void CreateTexture()
+    {
+        const ImageData image = LoadImageRGBA(GetAssetDir() / L"Crate.png");
+
+        // --- the destination: GPU-local, starts in COPY_DEST state ---
+        D3D12_HEAP_PROPERTIES defaultHeap = {};
+        defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+        D3D12_RESOURCE_DESC texDesc = {};
+        texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+        texDesc.Width            = image.width;
+        texDesc.Height           = image.height;
+        texDesc.DepthOrArraySize = 1;
+        texDesc.MipLevels        = 1; // no mipmaps yet
+        texDesc.Format           = kTextureFormat;
+        texDesc.SampleDesc.Count = 1;
+
+        ThrowIfFailed(g_device->CreateCommittedResource(
+                          &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+                          D3D12_RESOURCE_STATE_COPY_DEST,
+                          nullptr, IID_PPV_ARGS(&g_texture)),
+                      "CreateCommittedResource(Texture)");
+
+        // --- how the GPU expects the pixels laid out in the upload buffer ---
+        // Textures are NOT tightly packed: each row must start on a
+        // 256-byte boundary. GetCopyableFootprints computes the exact
+        // layout instead of us guessing.
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
+        UINT   numRows        = 0;
+        UINT64 rowSizeInBytes = 0;
+        UINT64 uploadSize     = 0;
+        g_device->GetCopyableFootprints(&texDesc, 0, 1, 0,
+                                        &footprint, &numRows, &rowSizeInBytes,
+                                        &uploadSize);
+
+        ComPtr<ID3D12Resource> uploadBuffer =
+            CreateUploadBuffer(nullptr, uploadSize, "CreateCommittedResource(TexUpload)");
+
+        // Copy ROW BY ROW: the source is tightly packed (width*4), the
+        // destination has padding at the end of every row.
+        uint8_t* mapped = nullptr;
+        D3D12_RANGE readRange = {};
+        ThrowIfFailed(uploadBuffer->Map(0, &readRange,
+                                        reinterpret_cast<void**>(&mapped)),
+                      "TexUpload Map");
+        for (UINT y = 0; y < numRows; ++y)
+        {
+            memcpy(mapped + footprint.Offset + SIZE_T(y) * footprint.Footprint.RowPitch,
+                   image.pixels.data() + SIZE_T(y) * image.width * 4,
+                   static_cast<size_t>(rowSizeInBytes));
+        }
+        uploadBuffer->Unmap(0, nullptr);
+
+        // --- record and run the GPU copy ---
+        ThrowIfFailed(g_commandAllocator->Reset(), "Allocator Reset (texture)");
+        ThrowIfFailed(g_commandList->Reset(g_commandAllocator.Get(), nullptr),
+                      "CommandList Reset (texture)");
+
+        D3D12_TEXTURE_COPY_LOCATION dst = {};
+        dst.pResource        = g_texture.Get();
+        dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = 0;
+
+        D3D12_TEXTURE_COPY_LOCATION src = {};
+        src.pResource       = uploadBuffer.Get();
+        src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint = footprint;
+
+        g_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+
+        // Copy done -> the texture becomes readable by the pixel shader.
+        D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+            g_texture.Get(),
+            D3D12_RESOURCE_STATE_COPY_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        g_commandList->ResourceBarrier(1, &toShaderResource);
+
+        ThrowIfFailed(g_commandList->Close(), "CommandList Close (texture)");
+        ID3D12CommandList* lists[] = { g_commandList.Get() };
+        g_commandQueue->ExecuteCommandLists(1, lists);
+
+        // uploadBuffer is a local ComPtr - it dies at the end of this
+        // function, so we MUST wait for the GPU to finish reading it first.
+        WaitForGpu();
+
+        // --- describe the texture to the shader ---
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format                  = kTextureFormat;
+        srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels     = 1;
+        g_device->CreateShaderResourceView(g_texture.Get(), &srvDesc,
+                                           SrvCbvCpuHandle(kSrvHeapIndex));
+    }
+
+    // [11] Root signature: table 0 -> CBV (b0, VS), table 1 -> SRV (t0, PS),
+    //      plus a STATIC sampler (s0) baked into the signature itself.
     void CreateRootSignature()
     {
         D3D12_DESCRIPTOR_RANGE cbvRange = {};
@@ -440,15 +617,39 @@ namespace
         cbvRange.NumDescriptors     = 1;
         cbvRange.BaseShaderRegister = 0; // b0
 
-        D3D12_ROOT_PARAMETER rootParam = {};
-        rootParam.ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
-        rootParam.DescriptorTable.NumDescriptorRanges = 1;
-        rootParam.DescriptorTable.pDescriptorRanges   = &cbvRange;
-        rootParam.ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX; // VS only
+        D3D12_DESCRIPTOR_RANGE srvRange = {};
+        srvRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+        srvRange.NumDescriptors     = 1;
+        srvRange.BaseShaderRegister = 0; // t0
+
+        D3D12_ROOT_PARAMETER rootParams[2] = {};
+        rootParams[0].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[0].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[0].DescriptorTable.pDescriptorRanges   = &cbvRange;
+        rootParams[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_VERTEX;
+
+        rootParams[1].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+        rootParams[1].DescriptorTable.NumDescriptorRanges = 1;
+        rootParams[1].DescriptorTable.pDescriptorRanges   = &srvRange;
+        rootParams[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+        // A static sampler lives in the root signature, not in a heap - the
+        // common case, since most samplers never change at runtime.
+        D3D12_STATIC_SAMPLER_DESC sampler = {};
+        sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR; // smooth
+        sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP; // tile outside [0,1]
+        sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+        sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
+        sampler.MaxLOD           = D3D12_FLOAT32_MAX;
+        sampler.ShaderRegister   = 0; // s0
+        sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
         D3D12_ROOT_SIGNATURE_DESC desc = {};
-        desc.NumParameters = 1;
-        desc.pParameters   = &rootParam;
+        desc.NumParameters     = _countof(rootParams);
+        desc.pParameters       = rootParams;
+        desc.NumStaticSamplers = 1;
+        desc.pStaticSamplers   = &sampler;
         desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
         ComPtr<ID3DBlob> blob;
@@ -467,7 +668,7 @@ namespace
                       "CreateRootSignature");
     }
 
-    // [11] PSO - now with depth testing enabled and a depth format declared.
+    // [12] PSO - input layout now carries UV instead of color.
     void CreatePipelineState()
     {
         const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
@@ -475,9 +676,9 @@ namespace
         ComPtr<ID3DBlob> ps = CompileShader(shaderFile, "PSMain", "ps_5_0");
 
         const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
-            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT,    0, 0,
+            { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0,
               D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-            { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 12,
+            { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 12,
               D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         };
 
@@ -505,8 +706,6 @@ namespace
         psoDesc.SampleMask      = UINT_MAX;
         psoDesc.RasterizerState = rasterizer;
 
-        // Phase 4: depth test on. LESS = keep the fragment closer to the
-        // camera; without this the cube's back faces paint over the front.
         psoDesc.DepthStencilState.DepthEnable    = TRUE;
         psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
         psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
@@ -524,32 +723,47 @@ namespace
                       "CreateGraphicsPipelineState");
     }
 
-    // [12] Cube geometry: 8 vertices reused by 36 indices (12 triangles).
-    //      Without indices we would need 36 vertices - that is the point of
-    //      an index buffer: share vertices between triangles.
+    // [13] Cube geometry - now 24 vertices, not 8.
+    //      A corner is shared by three faces, but each face needs its OWN uv
+    //      at that corner, and a vertex can only carry one uv. So the corner
+    //      must be duplicated per face. (Same problem OBJ files hit in
+    //      Phase 8: separate position/uv/normal indices have to be merged.)
     void CreateCubeBuffers()
     {
+        // Each face lists its corners as top-left, top-right, bottom-right,
+        // bottom-left AS SEEN FROM OUTSIDE, which makes the winding
+        // clockwise - matching the rasterizer's "clockwise = front".
         const Vertex vertices[] = {
-            { { -1.0f, -1.0f, -1.0f }, { 0.0f, 0.0f, 0.0f, 1.0f } }, // 0 black
-            { { -1.0f, +1.0f, -1.0f }, { 1.0f, 0.0f, 0.0f, 1.0f } }, // 1 red
-            { { +1.0f, +1.0f, -1.0f }, { 0.0f, 1.0f, 0.0f, 1.0f } }, // 2 green
-            { { +1.0f, -1.0f, -1.0f }, { 0.0f, 0.0f, 1.0f, 1.0f } }, // 3 blue
-            { { -1.0f, -1.0f, +1.0f }, { 1.0f, 1.0f, 0.0f, 1.0f } }, // 4 yellow
-            { { -1.0f, +1.0f, +1.0f }, { 0.0f, 1.0f, 1.0f, 1.0f } }, // 5 cyan
-            { { +1.0f, +1.0f, +1.0f }, { 1.0f, 0.0f, 1.0f, 1.0f } }, // 6 magenta
-            { { +1.0f, -1.0f, +1.0f }, { 1.0f, 1.0f, 1.0f, 1.0f } }, // 7 white
+            // front (-Z)
+            { { -1, +1, -1 }, { 0, 0 } }, { { +1, +1, -1 }, { 1, 0 } },
+            { { +1, -1, -1 }, { 1, 1 } }, { { -1, -1, -1 }, { 0, 1 } },
+            // back (+Z)
+            { { +1, +1, +1 }, { 0, 0 } }, { { -1, +1, +1 }, { 1, 0 } },
+            { { -1, -1, +1 }, { 1, 1 } }, { { +1, -1, +1 }, { 0, 1 } },
+            // left (-X)
+            { { -1, +1, +1 }, { 0, 0 } }, { { -1, +1, -1 }, { 1, 0 } },
+            { { -1, -1, -1 }, { 1, 1 } }, { { -1, -1, +1 }, { 0, 1 } },
+            // right (+X)
+            { { +1, +1, -1 }, { 0, 0 } }, { { +1, +1, +1 }, { 1, 0 } },
+            { { +1, -1, +1 }, { 1, 1 } }, { { +1, -1, -1 }, { 0, 1 } },
+            // top (+Y)
+            { { -1, +1, +1 }, { 0, 0 } }, { { +1, +1, +1 }, { 1, 0 } },
+            { { +1, +1, -1 }, { 1, 1 } }, { { -1, +1, -1 }, { 0, 1 } },
+            // bottom (-Y)
+            { { -1, -1, -1 }, { 0, 0 } }, { { +1, -1, -1 }, { 1, 0 } },
+            { { +1, -1, +1 }, { 1, 1 } }, { { -1, -1, +1 }, { 0, 1 } },
         };
 
-        // Every triangle is wound clockwise when seen from OUTSIDE, matching
-        // the rasterizer's "clockwise = front face" setting.
-        const uint16_t indices[] = {
-            0, 1, 2,  0, 2, 3,   // front
-            4, 6, 5,  4, 7, 6,   // back
-            4, 5, 1,  4, 1, 0,   // left
-            3, 2, 6,  3, 6, 7,   // right
-            1, 5, 6,  1, 6, 2,   // top
-            4, 0, 3,  4, 3, 7,   // bottom
-        };
+        // Every face is the same two triangles over its 4 vertices.
+        std::vector<uint16_t> indices;
+        indices.reserve(36);
+        for (uint16_t face = 0; face < 6; ++face)
+        {
+            const uint16_t base = face * 4;
+            indices.insert(indices.end(),
+                           { uint16_t(base + 0), uint16_t(base + 1), uint16_t(base + 2),
+                             uint16_t(base + 0), uint16_t(base + 2), uint16_t(base + 3) });
+        }
 
         g_vertexBuffer = CreateUploadBuffer(vertices, sizeof(vertices),
                                             "CreateCommittedResource(VB)");
@@ -557,55 +771,32 @@ namespace
         g_vertexBufferView.SizeInBytes    = sizeof(vertices);
         g_vertexBufferView.StrideInBytes  = sizeof(Vertex);
 
-        g_indexBuffer = CreateUploadBuffer(indices, sizeof(indices),
+        const UINT indexBytes = UINT(indices.size() * sizeof(uint16_t));
+        g_indexBuffer = CreateUploadBuffer(indices.data(), indexBytes,
                                            "CreateCommittedResource(IB)");
         g_indexBufferView.BufferLocation = g_indexBuffer->GetGPUVirtualAddress();
-        g_indexBufferView.SizeInBytes    = sizeof(indices);
-        g_indexBufferView.Format         = DXGI_FORMAT_R16_UINT; // uint16_t
-        g_indexCount = _countof(indices);
-    }
-
-    void WaitForGpu()
-    {
-        const UINT64 valueToWait = ++g_fenceValue;
-        ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), valueToWait),
-                      "Queue Signal");
-        if (g_fence->GetCompletedValue() < valueToWait)
-        {
-            ThrowIfFailed(g_fence->SetEventOnCompletion(valueToWait, g_fenceEvent),
-                          "SetEventOnCompletion");
-            WaitForSingleObject(g_fenceEvent, INFINITE);
-        }
+        g_indexBufferView.SizeInBytes    = indexBytes;
+        g_indexBufferView.Format         = DXGI_FORMAT_R16_UINT;
+        g_indexCount = UINT(indices.size());
     }
 
     // ---------------------------------------------------------------- per frame
 
-    // Build World * View * Projection and push it to the constant buffer.
-    //
-    // Writing straight into the mapped upload buffer is only safe because
-    // Render() flushes the GPU every frame. With frame pipelining (Phase 9)
-    // this would overwrite data the GPU is still reading - which is why
-    // frame resources keep one constant buffer PER frame in flight.
     void UpdateConstantBuffer(float totalSeconds)
     {
-        // Spin around Y, tilt around X, so all faces come into view.
         XMMATRIX world = XMMatrixRotationY(totalSeconds) *
                          XMMatrixRotationX(totalSeconds * 0.5f);
 
-        // Camera at (0, 2, -6) looking at the origin, Y up.
         XMMATRIX view = XMMatrixLookAtLH(XMVectorSet(0.0f, 2.0f, -6.0f, 1.0f),
                                          XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f),
                                          XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f));
 
-        // 45-degree vertical FOV. The aspect ratio is what fixes the
-        // "stretched" look Phase 3 had.
         XMMATRIX proj = XMMatrixPerspectiveFovLH(
             XM_PIDIV4,
             float(kClientWidth) / float(kClientHeight),
             0.1f, 100.0f);
 
-        // DirectXMath is row-major, HLSL reads matrices column-major by
-        // default -> transpose on the way to the GPU.
+        // DirectXMath is row-major, HLSL reads column-major -> transpose.
         ObjectConstants constants;
         XMStoreFloat4x4(&constants.worldViewProj,
                         XMMatrixTranspose(world * view * proj));
@@ -633,29 +824,25 @@ namespace
         D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
             g_dsvHeap->GetCPUDescriptorHandleForHeapStart();
 
-        // Bind BOTH the color target and the depth target now.
         g_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
         g_commandList->ClearRenderTargetView(rtvHandle, kClearColor, 0, nullptr);
-        // Depth must be cleared to 1.0 (far) every frame, or last frame's
-        // depths would reject this frame's pixels.
         g_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
                                              1.0f, 0, 0, nullptr);
 
         g_commandList->SetGraphicsRootSignature(g_rootSignature.Get());
         g_commandList->SetPipelineState(g_pipelineState.Get());
 
-        // Shader-visible heaps must be bound before the table that uses them.
-        ID3D12DescriptorHeap* heaps[] = { g_cbvHeap.Get() };
+        ID3D12DescriptorHeap* heaps[] = { g_srvCbvHeap.Get() };
         g_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-        g_commandList->SetGraphicsRootDescriptorTable(
-            0, g_cbvHeap->GetGPUDescriptorHandleForHeapStart());
+        // Two tables now: the matrix for the VS, the texture for the PS.
+        g_commandList->SetGraphicsRootDescriptorTable(0, SrvCbvGpuHandle(kCbvHeapIndex));
+        g_commandList->SetGraphicsRootDescriptorTable(1, SrvCbvGpuHandle(kSrvHeapIndex));
 
         g_commandList->RSSetViewports(1, &kViewport);
         g_commandList->RSSetScissorRects(1, &kScissorRect);
         g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
         g_commandList->IASetVertexBuffers(0, 1, &g_vertexBufferView);
         g_commandList->IASetIndexBuffer(&g_indexBufferView);
-        // Indexed draw: walk the index buffer, not the vertex buffer.
         g_commandList->DrawIndexedInstanced(g_indexCount, 1, 0, 0, 0);
 
         D3D12_RESOURCE_BARRIER toPresent = TransitionBarrier(
@@ -726,6 +913,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
+    // WIC is a COM library, so COM must be running before we use it.
+    ThrowIfFailed(CoInitializeEx(nullptr, COINIT_MULTITHREADED), "CoInitializeEx");
+
     HWND hWnd = CreateMainWindow(hInstance);
     if (!hWnd)
     {
@@ -743,9 +933,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         CreateDepthStencilBuffer();                      // [7]
         CreateSyncObjects();                             // [8]
         CreateConstantBuffer();                          // [9]
-        CreateRootSignature();                           // [10]
-        CreatePipelineState();                           // [11]
-        CreateCubeBuffers();                             // [12]
+        CreateTexture();                                 // [10] needs [4] and [8]
+        CreateRootSignature();                           // [11]
+        CreatePipelineState();                           // [12]
+        CreateCubeBuffers();                             // [13]
     }
     catch (const std::exception& e)
     {
@@ -776,6 +967,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     WaitForGpu();
     CloseHandle(g_fenceEvent);
+    CoUninitialize();
 
     return static_cast<int>(msg.wParam);
 }
