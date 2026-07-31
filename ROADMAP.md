@@ -146,12 +146,12 @@ Dx12Engine/                  # 저장소 루트
 
 **목표**: "장면을 보는 것"에서 "장면 안을 돌아다니는 것"으로.
 
-- [ ] 고해상도 타이머 (`QueryPerformanceCounter`) — delta time, FPS 측정
-- [ ] 키보드/마우스 입력 처리 (`WM_INPUT` Raw Input 또는 `GetAsyncKeyState`로 시작)
-- [ ] FPS 스타일 카메라 (WASD 이동 + 마우스 회전, View 행렬 직접 구성)
-- [ ] 바닥 평면 + 큐브 여러 개를 씬에 배치 (이동감을 체감할 공간적 기준점 마련)
-- [ ] 창 리사이즈 대응 (Swap Chain / Depth Buffer 재생성, Projection 갱신)
-- [ ] 타이틀바에 FPS 표시
+- [o] 고해상도 타이머 (`QueryPerformanceCounter`) — delta time, FPS 측정
+- [o] 키보드/마우스 입력 처리 (`WM_INPUT` Raw Input 또는 `GetAsyncKeyState`로 시작)
+- [o] FPS 스타일 카메라 (WASD 이동 + 마우스 회전, View 행렬 직접 구성)
+- [o] 바닥 평면 + 큐브 여러 개를 씬에 배치 (이동감을 체감할 공간적 기준점 마련)
+- [o] 창 리사이즈 대응 (Swap Chain / Depth Buffer 재생성, Projection 갱신)
+- [o] 타이틀바에 FPS 표시
 
 **핵심 개념**: 프레임 독립적 이동(`속도 × deltaTime`), View 행렬 = 카메라 변환의 역행렬, 리사이즈 시 GPU 리소스 재생성 절차(플러시가 먼저 필요한 이유)
 
