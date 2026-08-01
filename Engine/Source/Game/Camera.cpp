@@ -1,4 +1,4 @@
-#include "Camera.h"
+#include "Game/Camera.h"
 
 #include <Windows.h>
 #include <algorithm>

@@ -83,6 +83,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;_DEBUG;_WINDOWS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -101,6 +102,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>WIN32;NDEBUG;_WINDOWS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -117,6 +119,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>_DEBUG;_WINDOWS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -135,6 +138,7 @@
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;NOMINMAX;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
+      <AdditionalIncludeDirectories>$(ProjectDir)Source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
     </ClCompile>
     <Link>
@@ -146,23 +150,35 @@
     </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Source\Camera.cpp" />
-    <ClCompile Include="Source\Common.cpp" />
-    <ClCompile Include="Source\Image.cpp" />
-    <ClCompile Include="Source\Main.cpp" />
-    <ClCompile Include="Source\Mesh.cpp" />
-    <ClCompile Include="Source\ObjLoader.cpp" />
-    <ClCompile Include="Source\Renderer.cpp" />
-    <ClCompile Include="Source\Scene.cpp" />
+    <ClCompile Include="Source\Core\Common.cpp" />
+    <ClCompile Include="Source\Core\Engine.cpp" />
+    <ClCompile Include="Source\Core\Window.cpp" />
+    <ClCompile Include="Source\Game\Camera.cpp" />
+    <ClCompile Include="Source\Game\DemoGame.cpp" />
+    <ClCompile Include="Source\Game\Main.cpp" />
+    <ClCompile Include="Source\Game\Scene.cpp" />
+    <ClCompile Include="Source\Graphics\GraphicsDevice.cpp" />
+    <ClCompile Include="Source\Graphics\Image.cpp" />
+    <ClCompile Include="Source\Graphics\Mesh.cpp" />
+    <ClCompile Include="Source\Graphics\Renderer.cpp" />
+    <ClCompile Include="Source\Graphics\SwapChain.cpp" />
+    <ClCompile Include="Source\Loaders\ObjLoader.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\Camera.h" />
-    <ClInclude Include="Source\Common.h" />
-    <ClInclude Include="Source\Image.h" />
-    <ClInclude Include="Source\Mesh.h" />
-    <ClInclude Include="Source\ObjLoader.h" />
-    <ClInclude Include="Source\Renderer.h" />
-    <ClInclude Include="Source\Scene.h" />
+    <ClInclude Include="Source\Core\Common.h" />
+    <ClInclude Include="Source\Core\Engine.h" />
+    <ClInclude Include="Source\Core\Timer.h" />
+    <ClInclude Include="Source\Core\Window.h" />
+    <ClInclude Include="Source\Game\Camera.h" />
+    <ClInclude Include="Source\Game\DemoGame.h" />
+    <ClInclude Include="Source\Game\Scene.h" />
+    <ClInclude Include="Source\Graphics\FrameResource.h" />
+    <ClInclude Include="Source\Graphics\GraphicsDevice.h" />
+    <ClInclude Include="Source\Graphics\Image.h" />
+    <ClInclude Include="Source\Graphics\Mesh.h" />
+    <ClInclude Include="Source\Graphics\Renderer.h" />
+    <ClInclude Include="Source\Graphics\SwapChain.h" />
+    <ClInclude Include="Source\Loaders\ObjLoader.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="Shaders\Basic.hlsl">

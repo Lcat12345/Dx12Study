@@ -1,5 +1,5 @@
-#include "Image.h"
-#include "Common.h"
+#include "Graphics/Image.h"
+#include "Core/Common.h"
 
 #include <wincodec.h>
 #include <wrl/client.h>

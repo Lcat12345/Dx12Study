@@ -1,7 +1,7 @@
 // Scene.h : what is in the world, independent of how it gets drawn.
 #pragma once
 
-#include "Mesh.h"
+#include "Graphics/Mesh.h"
 
 #include <DirectXMath.h>
 #include <vector>

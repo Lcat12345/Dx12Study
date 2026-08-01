@@ -1,7 +1,7 @@
-#include "Scene.h"
+#include "Game/Scene.h"
 
-#include "Common.h"
-#include "ObjLoader.h"
+#include "Core/Common.h"
+#include "Loaders/ObjLoader.h"
 
 #include <cmath>
 

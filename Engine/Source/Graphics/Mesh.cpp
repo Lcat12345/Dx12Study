@@ -1,5 +1,5 @@
-#include "Mesh.h"
-#include "Common.h"
+#include "Graphics/Mesh.h"
+#include "Core/Common.h"
 
 #include <vector>
 

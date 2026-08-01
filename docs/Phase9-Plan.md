@@ -38,7 +38,7 @@ Phase 8 종료 시점 코드의 한계. 각 항목이 Phase 9의 세부 단계 �
 | 단계 | 상태 | 주제 | 핵심 학습 | 규모(예상) | 태그 |
 |------|------|------|-----------|-----------|------|
 | 9.1 | **완료** | Frame Resources + 티어링 측정 | 프레임 파이프라이닝, fence 심화 | 중 | - |
-| 9.2 | 대기 | Renderer 클래스화 + Engine/Game 분리 | 수명 관리, 소유권, 엔진/게임 경계 | 대 | - |
+| 9.2 | **완료** | Renderer 클래스화 + Engine/Game 분리 | 수명 관리, 소유권, 엔진/게임 경계 | 대 | - |
 | 9.3 | 대기 | Descriptor 할당자 | 디스크립터 힙 운영 전략 | 소 | - |
 | 9.4 | 대기 | 리소스 매니저 | 핸들 기반 자원 관리, 캐싱 | 중 | - |
 | 9.5 | 대기 | ECS | 조합(composition) 기반 설계 | 대 | - |
@@ -104,13 +104,13 @@ CPU가 2프레임 링을 계속 앞질러 돌게 해 fence 대기 경로를 실�
 **목표**: 파일 정적 전역을 클래스 멤버로. `wWinMain`이 10줄 안팎이 되도록 Engine이 루프를 소유한다.
 
 **작업 항목**
-- [ ] `GraphicsDevice`: 디바이스 + 큐 + fence (생성 순서가 생성자 안으로)
-- [ ] `SwapChain`: 스왑체인 + 백버퍼 RTV + 리사이즈 절차
-- [ ] `Renderer`: 위 둘을 소유. 기존 `Renderer::` 함수들이 메서드가 됨. FrameResource 배열도 여기로
-- [ ] `Window`: 창 생성 + WndProc + 입력 상태 (Main.cpp에서 분리)
-- [ ] `Engine`: Initialize → 루프(Tick) → Shutdown. Timer 소유
-- [ ] `Game`(가칭 `DemoGame`): Engine을 **상속**, `OnInit`(씬 구성)/`OnUpdate`(카메라 등) 오버라이드
-- [ ] Main.cpp는 `DemoGame().Run()` 정도만 남긴다
+- [o] `GraphicsDevice`: 디바이스 + 큐 + fence (생성 순서가 생성자 안으로)
+- [o] `SwapChain`: 스왑체인 + 백버퍼 RTV + 리사이즈 절차
+- [o] `Renderer`: 위 둘을 소유. 기존 `Renderer::` 함수들이 메서드가 됨. FrameResource 배열도 여기로
+- [o] `Window`: 창 생성 + WndProc + 입력 상태 (Main.cpp에서 분리)
+- [o] `Engine`: Initialize → 루프(Tick) → Shutdown. Timer 소유
+- [o] `Game`(`DemoGame`): Engine을 **상속**, `OnInit`/`OnUpdate`/`OnRender` 오버라이드
+- [o] Main.cpp는 `DemoGame().Run()` 정도만 남긴다
 
 **설계 결정**
 - **상속 방식 권장** (`class DemoGame : public Engine`). 콜백(std::function) 방식은 게임이 여럿일 때 장점이 있지만 지금은 게임이 하나고, 가상 함수가 코드 추적이 쉽다. Phase 10 에디터도 같은 방식으로 얹을 수 있다.
@@ -130,6 +130,33 @@ CPU가 2프레임 링을 계속 앞질러 돌게 해 fence 대기 경로를 실�
 - 이 단계는 파일 이동이 커서 diff가 크다. **로직 변경을 절대 섞지 말 것** — 옮기기 전후 화면이 픽셀 단위로 같아야 한다.
 
 **완료 기준**: `wWinMain` 10줄 내외, 전역 변수 0개(익명 네임스페이스의 상수 제외), 화면 결과 이전과 동일.
+
+#### 결과 (완료)
+
+파일 8개 → **27개**, 4개 폴더로 재배치. `Source`를 include 경로에 추가해
+`#include "Graphics/Mesh.h"` 형태로 통일 (상대경로 `../` 없음).
+
+| 폴더 | 파일 | 비고 |
+|---|---|---|
+| `Core/` | Common, Timer, Window, Engine | D3D12를 모르는 건 Timer·Window뿐 |
+| `Graphics/` | GraphicsDevice, SwapChain, FrameResource, Renderer, Mesh, Image | Renderer.cpp 510줄 |
+| `Loaders/` | ObjLoader | |
+| `Game/` | Main(40줄), DemoGame, Scene, Camera | |
+
+- **가변 전역 0개.** 남은 건 익명 네임스페이스의 `constexpr` 상수와 자유 함수뿐
+- 소멸 순서를 선언 순서로 고정: `GraphicsDevice` → `SwapChain` → 나머지.
+  팩토리가 가장 먼저 선언되어 가장 나중에 파괴된다
+- `Window`는 `GWLP_USERDATA`에 `this`를 심어 정적 `WndProcThunk`가
+  인스턴스를 찾아간다. 키 입력은 `ConsumeKeyPress`로 엣지만 노출해
+  Window가 Renderer를 몰라도 게임이 vsync를 토글할 수 있다
+- `Engine`은 Scene/Camera를 모른다. `OnInit`/`OnUpdate`/`OnRender` 세 훅만
+  두고 렌더 호출은 게임이 한다 — Phase 10 에디터가 같은 Renderer를
+  재사용할 수 있는 경계
+
+**검증**: 로직 무변경이 목표였으므로 화면이 이전과 동일한지 확인.
+W 전진 59.8% 픽셀 변화, V 토글 3602fps, 리사이즈 884x781 정상, 종료 코드 0.
+`wWinMain`은 COM 초기화와 try/catch 포함 약 25줄 — "10줄"에는 못 미치지만
+본체는 `DemoGame game(...); game.Run(...)` 두 줄이다.
 
 ---
 

@@ -6,7 +6,7 @@
 // wants one index into one vertex list. Reconciling those is the job.
 #pragma once
 
-#include "Mesh.h"
+#include "Graphics/Mesh.h"
 
 #include <filesystem>
 

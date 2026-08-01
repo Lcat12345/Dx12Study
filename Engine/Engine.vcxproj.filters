@@ -1,60 +1,105 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
-    <Filter Include="Source">
-      <UniqueIdentifier>{D6373647-D970-486A-BF99-B14E57F37132}</UniqueIdentifier>
+    <Filter Include="Core">
+      <UniqueIdentifier>{36979C23-82C4-498D-B3EE-676A01C0EBBD}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Game">
+      <UniqueIdentifier>{71C9D462-74F4-41C9-9C25-4BD458082596}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Graphics">
+      <UniqueIdentifier>{A3DC9B4C-EB11-4E6F-9315-917D754BAA87}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Loaders">
+      <UniqueIdentifier>{0D9379D8-D02C-4657-90B5-55DA3C45EC55}</UniqueIdentifier>
     </Filter>
     <Filter Include="Shaders">
       <UniqueIdentifier>{B672E808-F862-45A0-AFBC-D24F2139EBC4}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Source\Main.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Core\Common.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Renderer.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Core\Engine.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Scene.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Core\Window.cpp">
+      <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Mesh.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Game\Camera.cpp">
+      <Filter>Game</Filter>
     </ClCompile>
-    <ClCompile Include="Source\ObjLoader.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Game\DemoGame.cpp">
+      <Filter>Game</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Camera.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Game\Main.cpp">
+      <Filter>Game</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Image.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Game\Scene.cpp">
+      <Filter>Game</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Common.cpp">
-      <Filter>Source</Filter>
+    <ClCompile Include="Source\Graphics\GraphicsDevice.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Graphics\Image.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Graphics\Mesh.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Graphics\Renderer.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Graphics\SwapChain.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Loaders\ObjLoader.cpp">
+      <Filter>Loaders</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="Source\Renderer.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Core\Common.h">
+      <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Scene.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Core\Engine.h">
+      <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Mesh.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Core\Timer.h">
+      <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="Source\ObjLoader.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Core\Window.h">
+      <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Camera.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Game\Camera.h">
+      <Filter>Game</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Image.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Game\DemoGame.h">
+      <Filter>Game</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Common.h">
-      <Filter>Source</Filter>
+    <ClInclude Include="Source\Game\Scene.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\FrameResource.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\GraphicsDevice.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\Image.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\Mesh.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\Renderer.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\SwapChain.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Loaders\ObjLoader.h">
+      <Filter>Loaders</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
