@@ -10,8 +10,8 @@
 class GraphicsDevice;
 
 // Owns the swap chain, the back buffers it hands out, and the RTV heap that
-// describes them. The depth buffer deliberately lives in Renderer instead -
-// it is a choice about how we draw, not part of what gets presented.
+// describes them. Nothing about depth: the back buffer only ever receives the
+// editor UI now, and the scene's depth buffer belongs to its RenderTarget.
 class SwapChain
 {
 public:

@@ -12,26 +12,38 @@ using namespace DirectX;
 
 namespace
 {
-    constexpr float kClearColor[4] = { 0.02f, 0.04f, 0.08f, 1.0f };
-    constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
+    // What the scene is cleared to, inside the viewport.
+    constexpr float kSceneClearColor[4] = { 0.02f, 0.04f, 0.08f, 1.0f };
+    // What is behind the panels. Deliberately a different, lighter grey: it
+    // makes the boundary of the scene viewport obvious at a glance.
+    constexpr float kEditorClearColor[4] = { 0.10f, 0.10f, 0.12f, 1.0f };
 
+    constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
+    // The scene texture matches the back buffer's format so one PSO serves
+    // both - nothing here needs HDR yet.
+    constexpr DXGI_FORMAT kSceneColorFormat = SwapChain::kFormat;
 }
 
 Renderer::Renderer(HWND hwnd, UINT width, UINT height)
     : m_device()                                  // debug layer -> device -> queue
     , m_swapChain(m_device, hwnd, width, height)  // needs the queue
+    , m_rtvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                     kRtvHeapCapacity, /*shaderVisible*/ false)
     , m_dsvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
                      kDsvHeapCapacity, /*shaderVisible*/ false)
     , m_srvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                      kSrvHeapCapacity, /*shaderVisible*/ true)
     , m_resources(m_device, m_srvAllocator)
 {
-    // Depth needs its slot for the lifetime of the renderer; texture slots
-    // are handed out by the ResourceManager as assets are loaded.
-    m_depthStencilView = m_dsvAllocator.Allocate();
-
     CreateCommandObjects();
-    CreateSizeDependentResources();
+
+    // The scene has its own surface now, so it no longer shares the window's
+    // size. Starting at the client size just avoids a resize on frame one -
+    // the viewport panel takes over as soon as it reports its size.
+    m_sceneTarget = std::make_unique<RenderTarget>(
+        m_device, m_rtvAllocator, m_dsvAllocator, m_srvAllocator,
+        width, height, kSceneColorFormat, kDepthFormat, kSceneClearColor);
+
     CreateConstantBuffers();
     CreateRootSignature();
     CreatePipelineState();
@@ -48,8 +60,11 @@ void Renderer::InitializeOverlay(HWND hwnd)
 {
     // NumFramesInFlight must match ours: the backend keeps one vertex and
     // index buffer per frame for exactly the reason our FrameResources do.
+    // DSVFormat is UNKNOWN because the UI pass binds no depth buffer at all -
+    // claiming a format the pass does not have is a debug-layer error.
     m_overlay = std::make_unique<ImGuiLayer>(hwnd, m_device, m_srvAllocator,
-                                             SwapChain::kFormat, kDepthFormat,
+                                             SwapChain::kFormat,
+                                             DXGI_FORMAT_UNKNOWN,
                                              int(kFramesInFlight));
 }
 
@@ -76,46 +91,6 @@ void Renderer::CreateCommandObjects()
     // Lists are born recording, but every frame starts with Reset(), which
     // requires a CLOSED list.
     ThrowIfFailed(m_commandList->Close(), "Close command list");
-}
-
-// The depth buffer is ours (unlike the back buffers), so a resize means
-// recreating it by hand.
-void Renderer::CreateSizeDependentResources()
-{
-    const UINT width  = m_swapChain.Width();
-    const UINT height = m_swapChain.Height();
-
-    D3D12_HEAP_PROPERTIES heapProps = {};
-    heapProps.Type = D3D12_HEAP_TYPE_DEFAULT; // GPU-local memory
-
-    D3D12_RESOURCE_DESC desc = {};
-    desc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    desc.Width            = width;
-    desc.Height           = height;
-    desc.DepthOrArraySize = 1;
-    desc.MipLevels        = 1;
-    desc.Format           = kDepthFormat;
-    desc.SampleDesc.Count = 1;
-    desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-    // Declaring the expected clear value lets the driver pick a faster clear
-    // path. It must match what ClearDepthStencilView uses.
-    D3D12_CLEAR_VALUE clearValue = {};
-    clearValue.Format             = kDepthFormat;
-    clearValue.DepthStencil.Depth = 1.0f; // 1.0 = farthest
-
-    ThrowIfFailed(m_device.Device()->CreateCommittedResource(
-                      &heapProps, D3D12_HEAP_FLAG_NONE, &desc,
-                      D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                      &clearValue, IID_PPV_ARGS(&m_depthStencilBuffer)),
-                  "CreateCommittedResource(DepthStencil)");
-
-    m_device.Device()->CreateDepthStencilView(
-        m_depthStencilBuffer.Get(), nullptr,
-        m_depthStencilView.cpu);
-
-    m_viewport    = { 0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f };
-    m_scissorRect = { 0, 0, LONG(width), LONG(height) };
 }
 
 // Two constant buffers, one per update frequency - duplicated per frame.
@@ -261,7 +236,9 @@ void Renderer::CreatePipelineState()
     psoDesc.InputLayout           = { inputLayout, _countof(inputLayout) };
     psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
     psoDesc.NumRenderTargets      = 1;
-    psoDesc.RTVFormats[0]         = SwapChain::kFormat;
+    // The PSO's formats must match the pass it is used in - and this PSO now
+    // draws into the scene target, not the back buffer.
+    psoDesc.RTVFormats[0]         = kSceneColorFormat;
     psoDesc.SampleDesc.Count      = 1;
 
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
@@ -271,9 +248,12 @@ void Renderer::CreatePipelineState()
 
 // The only safe order:
 //   1. wait for the GPU  2. release every reference to the old buffers
-//   3. ResizeBuffers     4. recreate views and the depth buffer
+//   3. ResizeBuffers
 // Skipping step 1 or 2 makes ResizeBuffers fail - the swap chain cannot free
 // buffers anyone still holds.
+//
+// Note what is NOT here any more: the scene's colour and depth textures. They
+// follow the viewport panel, not the window.
 void Renderer::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
@@ -282,11 +262,16 @@ void Renderer::Resize(UINT width, UINT height)
     }
 
     m_device.WaitForGpu();
-
-    m_depthStencilBuffer.Reset();
     m_swapChain.Resize(width, height); // releases its own back buffer refs
+}
 
-    CreateSizeDependentResources();
+// Recorded, not applied: the UI runs before Render(), and tearing down a
+// texture the GPU is still reading is exactly the bug this defers around.
+// Render() applies it once it can prove the GPU is idle.
+void Renderer::SetSceneViewportSize(UINT width, UINT height)
+{
+    m_requestedViewportWidth  = width;
+    m_requestedViewportHeight = height;
 }
 
 // Written ONCE per frame: camera and lights are shared by every object.
@@ -305,11 +290,12 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     const XMMATRIX view = XMMatrixLookToLH(eye, forward, up);
 
     // The aspect ratio is deliberately NOT part of CameraView: it belongs to
-    // the swap chain, so resizing stays correct without the game's help.
+    // whatever surface the scene lands on, so resizing stays correct without
+    // the game's help. That surface is now the offscreen target, not the
+    // window - taking it from the swap chain would stretch the image by the
+    // exact amount the panels occupy.
     const XMMATRIX proj = XMMatrixPerspectiveFovLH(
-        camera.fovY,
-        float(m_swapChain.Width()) / float(m_swapChain.Height()),
-        camera.nearZ, camera.farZ);
+        camera.fovY, m_sceneTarget->AspectRatio(), camera.nearZ, camera.farZ);
 
     PassConstants constants;
     XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
@@ -370,39 +356,24 @@ void Renderer::UpdateObjectConstants(FrameResource& frame,
     }
 }
 
-void Renderer::Render(const CameraView& camera, const LightingData& lighting,
-                      const std::vector<DrawItem>& items)
+// Pass 1: the world, into the offscreen target. Nothing here knows a window
+// exists.
+void Renderer::DrawScene(FrameResource& frame, const std::vector<DrawItem>& items)
 {
-    FrameResource& frame = m_frames[m_currentFrame];
-
-    // Wait only until the GPU is done with THIS set of resources - which,
-    // with kFramesInFlight sets, is usually already true and costs nothing.
-    // The CPU keeps going while the GPU draws.
-    m_device.WaitForFenceValue(frame.fenceValue);
-
-    // Only now is it safe to overwrite this frame's constant buffers and
-    // recycle its command memory.
-    UpdatePassConstants(frame, camera, lighting);
-    UpdateObjectConstants(frame, items);
-
-    ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
-    ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr),
-                  "CommandList Reset");
-
-    ID3D12Resource* backBuffer = m_swapChain.CurrentBackBuffer();
-
-    // The buffer we are about to draw into was just being presented.
+    // The texture spends most of its life being sampled by ImGui; borrow it
+    // back to write into.
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
-        backBuffer,
-        D3D12_RESOURCE_STATE_PRESENT,
+        m_sceneTarget->ColorResource(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_swapChain.CurrentBackBufferRTV();
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_depthStencilView.cpu;
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneTarget->RTV();
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneTarget->DSV();
 
     m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-    m_commandList->ClearRenderTargetView(rtvHandle, kClearColor, 0, nullptr);
+    m_commandList->ClearRenderTargetView(rtvHandle, m_sceneTarget->ClearColor(),
+                                         0, nullptr);
     // Depth must be cleared to 1.0 (far) every frame, or last frame's depths
     // would reject this frame's pixels.
     m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
@@ -413,18 +384,17 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
     m_commandList->SetPipelineState(m_pipelineState.Get());
 
-    // The heap is bound once; which slot inside it a draw reads is chosen
-    // per object below.
-    ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
-    m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-
     // Bound ONCE for the whole frame - the payoff of splitting the constant
     // buffers by update frequency.
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
 
-    m_commandList->RSSetViewports(1, &m_viewport);
-    m_commandList->RSSetScissorRects(1, &m_scissorRect);
+    // Viewport and scissor come from the TARGET, not the window: this is what
+    // makes the image fill the panel exactly.
+    const D3D12_VIEWPORT viewport = m_sceneTarget->Viewport();
+    const D3D12_RECT     scissor  = m_sceneTarget->ScissorRect();
+    m_commandList->RSSetViewports(1, &viewport);
+    m_commandList->RSSetScissorRects(1, &scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
     const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
@@ -449,9 +419,42 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
         m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
     }
 
-    // The overlay draws last, into the same command list and the same render
-    // target, so it lands on top of the scene. It must come before the
-    // transition to PRESENT below.
+    // Hand it back to the pixel shader - the UI pass is about to sample it.
+    // Miss this barrier and the picture is undefined, not merely stale.
+    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+        m_sceneTarget->ColorResource(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    m_commandList->ResourceBarrier(1, &toShaderResource);
+}
+
+// Pass 2: the editor, into the back buffer. The scene appears here only as a
+// texture inside an ImGui window - the back buffer no longer needs a depth
+// buffer at all.
+void Renderer::DrawOverlay()
+{
+    ID3D12Resource* backBuffer = m_swapChain.CurrentBackBuffer();
+
+    // The buffer we are about to draw into was just being presented.
+    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
+        backBuffer,
+        D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    m_commandList->ResourceBarrier(1, &toRenderTarget);
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_swapChain.CurrentBackBufferRTV();
+    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
+    m_commandList->ClearRenderTargetView(rtvHandle, kEditorClearColor, 0, nullptr);
+
+    const D3D12_VIEWPORT viewport = {
+        0.0f, 0.0f, float(m_swapChain.Width()), float(m_swapChain.Height()), 0.0f, 1.0f
+    };
+    const D3D12_RECT scissor = {
+        0, 0, LONG(m_swapChain.Width()), LONG(m_swapChain.Height())
+    };
+    m_commandList->RSSetViewports(1, &viewport);
+    m_commandList->RSSetScissorRects(1, &scissor);
+
     if (m_overlay)
     {
         m_overlay->Render(m_commandList.Get());
@@ -462,6 +465,48 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
         D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PRESENT);
     m_commandList->ResourceBarrier(1, &toPresent);
+}
+
+void Renderer::Render(const CameraView& camera, const LightingData& lighting,
+                      const std::vector<DrawItem>& items)
+{
+    FrameResource& frame = m_frames[m_currentFrame];
+
+    // Wait only until the GPU is done with THIS set of resources - which,
+    // with kFramesInFlight sets, is usually already true and costs nothing.
+    // The CPU keeps going while the GPU draws.
+    m_device.WaitForFenceValue(frame.fenceValue);
+
+    // A pending viewport resize is applied HERE, before anything reads the
+    // target's size. The fence wait above is not enough: it only proves this
+    // frame's set is free, while the OTHER frame in flight may still be
+    // sampling the old texture. Recreating a texture needs the whole GPU
+    // idle, so this costs a full flush - but only on frames where the panel
+    // actually changed size, i.e. while the user is dragging a splitter.
+    if (m_requestedViewportWidth  != 0 &&
+        (m_requestedViewportWidth  != m_sceneTarget->Width() ||
+         m_requestedViewportHeight != m_sceneTarget->Height()))
+    {
+        m_device.WaitForGpu();
+        m_sceneTarget->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
+    }
+
+    // Only now is it safe to overwrite this frame's constant buffers and
+    // recycle its command memory.
+    UpdatePassConstants(frame, camera, lighting);
+    UpdateObjectConstants(frame, items);
+
+    ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
+    ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr),
+                  "CommandList Reset");
+
+    // Bound once for BOTH passes - scene textures and ImGui's font atlas live
+    // in the same heap, so there is nothing to swap between them.
+    ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
+    m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
+
+    DrawScene(frame, items);
+    DrawOverlay();
 
     ThrowIfFailed(m_commandList->Close(), "CommandList Close");
 

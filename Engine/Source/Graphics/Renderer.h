@@ -5,12 +5,13 @@
 #include "Graphics/SwapChain.h"
 #include "Graphics/FrameResource.h"
 #include "Graphics/DescriptorAllocator.h"
+#include "Graphics/RenderTarget.h"
 #include "Graphics/ResourceManager.h"
 #include "Graphics/RenderData.h"
 #include "Graphics/ImGuiLayer.h"
 
+#include <cstdint>
 #include <memory>
-
 #include <vector>
 
 #include <d3d12.h>
@@ -29,7 +30,7 @@ public:
     ID3D12Device* Device() const { return m_device.Device(); }
 
     // The shader-visible heap other systems draw slots from. ImGui takes one
-    // for its font atlas in 9.6; it is deliberately larger than we need.
+    // for its font atlas; it is deliberately larger than we need.
     DescriptorAllocator& ShaderVisibleDescriptors() { return m_srvAllocator; }
 
     // Assets are loaded and cached here (see BuildWorld).
@@ -40,7 +41,19 @@ public:
     void        InitializeOverlay(HWND hwnd);
     ImGuiLayer* Overlay() { return m_overlay.get(); }
 
+    // The window changed size. Only the swap chain cares - the scene now
+    // lives in its own target, sized by the viewport panel instead.
     void Resize(UINT width, UINT height);
+
+    // --- the scene viewport ---
+    // The editor asks for a size; the renderer applies it at the top of the
+    // next frame, once the GPU is known to be finished with the old texture.
+    void SetSceneViewportSize(UINT width, UINT height);
+
+    // The scene texture, as ImGui wants it. Returned as a plain integer so
+    // no D3D type leaks into the UI code.
+    uint64_t SceneTextureId() const { return m_sceneTarget->SRV().ptr; }
+
     // Takes flattened data, not a scene graph - the renderer has no idea
     // entities exist. See RenderData.h.
     void Render(const CameraView& camera, const LightingData& lighting,
@@ -54,7 +67,6 @@ public:
 
 private:
     void CreateCommandObjects();
-    void CreateSizeDependentResources(); // depth buffer, viewport, scissor
     void CreateConstantBuffers();
     void CreateRootSignature();
     void CreatePipelineState();
@@ -64,20 +76,29 @@ private:
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
 
+    void DrawScene(FrameResource& frame, const std::vector<DrawItem>& items);
+    void DrawOverlay();
+
     // Declaration order IS destruction order, reversed: the device is first
     // so everything created from it dies before it does.
     GraphicsDevice m_device;
     SwapChain      m_swapChain;
 
-    // Depth needs exactly one slot. The shader-visible heap gets room to
-    // spare so later systems can Allocate() without resizing anything.
-    static constexpr UINT kDsvHeapCapacity = 1;
-    // ImGui's font atlas (and, from 1.92, its dynamic textures) draw from
-    // the same heap, so leave generous room.
+    // Room to spare: more render targets arrive with shadow mapping.
+    static constexpr UINT kRtvHeapCapacity = 8;
+    static constexpr UINT kDsvHeapCapacity = 8;
+    // ImGui's font atlas, the scene texture, and every loaded texture share
+    // this heap.
     static constexpr UINT kSrvHeapCapacity = 64;
 
+    DescriptorAllocator m_rtvAllocator;
     DescriptorAllocator m_dsvAllocator;
     DescriptorAllocator m_srvAllocator;
+
+    // The scene is drawn here, never straight to the back buffer.
+    std::unique_ptr<RenderTarget> m_sceneTarget;
+    UINT m_requestedViewportWidth  = 0;
+    UINT m_requestedViewportHeight = 0;
 
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_commandList;
 
@@ -90,15 +111,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_pipelineState;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_depthStencilBuffer;
-    DescriptorHandle                       m_depthStencilView;
-
     // Declared after the allocators it borrows a slot from, so it is
     // destroyed before them.
     ResourceManager m_resources;
-
-    D3D12_VIEWPORT m_viewport    = {};
-    D3D12_RECT     m_scissorRect = {};
 
     // Declared last: it is torn down before the device and heaps it uses.
     std::unique_ptr<ImGuiLayer> m_overlay;

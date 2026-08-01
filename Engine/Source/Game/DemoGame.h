@@ -27,4 +27,10 @@ private:
     std::vector<DrawItem> m_drawItems;
     CameraView            m_camera;
     LightingData          m_lighting;
+
+    // Set by last frame's Scene panel. The systems run before the UI is
+    // built, so this is necessarily one frame old - which is invisible at
+    // frame rate, and the alternative (building the UI first) would let a
+    // panel edit be overwritten by a system in the same frame.
+    bool m_viewportHovered = false;
 };

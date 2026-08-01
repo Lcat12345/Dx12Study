@@ -6,8 +6,32 @@
 
 #include "Core/World.h"
 
+#include <cstdint>
+
+// What the panels read from the engine, and what they hand back. A struct
+// rather than a parameter list: the viewport panel alone would have added
+// four, and every new panel adds more.
+struct DebugUIContext
+{
+    // --- in ---
+    float dt               = 0.0f;
+    int   fps              = 0;
+    bool  vsync            = true;
+    bool  tearingSupported = false;
+    // The scene, already rendered, as an ImGui texture id. Plain integer so
+    // no D3D type reaches this file.
+    std::uint64_t sceneTexture = 0;
+
+    // --- out ---
+    bool vsyncToggled = false;
+    // The size the Scene panel wants its texture to be. Zero while the panel
+    // is collapsed, which the renderer reads as "leave it alone".
+    unsigned viewportWidth  = 0;
+    unsigned viewportHeight = 0;
+    // Camera input is allowed only while the cursor is over the scene, so
+    // dragging a slider no longer spins the view.
+    bool viewportHovered = false;
+};
+
 // Builds this frame's UI. Call between ImGuiLayer::NewFrame and Render.
-// dt and fps are passed in rather than recomputed so the numbers match the
-// ones the engine is already tracking.
-void DrawDebugUI(World& world, float dt, int fps, bool vsync, bool tearingSupported,
-                 bool& outVSyncToggled);
+void DrawDebugUI(World& world, DebugUIContext& ui);

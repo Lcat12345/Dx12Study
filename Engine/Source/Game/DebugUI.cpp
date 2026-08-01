@@ -145,50 +145,93 @@ namespace
         ImGui::End();
     }
 
-    void DrawStats(float dt, int fps, bool vsync, bool tearingSupported,
-                   bool& outVSyncToggled)
+    // The scene, as a texture inside a window. Everything about this panel is
+    // driven by the size ImGui gives it - the renderer follows the panel, not
+    // the other way round.
+    void DrawSceneViewport(DebugUIContext& ui)
+    {
+        // No padding: the image should reach the window border, the way every
+        // editor's viewport does.
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(820, 520), ImGuiCond_FirstUseEver);
+        const bool visible = ImGui::Begin("Scene");
+        ImGui::PopStyleVar();
+
+        if (!visible)
+        {
+            // Collapsed. Leaving the size at zero tells the renderer to keep
+            // the target it has rather than shrink it to nothing.
+            ImGui::End();
+            return;
+        }
+
+        // The space left after the title bar - what the image gets, and
+        // therefore what the render target should be.
+        const ImVec2 size = ImGui::GetContentRegionAvail();
+        if (size.x >= 1.0f && size.y >= 1.0f)
+        {
+            ui.viewportWidth  = unsigned(size.x);
+            ui.viewportHeight = unsigned(size.y);
+
+            // The texture is one frame old in the sense that it was rendered
+            // at the PREVIOUS size if the panel was just resized. It is
+            // stretched for that one frame, then matches again.
+            ImGui::Image(ImTextureID(ui.sceneTexture), size);
+        }
+
+        ui.viewportHovered = ImGui::IsWindowHovered();
+        ImGui::End();
+    }
+
+    void DrawStats(DebugUIContext& ui)
     {
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(220, 120), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(220, 160), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin("Frame"))
         {
             ImGui::End();
             return;
         }
 
-        ImGui::Text("%d fps   %.3f ms", fps, dt * 1000.0f);
+        ImGui::Text("%d fps   %.3f ms", ui.fps, ui.dt * 1000.0f);
 
         // A rolling history so a stutter is visible rather than averaged away.
         static float history[120] = {};
         static int   cursor       = 0;
-        history[cursor] = dt * 1000.0f;
+        history[cursor] = ui.dt * 1000.0f;
         cursor = (cursor + 1) % IM_ARRAYSIZE(history);
         ImGui::PlotLines("##frametime", history, IM_ARRAYSIZE(history), cursor,
                          "frame time (ms)", 0.0f, 20.0f, ImVec2(0, 60));
 
-        bool vsyncValue = vsync;
+        bool vsyncValue = ui.vsync;
         if (ImGui::Checkbox("VSync", &vsyncValue))
         {
-            outVSyncToggled = true;
+            ui.vsyncToggled = true;
         }
-        if (!tearingSupported)
+        if (!ui.tearingSupported)
         {
             ImGui::SameLine();
             ImGui::TextDisabled("(no tearing support)");
         }
 
+        // The scene is no longer the window size, and the difference matters
+        // for anything that unprojects a click (10.4).
+        ImGui::Separator();
+        ImGui::Text("viewport %ux%u", ui.viewportWidth, ui.viewportHeight);
+
         ImGui::End();
     }
 }
 
-void DrawDebugUI(World& world, float dt, int fps, bool vsync, bool tearingSupported,
-                 bool& outVSyncToggled)
+void DrawDebugUI(World& world, DebugUIContext& ui)
 {
     // A full-window dock space so the panels can be rearranged and docked.
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
 
-    DrawStats(dt, fps, vsync, tearingSupported, outVSyncToggled);
+    // Before DrawStats, which reports the size this panel just asked for.
+    DrawSceneViewport(ui);
+    DrawStats(ui);
     DrawEntityList(world);
     DrawInspector(world);
 }
