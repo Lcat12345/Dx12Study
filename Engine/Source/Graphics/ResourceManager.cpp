@@ -242,6 +242,21 @@ TextureHandle ResourceManager::AddTexture(const std::wstring& name, const ImageD
     return handle;
 }
 
+void ResourceManager::TextureSize(TextureHandle handle, UINT& outWidth, UINT& outHeight) const
+{
+    outWidth  = 0;
+    outHeight = 0;
+    if (!handle.IsValid() || handle.index >= m_textures.size())
+    {
+        return;
+    }
+    // The resource remembers its own dimensions, so nothing has to be
+    // cached alongside the handle.
+    const D3D12_RESOURCE_DESC desc = m_textures[handle.index].resource->GetDesc();
+    outWidth  = UINT(desc.Width);
+    outHeight = desc.Height;
+}
+
 DescriptorHandle ResourceManager::TextureSRV(TextureHandle handle) const
 {
     if (!handle.IsValid() || handle.index >= m_textures.size())

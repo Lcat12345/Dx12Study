@@ -75,6 +75,11 @@ public:
 
     DescriptorHandle TextureSRV(TextureHandle handle) const;
 
+    // Pixel dimensions of a loaded texture. Anything laying one out needs
+    // them - a preview drawn square would squash a 16:9 image. Zero for an
+    // invalid handle rather than throwing: callers here are UI, not draws.
+    void TextureSize(TextureHandle handle, UINT& outWidth, UINT& outHeight) const;
+
     // --- shaders ---
     // Cached on path + entry point + target, since one file holds several.
     Microsoft::WRL::ComPtr<ID3DBlob> LoadShader(const std::filesystem::path& path,

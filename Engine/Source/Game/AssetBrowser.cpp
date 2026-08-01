@@ -40,6 +40,15 @@ namespace
         return extension;
     }
 
+    // Zero when the size cannot be read, rather than the uintmax_t(-1) that
+    // file_size reports on failure.
+    std::uintmax_t QueryFileSize(const std::filesystem::directory_entry& item)
+    {
+        std::error_code error;
+        const std::uintmax_t size = item.file_size(error);
+        return error ? 0 : size;
+    }
+
     void FormatSize(std::uintmax_t bytes, char* out, size_t size)
     {
         if (bytes >= 1024 * 1024)
@@ -71,10 +80,27 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
     std::vector<Entry> previous = std::move(out);
     out.clear();
 
-    std::error_code error;
-    for (const auto& item : std::filesystem::directory_iterator(GetAssetDir(), error))
+    // Opening the directory is the only failure worth giving up on. A
+    // missing Assets/ means an empty list, not a crash.
+    std::error_code openError;
+    std::filesystem::directory_iterator directory(GetAssetDir(), openError);
+    if (openError)
     {
-        if (error || !item.is_regular_file() || ToLowerExtension(item.path()) != extension)
+        return;
+    }
+
+    for (const auto& item : directory)
+    {
+        // A FRESH error_code per item. Sharing one across the loop means a
+        // single unreadable file latches the flag and every later file gets
+        // skipped as if it did not exist.
+        std::error_code itemError;
+
+        if (!item.is_regular_file(itemError) || itemError)
+        {
+            continue;
+        }
+        if (ToLowerExtension(item.path()) != extension)
         {
             continue;
         }
@@ -82,14 +108,17 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
         Entry entry;
         entry.fileName = item.path().filename().wstring();
         entry.label    = ToUtf8(entry.fileName);
-        entry.byteSize = item.file_size(error);
+        // file_size returns uintmax_t(-1) on failure, which would print as a
+        // nonsense size. Zero reads as "unknown" instead.
+        entry.byteSize = QueryFileSize(item);
 
         auto it = std::find_if(previous.begin(), previous.end(),
                                [&](const Entry& old) { return old.fileName == entry.fileName; });
         if (it != previous.end())
         {
+            const std::uintmax_t byteSize = entry.byteSize;
             entry = *it;
-            entry.byteSize = item.file_size(error);
+            entry.byteSize = byteSize;
         }
         else
         {
@@ -103,6 +132,10 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
                 const Mesh& mesh  = m_resources.GetMesh(entry.mesh);
                 entry.vertexCount = mesh.vertexCount;
                 entry.indexCount  = mesh.indexCount;
+            }
+            if (entry.texture.IsValid())
+            {
+                m_resources.TextureSize(entry.texture, entry.width, entry.height);
             }
         }
         out.push_back(std::move(entry));
@@ -175,6 +208,8 @@ void AssetBrowser::LoadTextureEntry(Entry& entry)
 
     entry.loadMilliseconds =
         std::chrono::duration<double, std::milli>(finish - start).count();
+
+    m_resources.TextureSize(entry.texture, entry.width, entry.height);
 }
 
 // Returns true when something was clicked this frame.
@@ -273,11 +308,23 @@ void AssetBrowser::DrawDetails()
         return;
     }
 
+    ImGui::Text("%u x %u", entry->width, entry->height);
+
     // Textures are free to preview: the SRV the renderer samples is the same
     // one ImGui draws with.
     const D3D12_GPU_DESCRIPTOR_HANDLE srv = m_resources.TextureSRV(entry->texture).gpu;
-    const float width = std::min(ImGui::GetContentRegionAvail().x, 128.0f);
-    ImGui::Image(ImTextureID(srv.ptr), ImVec2(width, width));
+
+    // Fit inside a square box while KEEPING the aspect ratio - drawing every
+    // image square would squash anything that is not.
+    const float box = std::min(ImGui::GetContentRegionAvail().x, 128.0f);
+    ImVec2 preview(box, box);
+    if (entry->width > 0 && entry->height > 0)
+    {
+        const float aspect = float(entry->width) / float(entry->height);
+        if (aspect >= 1.0f) { preview.y = box / aspect; } // wider than tall
+        else                { preview.x = box * aspect; }
+    }
+    ImGui::Image(ImTextureID(srv.ptr), preview);
 }
 
 void AssetBrowser::Draw()
