@@ -14,8 +14,8 @@ DemoGame::DemoGame(HINSTANCE instance)
 
 void DemoGame::OnInit()
 {
-    // The renderer already exists, so its device can build the meshes.
-    BuildScene(GetRenderer().Device(), m_scene);
+    // The renderer already exists, so its resource manager can load assets.
+    BuildScene(GetRenderer().Resources(), m_scene);
 }
 
 void DemoGame::OnUpdate(float dt)

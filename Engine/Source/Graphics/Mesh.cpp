@@ -45,7 +45,7 @@ Mesh CreateMesh(ID3D12Device* device, const MeshData& data)
                       data.indices.data(), UINT(data.indices.size()));
 }
 
-Mesh CreateCubeMesh(ID3D12Device* device)
+MeshData MakeCubeMeshData()
 {
     // Each face lists its corners as top-left, top-right, bottom-right,
     // bottom-left AS SEEN FROM OUTSIDE, which makes the winding clockwise -
@@ -81,11 +81,11 @@ Mesh CreateCubeMesh(ID3D12Device* device)
                          uint32_t(base + 0), uint32_t(base + 2), uint32_t(base + 3) });
     }
 
-    return CreateMesh(device, vertices, UINT(std::size(vertices)),
-                      indices.data(), UINT(indices.size()));
+    return MeshData{ std::vector<Vertex>(std::begin(vertices), std::end(vertices)),
+                     indices };
 }
 
-Mesh CreatePyramidMesh(ID3D12Device* device)
+MeshData MakePyramidMeshData()
 {
     // Side faces slope at atan(1/2) from vertical, so their normals are
     // diagonal: normalize(0, 1, -2) = (0, 0.447, -0.894) for the front.
@@ -126,11 +126,11 @@ Mesh CreatePyramidMesh(ID3D12Device* device)
         12, 13, 14,  12, 14, 15,                    // base
     };
 
-    return CreateMesh(device, vertices, UINT(std::size(vertices)),
-                      indices, UINT(std::size(indices)));
+    return MeshData{ std::vector<Vertex>(std::begin(vertices), std::end(vertices)),
+                     std::vector<uint32_t>(std::begin(indices), std::end(indices)) };
 }
 
-Mesh CreateFloorMesh(ID3D12Device* device, float halfExtent, float uvTiling)
+MeshData MakeFloorMeshData(float halfExtent, float uvTiling)
 {
     const Vertex vertices[] = {
         { { -halfExtent, 0, +halfExtent }, kUp, { 0,        0        } },
@@ -140,6 +140,6 @@ Mesh CreateFloorMesh(ID3D12Device* device, float halfExtent, float uvTiling)
     };
     const uint32_t indices[] = { 0, 1, 2, 0, 2, 3 };
 
-    return CreateMesh(device, vertices, UINT(std::size(vertices)),
-                      indices, UINT(std::size(indices)));
+    return MeshData{ std::vector<Vertex>(std::begin(vertices), std::end(vertices)),
+                     std::vector<uint32_t>(std::begin(indices), std::end(indices)) };
 }

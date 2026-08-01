@@ -70,12 +70,26 @@ void Engine::UpdateTitleFps(float dt)
                                                                   : L"uncapped(no tearing)");
     // %ls, not %s: in the wide printf family %s means a NARROW string under
     // ISO rules.
-    wchar_t title[160];
+    wchar_t title[220];
+#if defined(_DEBUG)
+    // Loads vs requests: the gap is the resource cache doing its job.
+    const ResourceManager::Stats& stats = m_renderer->Resources().GetStats();
+    std::swprintf(title, _countof(title),
+                  L"%ls   %d fps   %.2f ms   %ux%u   [%ls]  V=toggle"
+                  L"   | mesh %u/%u  tex %u/%u  shader %u/%u (loads/requests)",
+                  m_title, m_fpsFrames,
+                  1000.0f * m_fpsAccumulator / float(m_fpsFrames),
+                  m_window.ClientWidth(), m_window.ClientHeight(), sync,
+                  stats.meshLoads, stats.meshRequests,
+                  stats.textureLoads, stats.textureRequests,
+                  stats.shaderCompiles, stats.shaderRequests);
+#else
     std::swprintf(title, _countof(title),
                   L"%ls   %d fps   %.2f ms   %ux%u   [%ls]  V=toggle",
                   m_title, m_fpsFrames,
                   1000.0f * m_fpsAccumulator / float(m_fpsFrames),
                   m_window.ClientWidth(), m_window.ClientHeight(), sync);
+#endif
     m_window.SetTitle(title);
 
     m_fpsAccumulator = 0.0f;

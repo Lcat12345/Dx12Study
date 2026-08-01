@@ -200,7 +200,7 @@ Dx12Engine/                  # 저장소 루트
 - [o] Device / SwapChain / CommandQueue 등 래퍼 클래스 정리 *(9.2: 전역 0개, Source를 4개 폴더로 재배치)*
 - [o] Frame Resource 패턴 — 프레임 인플라이트 개수만큼 커맨드 할당자·CB 링버퍼링 (Fence 동기화 최소화) *(9.1 완료: 0.20ms → 0.18ms)*
 - [o] Descriptor 할당자 (힙에서 슬롯을 나눠주는 간단한 매니저) *(9.3: 범프+프리리스트, 핸들 산술 캡슐화)*
-- [ ] 리소스 매니저 (텍스처/메시/셰이더 캐싱, 중복 로드 방지)
+- [o] 리소스 매니저 (텍스처/메시/셰이더 캐싱, 중복 로드 방지) *(9.4: 텍스처 요청 13회 → 로드 2회)*
 - [ ] Entity / Component / System 기반의 간단한 ECS 구조 — Entity 생성·삭제, Component 추가·조회
 - [ ] 기본 Component 정의: Transform, MeshRenderer, Camera, Light
 - [ ] 기본 System 구현 (Component를 순회하며 렌더링/카메라 갱신 등을 처리)

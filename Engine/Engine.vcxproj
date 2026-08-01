@@ -162,6 +162,7 @@
     <ClCompile Include="Source\Graphics\Image.cpp" />
     <ClCompile Include="Source\Graphics\Mesh.cpp" />
     <ClCompile Include="Source\Graphics\Renderer.cpp" />
+    <ClCompile Include="Source\Graphics\ResourceManager.cpp" />
     <ClCompile Include="Source\Graphics\SwapChain.cpp" />
     <ClCompile Include="Source\Loaders\ObjLoader.cpp" />
   </ItemGroup>
@@ -179,6 +180,7 @@
     <ClInclude Include="Source\Graphics\Image.h" />
     <ClInclude Include="Source\Graphics\Mesh.h" />
     <ClInclude Include="Source\Graphics\Renderer.h" />
+    <ClInclude Include="Source\Graphics\ResourceManager.h" />
     <ClInclude Include="Source\Graphics\SwapChain.h" />
     <ClInclude Include="Source\Loaders\ObjLoader.h" />
   </ItemGroup>

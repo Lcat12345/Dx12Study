@@ -1,17 +1,13 @@
 #include "Graphics/Renderer.h"
 
 #include "Core/Common.h"
-#include "Graphics/Image.h"
 #include "Graphics/Mesh.h"
 #include "Game/Scene.h"
 #include "Game/Camera.h"
 
-#include <d3dcompiler.h>
 #include <DirectXMath.h>
 #include <stdexcept>
 #include <filesystem>
-
-#pragma comment(lib, "d3dcompiler.lib")
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -21,39 +17,6 @@ namespace
     constexpr float kClearColor[4] = { 0.02f, 0.04f, 0.08f, 1.0f };
     constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
 
-    ComPtr<ID3DBlob> CompileShader(const std::filesystem::path& path,
-                                   const char* entryPoint, const char* target)
-    {
-        // D3DCompileFromFile only reports a bare HRESULT for a missing file,
-        // which is painful to diagnose - check first and name the path.
-        if (!std::filesystem::exists(path))
-        {
-            throw std::runtime_error("Shader file not found:\n" + path.string());
-        }
-
-        UINT flags = 0;
-#if defined(_DEBUG)
-        // Embed debug info and keep the HLSL readable in PIX/RenderDoc.
-        flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-        ComPtr<ID3DBlob> bytecode;
-        ComPtr<ID3DBlob> errors;
-        HRESULT hr = D3DCompileFromFile(path.c_str(), nullptr,
-                                        D3D_COMPILE_STANDARD_FILE_INCLUDE,
-                                        entryPoint, target, flags, 0,
-                                        &bytecode, &errors);
-        if (FAILED(hr))
-        {
-            // The compiler writes human-readable errors into the blob.
-            if (errors)
-            {
-                throw std::runtime_error(
-                    static_cast<const char*>(errors->GetBufferPointer()));
-            }
-            ThrowIfFailed(hr, "D3DCompileFromFile");
-        }
-        return bytecode;
-    }
 }
 
 Renderer::Renderer(HWND hwnd, UINT width, UINT height)
@@ -63,15 +26,15 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
                      kDsvHeapCapacity, /*shaderVisible*/ false)
     , m_srvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                      kSrvHeapCapacity, /*shaderVisible*/ true)
+    , m_resources(m_device, m_srvAllocator)
 {
-    // Slots are taken once here; the views written into them can change.
+    // Depth needs its slot for the lifetime of the renderer; texture slots
+    // are handed out by the ResourceManager as assets are loaded.
     m_depthStencilView = m_dsvAllocator.Allocate();
-    m_textureSRV       = m_srvAllocator.Allocate();
 
     CreateCommandObjects();
     CreateSizeDependentResources();
     CreateConstantBuffers();
-    CreateTexture();          // records + submits, so needs the command list
     CreateRootSignature();
     CreatePipelineState();
 }
@@ -174,102 +137,6 @@ void Renderer::CreateConstantBuffers()
     }
 }
 
-// A GPU-local (default heap) resource cannot be written by the CPU, so the
-// data takes two hops:
-//   CPU memory -> upload heap (CPU-writable) -> default heap
-// The second hop is a GPU copy command: record, submit, wait.
-void Renderer::CreateTexture()
-{
-    const ImageData image = LoadImageRGBA(GetAssetDir() / L"Crate.png");
-
-    D3D12_HEAP_PROPERTIES defaultHeap = {};
-    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
-
-    D3D12_RESOURCE_DESC texDesc = {};
-    texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
-    texDesc.Width            = image.width;
-    texDesc.Height           = image.height;
-    texDesc.DepthOrArraySize = 1;
-    texDesc.MipLevels        = 1; // no mipmaps yet
-    texDesc.Format           = SwapChain::kFormat;
-    texDesc.SampleDesc.Count = 1;
-
-    ThrowIfFailed(m_device.Device()->CreateCommittedResource(
-                      &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
-                      D3D12_RESOURCE_STATE_COPY_DEST,
-                      nullptr, IID_PPV_ARGS(&m_texture)),
-                  "CreateCommittedResource(Texture)");
-
-    // Textures are NOT tightly packed: each row must start on a 256-byte
-    // boundary. GetCopyableFootprints computes the exact layout.
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint = {};
-    UINT   numRows        = 0;
-    UINT64 rowSizeInBytes = 0;
-    UINT64 uploadSize     = 0;
-    m_device.Device()->GetCopyableFootprints(&texDesc, 0, 1, 0,
-                                             &footprint, &numRows, &rowSizeInBytes,
-                                             &uploadSize);
-
-    ComPtr<ID3D12Resource> uploadBuffer =
-        CreateUploadBuffer(m_device.Device(), nullptr, uploadSize,
-                           "CreateCommittedResource(TexUpload)");
-
-    // Copy ROW BY ROW: the source is tightly packed, the destination has
-    // padding at the end of every row.
-    uint8_t* mapped = nullptr;
-    D3D12_RANGE readRange = {};
-    ThrowIfFailed(uploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)),
-                  "TexUpload Map");
-    for (UINT y = 0; y < numRows; ++y)
-    {
-        memcpy(mapped + footprint.Offset + SIZE_T(y) * footprint.Footprint.RowPitch,
-               image.pixels.data() + SIZE_T(y) * image.width * 4,
-               static_cast<size_t>(rowSizeInBytes));
-    }
-    uploadBuffer->Unmap(0, nullptr);
-
-    // Init-time work, before any frame has been submitted - frame 0's
-    // allocator is free to borrow.
-    ThrowIfFailed(m_frames[0].commandAllocator->Reset(), "Allocator Reset (texture)");
-    ThrowIfFailed(m_commandList->Reset(m_frames[0].commandAllocator.Get(), nullptr),
-                  "CommandList Reset (texture)");
-
-    D3D12_TEXTURE_COPY_LOCATION dst = {};
-    dst.pResource        = m_texture.Get();
-    dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
-    dst.SubresourceIndex = 0;
-
-    D3D12_TEXTURE_COPY_LOCATION src = {};
-    src.pResource       = uploadBuffer.Get();
-    src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
-    src.PlacedFootprint = footprint;
-
-    m_commandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
-
-    // Copy done -> the texture becomes readable by the pixel shader.
-    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
-        m_texture.Get(),
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    m_commandList->ResourceBarrier(1, &toShaderResource);
-
-    ThrowIfFailed(m_commandList->Close(), "CommandList Close (texture)");
-    ID3D12CommandList* lists[] = { m_commandList.Get() };
-    m_device.Queue()->ExecuteCommandLists(1, lists);
-
-    // uploadBuffer dies at the end of this function - the GPU must be
-    // finished reading it first.
-    m_device.WaitForGpu();
-
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format                  = SwapChain::kFormat;
-    srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels     = 1;
-    m_device.Device()->CreateShaderResourceView(
-        m_texture.Get(), &srvDesc, m_textureSRV.cpu);
-}
-
 // The "function signature" of the pipeline:
 // b0 object CB, b1 pass CB, t0 texture, s0 static sampler.
 void Renderer::CreateRootSignature()
@@ -336,9 +203,10 @@ void Renderer::CreateRootSignature()
 // once here, cheap to switch at runtime.
 void Renderer::CreatePipelineState()
 {
+    // Both entry points live in one file, so the cache key includes them.
     const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
-    ComPtr<ID3DBlob> vs = CompileShader(shaderFile, "VSMain", "vs_5_0");
-    ComPtr<ID3DBlob> ps = CompileShader(shaderFile, "PSMain", "ps_5_0");
+    ComPtr<ID3DBlob> vs = m_resources.LoadShader(shaderFile, "VSMain", "vs_5_0");
+    ComPtr<ID3DBlob> ps = m_resources.LoadShader(shaderFile, "PSMain", "ps_5_0");
 
     // Offsets must match struct Vertex in Mesh.h exactly. Mismatches produce
     // no error - just a wrong picture.
@@ -536,10 +404,10 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
     m_commandList->SetPipelineState(m_pipelineState.Get());
 
+    // The heap is bound once; which slot inside it a draw reads is chosen
+    // per object below.
     ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
-    m_commandList->SetGraphicsRootDescriptorTable(
-        2, m_textureSRV.gpu);
 
     // Bound ONCE for the whole frame - the payoff of splitting the constant
     // buffers by update frequency.
@@ -554,12 +422,18 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
 
     for (size_t i = 0; i < scene.objects.size() && i < kMaxObjects; ++i)
     {
-        const Mesh& mesh = scene.meshes[scene.objects[i].meshIndex];
+        const SceneObject& object = scene.objects[i];
+        const Mesh&        mesh   = m_resources.GetMesh(object.mesh);
 
         // Point the root CBV at this object's slot - no descriptor heap
         // juggling, just an address.
         m_commandList->SetGraphicsRootConstantBufferView(
             0, objectCBBase + UINT64(i) * kObjectCBSize);
+
+        // Each material names its own texture; the handle resolves to a
+        // slot in the heap bound above.
+        m_commandList->SetGraphicsRootDescriptorTable(
+            2, m_resources.TextureSRV(object.material.texture).gpu);
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);

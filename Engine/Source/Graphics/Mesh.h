@@ -39,14 +39,19 @@ Mesh CreateMesh(ID3D12Device* device,
 
 Mesh CreateMesh(ID3D12Device* device, const MeshData& data);
 
+// --- procedural geometry ---
+// These return CPU-side data rather than a GPU Mesh, so the ResourceManager
+// is the single place that uploads and caches. Same shape as what the OBJ
+// loader returns, which is what lets both go through one code path.
+
 // 24 vertices, not 8: a corner is shared by three faces but each face needs
 // its own uv and its own flat normal there, and a vertex carries only one
 // of each. (Phase 8's OBJ loader hits the same problem from the other side.)
-Mesh CreateCubeMesh(ID3D12Device* device);
+MeshData MakeCubeMeshData();
 
 // Slanted faces - the shape that makes the inverse-transpose normal matrix
 // visible, which an axis-aligned cube never can.
-Mesh CreatePyramidMesh(ID3D12Device* device);
+MeshData MakePyramidMeshData();
 
 // One big quad. uvTiling > 1 repeats the texture (sampler is set to WRAP).
-Mesh CreateFloorMesh(ID3D12Device* device, float halfExtent, float uvTiling);
+MeshData MakeFloorMeshData(float halfExtent, float uvTiling);

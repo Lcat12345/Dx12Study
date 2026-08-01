@@ -5,6 +5,7 @@
 #include "Graphics/SwapChain.h"
 #include "Graphics/FrameResource.h"
 #include "Graphics/DescriptorAllocator.h"
+#include "Graphics/ResourceManager.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -28,6 +29,9 @@ public:
     // for its font atlas in 9.6; it is deliberately larger than we need.
     DescriptorAllocator& ShaderVisibleDescriptors() { return m_srvAllocator; }
 
+    // Assets are loaded and cached here (see BuildScene).
+    ResourceManager& Resources() { return m_resources; }
+
     void Resize(UINT width, UINT height);
     void Render(const Scene& scene, const Camera& camera, float totalSeconds);
 
@@ -41,7 +45,6 @@ private:
     void CreateCommandObjects();
     void CreateSizeDependentResources(); // depth buffer, viewport, scissor
     void CreateConstantBuffers();
-    void CreateTexture();
     void CreateRootSignature();
     void CreatePipelineState();
 
@@ -77,8 +80,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Resource> m_depthStencilBuffer;
     DescriptorHandle                       m_depthStencilView;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource> m_texture;
-    DescriptorHandle                       m_textureSRV;
+    // Declared after the allocators it borrows a slot from, so it is
+    // destroyed before them.
+    ResourceManager m_resources;
 
     D3D12_VIEWPORT m_viewport    = {};
     D3D12_RECT     m_scissorRect = {};

@@ -54,6 +54,9 @@
     <ClCompile Include="Source\Graphics\Renderer.cpp">
       <Filter>Graphics</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Graphics\ResourceManager.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Graphics\SwapChain.cpp">
       <Filter>Graphics</Filter>
     </ClCompile>
@@ -99,6 +102,9 @@
       <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\Renderer.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\ResourceManager.h">
       <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\SwapChain.h">
