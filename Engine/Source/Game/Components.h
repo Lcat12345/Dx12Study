@@ -6,6 +6,18 @@
 
 #include <DirectXMath.h>
 
+// A human-readable label. Scene data, not editor state - "what this thing is
+// called" is saved with the scene, unlike "what is selected".
+//
+// A fixed buffer rather than std::string because ImGui::InputText writes
+// straight into a char array; binding it to a std::string needs the
+// misc/cpp/imgui_stdlib helper, which we did not vendor.
+struct Name
+{
+    static constexpr int kCapacity = 48;
+    char value[kCapacity] = "Entity";
+};
+
 // Where something is. The world matrix is NOT stored here; systems compute
 // it, so there is never a cached copy that can go stale.
 struct Transform

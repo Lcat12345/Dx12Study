@@ -21,6 +21,9 @@ struct DebugUIContext
     // The scene, already rendered, as an ImGui texture id. Plain integer so
     // no D3D type reaches this file.
     std::uint64_t sceneTexture = 0;
+    // How many draw items the object constant buffer holds. Shown next to
+    // the live count, because exceeding it throws rather than degrades.
+    unsigned maxDrawItems = 0;
 
     // --- out ---
     bool vsyncToggled = false;

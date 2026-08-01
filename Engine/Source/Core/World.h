@@ -163,6 +163,24 @@ public:
     template <typename T>
     void Remove(Entity entity) { StorageFor<T>().RemoveEntity(entity.index); }
 
+    // Visits every LIVE entity as fn(Entity), whatever it carries.
+    //
+    // Component storages answer "who has T"; this answers "what exists at
+    // all". The editor's entity list needs the second question - an entity
+    // that just lost its last component is still an entity, and listing by
+    // Transform would make it vanish instead.
+    template <typename Fn>
+    void ForEachEntity(Fn&& fn)
+    {
+        for (uint32_t index = 0; index < uint32_t(m_generations.size()); ++index)
+        {
+            if (m_alive[index])
+            {
+                fn(Entity{ index, m_generations[index] });
+            }
+        }
+    }
+
     // Visits every entity carrying T as fn(Entity, T&).
     //
     // Two-component queries are written as "iterate one, Get<> the other" -

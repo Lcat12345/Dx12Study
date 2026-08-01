@@ -54,6 +54,11 @@ public:
     // no D3D type leaks into the UI code.
     uint64_t SceneTextureId() const { return m_sceneTarget->SRV().ptr; }
 
+    // How many DrawItems Render() will accept before throwing. The editor
+    // shows it next to the live count so the ceiling is visible before it
+    // is hit.
+    UINT MaxDrawItems() const { return kMaxObjects; }
+
     // Takes flattened data, not a scene graph - the renderer has no idea
     // entities exist. See RenderData.h.
     void Render(const CameraView& camera, const LightingData& lighting,

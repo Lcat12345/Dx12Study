@@ -221,8 +221,8 @@ Dx12Engine/                  # 저장소 루트
 - [o] DX12 렌더링 결과를 오프스크린 렌더 타겟(SRV)으로 뽑아 ImGui Scene Viewport 창에 표시 *(10.1: 씬 패스 → RT, UI 패스 → 백버퍼. 종횡비·카메라 입력이 창이 아니라 뷰포트를 따른다)*
 - [ ] 배경/지형/건축물 에셋 브라우저 (목록 탐색 + 미리보기)
 - [ ] 에셋을 뷰포트에서 선택해 게임 월드에 Entity로 배치
-- [ ] Entity 목록 창 — 씬에 존재하는 Entity 탐색·선택
-- [ ] Inspector — 선택한 Entity의 Component 확인·값 편집(Transform 등), Component 추가/삭제
+- [o] Entity 목록 창 — 씬에 존재하는 Entity 탐색·선택 *(10.2: Name 컴포넌트로 이름 표시, 생성·복제·삭제)*
+- [o] Inspector — 선택한 Entity의 Component 확인·값 편집(Transform 등), Component 추가/삭제 *(10.2: 구조 편집은 프레임 끝에 일괄 적용)*
 - [ ] 씬 저장 / 불러오기 (Entity·Component 데이터를 직렬화하는 ECS 기반 씬 포맷)
 
 트리거 대기 항목 — 미리 만들지 않고, 조건이 실제로 발생하는 순간 착수:

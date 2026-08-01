@@ -37,7 +37,12 @@ struct PassConstants // b1 - written once per frame
     DirectX::XMFLOAT3   pointLightColor;   float pad4 = 0.0f;
 };
 
-constexpr UINT kMaxObjects   = 32; // constant buffer holds one slot each
+// The object CB holds one 256-byte slot each, so 256 objects cost 64 KB per
+// frame set - not worth being clever about. Placing entities by hand blew
+// past 32 immediately; a genuinely dynamic buffer waits until a scene needs
+// more than this, because resizing it means the same deferred-recreation
+// dance the render target needs.
+constexpr UINT kMaxObjects   = 256;
 constexpr UINT kObjectCBSize = Align(sizeof(ObjectConstants), 256);
 constexpr UINT kPassCBSize   = Align(sizeof(PassConstants), 256);
 

@@ -61,6 +61,7 @@ void DemoGame::OnUpdate(float dt)
     ui.vsync            = GetRenderer().IsVSync();
     ui.tearingSupported = GetRenderer().IsTearingSupported();
     ui.sceneTexture     = GetRenderer().SceneTextureId();
+    ui.maxDrawItems     = GetRenderer().MaxDrawItems();
 
     DrawDebugUI(m_world, ui);
 
