@@ -75,6 +75,8 @@ Phase 8 종료 시점 코드의 한계. 각 항목이 Phase 9의 세부 단계 �
 
 #### 측정 결과 (완료)
 
+![프레임 파이프라이닝 전후 타임라인](images/frame-pipelining.svg)
+
 Release 빌드, 1280x720, 티어링(uncapped). vsync 켜면 165fps에 고정되어 측정 불가.
 
 | | fps | 프레임타임 |
