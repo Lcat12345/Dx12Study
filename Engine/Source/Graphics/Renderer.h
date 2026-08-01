@@ -4,6 +4,7 @@
 #include "Graphics/GraphicsDevice.h"
 #include "Graphics/SwapChain.h"
 #include "Graphics/FrameResource.h"
+#include "Graphics/DescriptorAllocator.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -23,6 +24,10 @@ public:
     // Meshes and textures are created against this device (see BuildScene).
     ID3D12Device* Device() const { return m_device.Device(); }
 
+    // The shader-visible heap other systems draw slots from. ImGui takes one
+    // for its font atlas in 9.6; it is deliberately larger than we need.
+    DescriptorAllocator& ShaderVisibleDescriptors() { return m_srvAllocator; }
+
     void Resize(UINT width, UINT height);
     void Render(const Scene& scene, const Camera& camera, float totalSeconds);
 
@@ -34,7 +39,6 @@ public:
 
 private:
     void CreateCommandObjects();
-    void CreateDescriptorHeaps();
     void CreateSizeDependentResources(); // depth buffer, viewport, scissor
     void CreateConstantBuffers();
     void CreateTexture();
@@ -51,6 +55,14 @@ private:
     GraphicsDevice m_device;
     SwapChain      m_swapChain;
 
+    // Depth needs exactly one slot. The shader-visible heap gets room to
+    // spare so later systems can Allocate() without resizing anything.
+    static constexpr UINT kDsvHeapCapacity = 1;
+    static constexpr UINT kSrvHeapCapacity = 16;
+
+    DescriptorAllocator m_dsvAllocator;
+    DescriptorAllocator m_srvAllocator;
+
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_commandList;
 
     // The per-frame sets, used round-robin. m_currentFrame indexes these and
@@ -62,11 +74,11 @@ private:
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_rootSignature;
     Microsoft::WRL::ComPtr<ID3D12PipelineState> m_pipelineState;
 
-    Microsoft::WRL::ComPtr<ID3D12Resource>       m_depthStencilBuffer;
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_dsvHeap;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_depthStencilBuffer;
+    DescriptorHandle                       m_depthStencilView;
 
-    Microsoft::WRL::ComPtr<ID3D12DescriptorHeap> m_srvHeap;
-    Microsoft::WRL::ComPtr<ID3D12Resource>       m_texture;
+    Microsoft::WRL::ComPtr<ID3D12Resource> m_texture;
+    DescriptorHandle                       m_textureSRV;
 
     D3D12_VIEWPORT m_viewport    = {};
     D3D12_RECT     m_scissorRect = {};

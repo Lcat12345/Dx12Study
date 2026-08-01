@@ -59,9 +59,16 @@ namespace
 Renderer::Renderer(HWND hwnd, UINT width, UINT height)
     : m_device()                                  // debug layer -> device -> queue
     , m_swapChain(m_device, hwnd, width, height)  // needs the queue
+    , m_dsvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_DSV,
+                     kDsvHeapCapacity, /*shaderVisible*/ false)
+    , m_srvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+                     kSrvHeapCapacity, /*shaderVisible*/ true)
 {
+    // Slots are taken once here; the views written into them can change.
+    m_depthStencilView = m_dsvAllocator.Allocate();
+    m_textureSRV       = m_srvAllocator.Allocate();
+
     CreateCommandObjects();
-    CreateDescriptorHeaps();
     CreateSizeDependentResources();
     CreateConstantBuffers();
     CreateTexture();          // records + submits, so needs the command list
@@ -100,26 +107,6 @@ void Renderer::CreateCommandObjects()
     ThrowIfFailed(m_commandList->Close(), "Close command list");
 }
 
-// Heaps that OUTLIVE a resize - only their contents change.
-// (The RTV heap belongs to SwapChain.)
-void Renderer::CreateDescriptorHeaps()
-{
-    D3D12_DESCRIPTOR_HEAP_DESC dsvDesc = {};
-    dsvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_DSV;
-    dsvDesc.NumDescriptors = 1;
-    ThrowIfFailed(m_device.Device()->CreateDescriptorHeap(&dsvDesc, IID_PPV_ARGS(&m_dsvHeap)),
-                  "CreateDescriptorHeap(DSV)");
-
-    // Shader-visible heap: just the texture SRV. The per-object matrices go
-    // through a ROOT DESCRIPTOR instead, which needs no heap slot.
-    D3D12_DESCRIPTOR_HEAP_DESC srvDesc = {};
-    srvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV;
-    srvDesc.NumDescriptors = 1;
-    srvDesc.Flags          = D3D12_DESCRIPTOR_HEAP_FLAG_SHADER_VISIBLE;
-    ThrowIfFailed(m_device.Device()->CreateDescriptorHeap(&srvDesc, IID_PPV_ARGS(&m_srvHeap)),
-                  "CreateDescriptorHeap(SRV)");
-}
-
 // The depth buffer is ours (unlike the back buffers), so a resize means
 // recreating it by hand.
 void Renderer::CreateSizeDependentResources()
@@ -154,7 +141,7 @@ void Renderer::CreateSizeDependentResources()
 
     m_device.Device()->CreateDepthStencilView(
         m_depthStencilBuffer.Get(), nullptr,
-        m_dsvHeap->GetCPUDescriptorHandleForHeapStart());
+        m_depthStencilView.cpu);
 
     m_viewport    = { 0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f };
     m_scissorRect = { 0, 0, LONG(width), LONG(height) };
@@ -280,7 +267,7 @@ void Renderer::CreateTexture()
     srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels     = 1;
     m_device.Device()->CreateShaderResourceView(
-        m_texture.Get(), &srvDesc, m_srvHeap->GetCPUDescriptorHandleForHeapStart());
+        m_texture.Get(), &srvDesc, m_textureSRV.cpu);
 }
 
 // The "function signature" of the pipeline:
@@ -535,8 +522,7 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
     const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_swapChain.CurrentBackBufferRTV();
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle =
-        m_dsvHeap->GetCPUDescriptorHandleForHeapStart();
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_depthStencilView.cpu;
 
     m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
     m_commandList->ClearRenderTargetView(rtvHandle, kClearColor, 0, nullptr);
@@ -550,10 +536,10 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
     m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
     m_commandList->SetPipelineState(m_pipelineState.Get());
 
-    ID3D12DescriptorHeap* heaps[] = { m_srvHeap.Get() };
+    ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
     m_commandList->SetGraphicsRootDescriptorTable(
-        2, m_srvHeap->GetGPUDescriptorHandleForHeapStart());
+        2, m_textureSRV.gpu);
 
     // Bound ONCE for the whole frame - the payoff of splitting the constant
     // buffers by update frequency.

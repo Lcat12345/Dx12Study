@@ -39,7 +39,7 @@ Phase 8 종료 시점 코드의 한계. 각 항목이 Phase 9의 세부 단계 �
 |------|------|------|-----------|-----------|------|
 | 9.1 | **완료** | Frame Resources + 티어링 측정 | 프레임 파이프라이닝, fence 심화 | 중 | - |
 | 9.2 | **완료** | Renderer 클래스화 + Engine/Game 분리 | 수명 관리, 소유권, 엔진/게임 경계 | 대 | - |
-| 9.3 | 대기 | Descriptor 할당자 | 디스크립터 힙 운영 전략 | 소 | - |
+| 9.3 | **완료** | Descriptor 할당자 | 디스크립터 힙 운영 전략 | 소 | - |
 | 9.4 | 대기 | 리소스 매니저 | 핸들 기반 자원 관리, 캐싱 | 중 | - |
 | 9.5 | 대기 | ECS | 조합(composition) 기반 설계 | 대 | - |
 | 9.6 | 대기 | ImGui 통합 | 외부 라이브러리 통합, 디버그 UI | 중 | v1.0 |
@@ -165,16 +165,43 @@ W 전진 59.8% 픽셀 변화, V 토글 3602fps, 리사이즈 884x781 정상, 종
 **목표**: "슬롯 몇 번" 하드코딩을 없애고, 힙에서 슬롯을 받아 쓰는 구조로.
 
 **작업 항목**
-- [ ] CPU 전용 힙(RTV/DSV)용: 프리 리스트 있는 단순 할당자 (Allocate/Free)
-- [ ] 셰이더 가시 힙(CBV/SRV/UAV)용: 정적 구간(텍스처 SRV 등 수명 긴 것) + 필요 시 프레임 링 구간
-- [ ] 기존 RTV/DSV/SRV 생성 코드를 할당자 경유로 교체
-- [ ] ImGui가 쓸 슬롯 1개를 미리 확보할 수 있는 구조인지 확인 (9.6 대비)
+- [o] CPU 전용 힙(RTV/DSV)용: 프리 리스트 있는 단순 할당자 (Allocate/Free)
+- [o] 셰이더 가시 힙(CBV/SRV/UAV)용: 정적 구간(텍스처 SRV 등 수명 긴 것)
+- [] 프레임 링 구간 — 필요해지면 그때. 지금 쓰는 곳이 없어 만들지 않았다
+- [o] 기존 RTV/DSV/SRV 생성 코드를 할당자 경유로 교체
+- [o] ImGui가 쓸 슬롯 확보 가능 구조 확인 (9.6 대비)
 
 **설계 결정**
 - 처음부터 범용으로 만들지 않는다. `DescriptorAllocator(type, capacity)` 하나로 시작, 부족해지면 그때 확장.
 - 핸들은 인덱스 + CPU/GPU 핸들 쌍을 담은 작은 struct로 반환.
 
 **완료 기준**: `GetCPUDescriptorHandleForHeapStart().ptr + N * size` 패턴이 코드에서 사라짐. 화면 동일.
+
+#### 결과 (완료)
+
+`DescriptorAllocator`(범프 포인터 + 프리 리스트) 하나로 세 힙을 모두 처리.
+`Allocate()`가 슬롯 인덱스와 CPU/GPU 핸들을 담은 `DescriptorHandle`을 돌려준다.
+
+| 소유자 | 힙 | 용량 | 셰이더 가시 |
+|---|---|---|---|
+| `SwapChain` | RTV | 2 (백버퍼 수) | X |
+| `Renderer` | DSV | 1 | X |
+| `Renderer` | CBV/SRV/UAV | **16** | O |
+
+- **핸들 산술이 `DescriptorAllocator.cpp` 안에만 남았다.** 나머지 파일에서
+  `GetCPUDescriptorHandleForHeapStart`, `GetDescriptorHandleIncrementSize`
+  호출이 0건 — 완료 기준 그대로
+- **GPU 핸들은 셰이더 가시 힙에서만** 조회한다. RTV/DSV 힙에
+  `GetGPUDescriptorHandleForHeapStart`를 부르면 디버그 레이어 에러다
+- SRV 힙 용량을 필요한 1개가 아니라 16으로 잡았다. `Renderer::ShaderVisibleDescriptors()`로
+  노출해 두었으니 9.6에서 ImGui가 폰트 슬롯을 `Allocate()`로 받아가면 된다
+- 리사이즈 시 RTV 슬롯을 **해제하지 않고 재사용**한다. 바뀌는 건 버퍼이지
+  뷰가 사는 자리가 아니다
+- 힙이 꽉 차면 예외를 던진다. 조용히 넘어가면 무관한 뷰를 덮어써서
+  추적이 매우 어려운 버그가 된다
+
+**검증**: 9.2 스크린샷과 **픽셀 차이 0%**. W 전진 61.8% 변화,
+리사이즈 3회(슬롯 재사용 경로) 정상, V 토글 3614fps, 종료 코드 0.
 
 ---
 

@@ -39,6 +39,9 @@
     <ClCompile Include="Source\Game\Scene.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Graphics\GraphicsDevice.cpp">
       <Filter>Graphics</Filter>
     </ClCompile>
@@ -79,6 +82,9 @@
     </ClInclude>
     <ClInclude Include="Source\Game\Scene.h">
       <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\DescriptorAllocator.h">
+      <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\FrameResource.h">
       <Filter>Graphics</Filter>

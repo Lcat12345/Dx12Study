@@ -7,6 +7,8 @@ using Microsoft::WRL::ComPtr;
 
 SwapChain::SwapChain(GraphicsDevice& device, HWND hwnd, UINT width, UINT height)
     : m_device(device)
+    , m_rtvAllocator(device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
+                     kBufferCount, /*shaderVisible*/ false)
     , m_width(width)
     , m_height(height)
 {
@@ -39,15 +41,11 @@ SwapChain::SwapChain(GraphicsDevice& device, HWND hwnd, UINT width, UINT height)
     ThrowIfFailed(m_device.Factory()->MakeWindowAssociation(hwnd, DXGI_MWA_NO_ALT_ENTER),
                   "MakeWindowAssociation");
 
-    D3D12_DESCRIPTOR_HEAP_DESC rtvDesc = {};
-    rtvDesc.Type           = D3D12_DESCRIPTOR_HEAP_TYPE_RTV;
-    rtvDesc.NumDescriptors = kBufferCount;
-    ThrowIfFailed(m_device.Device()->CreateDescriptorHeap(&rtvDesc, IID_PPV_ARGS(&m_rtvHeap)),
-                  "CreateDescriptorHeap(RTV)");
-
-    // Descriptor sizes are GPU-specific - always ask, never hardcode.
-    m_rtvDescriptorSize = m_device.Device()->GetDescriptorHandleIncrementSize(
-        D3D12_DESCRIPTOR_HEAP_TYPE_RTV);
+    // One slot per back buffer, taken once for the lifetime of the object.
+    for (DescriptorHandle& rtv : m_backBufferRTVs)
+    {
+        rtv = m_rtvAllocator.Allocate();
+    }
 
     CreateRenderTargetViews();
     m_backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
@@ -56,14 +54,14 @@ SwapChain::SwapChain(GraphicsDevice& device, HWND hwnd, UINT width, UINT height)
 void SwapChain::CreateRenderTargetViews()
 {
     // The buffers belong to the swap chain; we only fetch them and describe
-    // them. The heap itself survives a resize - only its contents change.
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
+    // them. The descriptor slots survive a resize - creating a view into an
+    // already-used slot simply overwrites it.
     for (UINT i = 0; i < kBufferCount; ++i)
     {
         ThrowIfFailed(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])),
                       "SwapChain GetBuffer");
-        m_device.Device()->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr, handle);
-        handle.ptr += m_rtvDescriptorSize;
+        m_device.Device()->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr,
+                                                  m_backBufferRTVs[i].cpu);
     }
 }
 
@@ -102,11 +100,4 @@ void SwapChain::Present(bool vsync)
 
     // Present is what flips the buffers, so ask again afterwards.
     m_backBufferIndex = m_swapChain->GetCurrentBackBufferIndex();
-}
-
-D3D12_CPU_DESCRIPTOR_HANDLE SwapChain::CurrentBackBufferRTV() const
-{
-    D3D12_CPU_DESCRIPTOR_HANDLE handle = m_rtvHeap->GetCPUDescriptorHandleForHeapStart();
-    handle.ptr += SIZE_T(m_backBufferIndex) * m_rtvDescriptorSize;
-    return handle;
 }
