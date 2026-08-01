@@ -167,10 +167,11 @@ MeshData LoadObj(const std::filesystem::path& path)
             float x = 0, y = 0, z = 0;
             stream >> x >> y >> z;
             // OBJ is right-handed (+Z toward the viewer); our world is
-            // left-handed (+Z away). Negating Z describes the SAME physical
-            // point in our system - and because flipping handedness also
-            // flips which winding counts as front, OBJ's counter-clockwise
-            // front faces land as the clockwise ones our rasterizer wants.
+            // left-handed (+Z away). Negating Z describes the same physical
+            // point in our system.
+            //
+            // It does NOT fix the winding on its own - see the face loop
+            // below, which reverses each triangle to compensate.
             positions.push_back({ x, y, -z });
         }
         else if (tag == "vt")
@@ -226,11 +227,19 @@ MeshData LoadObj(const std::filesystem::path& path)
             // Triangulate as a fan around the first corner: a quad becomes
             // (0,1,2) and (0,2,3). Correct for convex polygons, which is
             // what exporters emit.
+            //
+            // The last two are emitted SWAPPED, and that is not a typo.
+            // Negating Z above is a mirror, and a mirror reverses triangle
+            // orientation - what was front-facing becomes back-facing. Left
+            // uncorrected, back-face culling keeps the INSIDE of every
+            // loaded model: a torus shows the far inner wall of its tube
+            // through the hole instead of a solid ring. Reversing the
+            // winding here undoes exactly what the mirror did.
             for (size_t i = 2; i < corners.size(); ++i)
             {
                 mesh.indices.push_back(corners[0]);
-                mesh.indices.push_back(corners[i - 1]);
                 mesh.indices.push_back(corners[i]);
+                mesh.indices.push_back(corners[i - 1]);
             }
         }
         // Everything else (#, o, g, s, usemtl, mtllib) is ignored.
