@@ -3,8 +3,10 @@
 
 #include "Core/Engine.h"
 #include "Core/World.h"
+#include "Game/AssetBrowser.h"
 #include "Graphics/RenderData.h"
 
+#include <memory>
 #include <vector>
 
 // Everything specific to this demo lives here; Engine and Renderer stay
@@ -21,6 +23,11 @@ protected:
 
 private:
     World m_world;
+
+    // Created in OnInit, not the constructor: it needs the renderer's
+    // ResourceManager, which does not exist until the base class has
+    // initialized.
+    std::unique_ptr<AssetBrowser> m_assets;
 
     // Rebuilt every frame by the render system. Kept as a member so the
     // vector's storage is reused instead of reallocated 5000 times a second.

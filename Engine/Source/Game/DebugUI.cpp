@@ -1,5 +1,6 @@
 #include "Game/DebugUI.h"
 
+#include "Game/AssetBrowser.h"
 #include "Game/Components.h"
 
 #include "imgui.h"
@@ -202,7 +203,7 @@ namespace
         // FirstUseEver, not Always: this is only a starting layout. Once the
         // user drags a panel, imgui.ini remembers it and this stops applying.
         ImGui::SetNextWindowPos(ImVec2(20, 190), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(240, 400), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(240, 260), ImGuiCond_FirstUseEver);
         if (!ImGui::Begin("Entities"))
         {
             ImGui::End();
@@ -298,7 +299,7 @@ namespace
         ImGui::EndPopup();
     }
 
-    void DrawInspector(World& world)
+    void DrawInspector(World& world, AssetBrowser& assets)
     {
         ImGui::SetNextWindowPos(ImVec2(1000, 20), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(280, 500), ImGuiCond_FirstUseEver);
@@ -345,8 +346,8 @@ namespace
         {
             if (ComponentHeader("Mesh Renderer", Comp::MeshRenderer, g_selected))
             {
-                // A freshly added MeshRenderer has no mesh, so it draws
-                // nothing. Choosing one is 10.3's asset browser.
+                // A freshly added MeshRenderer has no mesh and draws
+                // nothing until one is assigned from the browser.
                 if (renderer->mesh.IsValid())
                 {
                     ImGui::LabelText("Mesh", "handle %u", renderer->mesh.index);
@@ -355,6 +356,30 @@ namespace
                 {
                     ImGui::TextDisabled("No mesh - nothing is drawn.");
                 }
+
+                const MeshHandle    browserMesh    = assets.SelectedMesh();
+                const TextureHandle browserTexture = assets.SelectedTexture();
+
+                // Disabled until the browser has actually loaded something -
+                // an asset that failed to load must not be assignable.
+                ImGui::BeginDisabled(!browserMesh.IsValid());
+                if (ImGui::Button("Assign mesh"))
+                {
+                    renderer->mesh = browserMesh;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", assets.SelectedMeshLabel());
+
+                ImGui::BeginDisabled(!browserTexture.IsValid());
+                if (ImGui::Button("Assign texture"))
+                {
+                    renderer->material.texture = browserTexture;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", assets.SelectedTextureLabel());
+
                 ImGui::ColorEdit3("Albedo",   &renderer->material.diffuseAlbedo.x);
                 ImGui::ColorEdit3("Specular", &renderer->material.specularColor.x);
                 ImGui::DragFloat("Shininess", &renderer->material.shininess,
@@ -461,7 +486,7 @@ namespace
         ImGui::End();
     }
 
-    void DrawStats(DebugUIContext& ui, int entityCount, int drawnCount)
+    void DrawStats(DebugUIContext& ui, int entityCount)
     {
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(240, 160), ImGuiCond_FirstUseEver);
@@ -498,33 +523,28 @@ namespace
         ImGui::Text("viewport %ux%u", ui.viewportWidth, ui.viewportHeight);
         // Draw items, not entities: placing by hand is what will eventually
         // hit the object constant buffer's ceiling.
-        ImGui::Text("%d entities, %d drawn / %d", entityCount, drawnCount, ui.maxDrawItems);
+        ImGui::Text("%d entities, %u drawn / %u",
+                    entityCount, ui.drawItemCount, ui.maxDrawItems);
 
         ImGui::End();
     }
 }
 
-void DrawDebugUI(World& world, DebugUIContext& ui)
+void DrawDebugUI(World& world, AssetBrowser& assets, DebugUIContext& ui)
 {
     // A full-window dock space so the panels can be rearranged and docked.
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
 
     int entityCount = 0;
-    int drawnCount  = 0;
-    world.ForEachEntity([&](Entity entity) {
-        ++entityCount;
-        if (world.Has<MeshRenderer>(entity) && world.Has<Transform>(entity))
-        {
-            ++drawnCount;
-        }
-    });
+    world.ForEachEntity([&](Entity) { ++entityCount; });
 
     // Before DrawStats, which reports the size this panel just asked for.
     DrawSceneViewport(ui);
-    DrawStats(ui, entityCount, drawnCount);
+    DrawStats(ui, entityCount);
     DrawEntityList(world);
-    DrawInspector(world);
+    DrawInspector(world, assets);
+    assets.Draw();
 
     // Every panel has finished iterating, so it is finally safe to change
     // the shape of the world.

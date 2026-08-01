@@ -53,7 +53,11 @@ void BuildWorld(ResourceManager& resources, World& world)
     const MeshHandle pyramidMesh = resources.AddMesh(L"#pyramid", MakePyramidMeshData());
     const MeshHandle sphereMesh  = resources.LoadMesh(L"Sphere.obj");
     const MeshHandle torusMesh   = resources.LoadMesh(L"Torus.obj");
-	const MeshHandle laevatMesh  = resources.LoadMesh( L"Laevat.obj", 8.0f );
+	// Spelled exactly as the file is on disk. Windows would open "Laevat.obj"
+	// just as happily, but the resource cache keys on the STRING - and the
+	// asset browser asks for "laevat.obj", so a mismatch would load 24 MB of
+	// geometry a second time into a second GPU buffer.
+	const MeshHandle laevatMesh  = resources.LoadMesh( L"laevat.obj", 8.0f );
 
     // --- floor: rough and wide, barely any highlight ---
     Material floorMaterial;

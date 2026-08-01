@@ -55,10 +55,23 @@ public:
 
     const Mesh& GetMesh(MeshHandle handle) const;
 
+    // "Is this already loaded?" without loading it. The asset browser needs
+    // to say so from the first frame, and assets loaded by the startup scene
+    // were cached long before the browser existed.
+    MeshHandle    FindMesh(const std::wstring& name) const;
+    TextureHandle FindTexture(const std::wstring& name) const;
+
     // --- textures ---
     // Loads an image from Assets/ into a default-heap texture and creates
     // its SRV in the shader-visible heap.
     TextureHandle LoadTexture(const std::wstring& fileName);
+    // Uploads pixels produced in code. Same relationship to LoadTexture that
+    // AddMesh has to LoadMesh: one cache, two ways in.
+    TextureHandle AddTexture(const std::wstring& name, const struct ImageData& image);
+
+    // A 1x1 white texel, so a material that names no image still has
+    // something to sample. Multiplying the albedo by white leaves it alone.
+    TextureHandle DefaultTexture() const { return m_defaultTexture; }
 
     DescriptorHandle TextureSRV(TextureHandle handle) const;
 
@@ -98,6 +111,8 @@ private:
 
     std::vector<Mesh>    m_meshes;
     std::vector<Texture> m_textures;
+
+    TextureHandle m_defaultTexture;
 
     std::unordered_map<std::wstring, MeshHandle>    m_meshCache;
     std::unordered_map<std::wstring, TextureHandle> m_textureCache;

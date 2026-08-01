@@ -22,6 +22,9 @@ struct Mesh
     D3D12_VERTEX_BUFFER_VIEW               vbv = {};
     D3D12_INDEX_BUFFER_VIEW                ibv = {};
     UINT                                   indexCount = 0;
+    // Not needed to draw - kept so the asset browser can report what a file
+    // actually contained after the loader deduplicated its vertices.
+    UINT                                   vertexCount = 0;
 };
 
 // Geometry still on the CPU: what a loader produces before upload.

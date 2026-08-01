@@ -28,6 +28,16 @@ ResourceManager::ResourceManager(GraphicsDevice& device, DescriptorAllocator& sr
                       IID_PPV_ARGS(&m_uploadCommandList)),
                   "CreateCommandList(upload)");
     ThrowIfFailed(m_uploadCommandList->Close(), "Close upload list");
+
+    // A material with no texture of its own still has to sample something.
+    // One white texel multiplies the albedo by 1, so the material's colour
+    // comes through untouched - which is exactly what a freshly placed mesh
+    // should look like before an image is chosen for it.
+    ImageData white;
+    white.width  = 1;
+    white.height = 1;
+    white.pixels = { 255, 255, 255, 255 };
+    m_defaultTexture = AddTexture(L"#white", white);
 }
 
 void ResourceManager::BeginUpload()
@@ -99,21 +109,45 @@ const Mesh& ResourceManager::GetMesh(MeshHandle handle) const
     return m_meshes[handle.index];
 }
 
+MeshHandle ResourceManager::FindMesh(const std::wstring& name) const
+{
+    // Not a request: asking does no work and must not skew the cache stats.
+    auto it = m_meshCache.find(name);
+    return it == m_meshCache.end() ? MeshHandle{} : it->second;
+}
+
+TextureHandle ResourceManager::FindTexture(const std::wstring& name) const
+{
+    auto it = m_textureCache.find(name);
+    return it == m_textureCache.end() ? TextureHandle{} : it->second;
+}
+
 // ---------------------------------------------------------------- textures
 
 TextureHandle ResourceManager::LoadTexture(const std::wstring& fileName)
 {
-    ++m_stats.textureRequests;
-
     auto it = m_textureCache.find(fileName);
     if (it != m_textureCache.end())
     {
         // The whole point of the cache: five materials naming the same
         // image decode it once and share one SRV slot.
+        ++m_stats.textureRequests;
         return it->second;
     }
+    // Decoding is the only file-specific part; everything after it is the
+    // same upload whether the pixels came from disk or from code.
+    return AddTexture(fileName, LoadImageRGBA(GetAssetDir() / fileName));
+}
 
-    const ImageData image = LoadImageRGBA(GetAssetDir() / fileName);
+TextureHandle ResourceManager::AddTexture(const std::wstring& name, const ImageData& image)
+{
+    ++m_stats.textureRequests;
+
+    auto it = m_textureCache.find(name);
+    if (it != m_textureCache.end())
+    {
+        return it->second;
+    }
 
     // A GPU-local (default heap) resource cannot be written by the CPU, so
     // the data takes two hops:
@@ -203,7 +237,7 @@ TextureHandle ResourceManager::LoadTexture(const std::wstring& fileName)
 
     const TextureHandle handle{ uint32_t(m_textures.size()) };
     m_textures.push_back(std::move(texture));
-    m_textureCache.emplace(fileName, handle);
+    m_textureCache.emplace(name, handle);
     ++m_stats.textureLoads;
     return handle;
 }

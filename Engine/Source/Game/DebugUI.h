@@ -8,6 +8,8 @@
 
 #include <cstdint>
 
+class AssetBrowser;
+
 // What the panels read from the engine, and what they hand back. A struct
 // rather than a parameter list: the viewport panel alone would have added
 // four, and every new panel adds more.
@@ -24,6 +26,10 @@ struct DebugUIContext
     // How many draw items the object constant buffer holds. Shown next to
     // the live count, because exceeding it throws rather than degrades.
     unsigned maxDrawItems = 0;
+    // What the renderer actually received last frame - NOT "entities with a
+    // MeshRenderer". One with no mesh assigned yet is skipped, and a counter
+    // that disagreed with the picture would be worse than none.
+    unsigned drawItemCount = 0;
 
     // --- out ---
     bool vsyncToggled = false;
@@ -37,4 +43,6 @@ struct DebugUIContext
 };
 
 // Builds this frame's UI. Call between ImGuiLayer::NewFrame and Render.
-void DrawDebugUI(World& world, DebugUIContext& ui);
+// The browser is passed in rather than owned here: it holds scan results
+// across frames, and the inspector assigns whatever it has selected.
+void DrawDebugUI(World& world, AssetBrowser& assets, DebugUIContext& ui);

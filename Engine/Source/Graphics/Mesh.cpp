@@ -34,7 +34,8 @@ Mesh CreateMesh(ID3D12Device* device,
     mesh.ibv.SizeInBytes    = indexBytes;
     mesh.ibv.Format         = DXGI_FORMAT_R32_UINT;
 
-    mesh.indexCount = indexCount;
+    mesh.indexCount  = indexCount;
+    mesh.vertexCount = vertexCount;
     return mesh;
 }
 

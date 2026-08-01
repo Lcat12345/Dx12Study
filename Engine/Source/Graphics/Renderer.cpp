@@ -410,9 +410,14 @@ void Renderer::DrawScene(FrameResource& frame, const std::vector<DrawItem>& item
             0, objectCBBase + UINT64(i) * kObjectCBSize);
 
         // Each material names its own texture; the handle resolves to a
-        // slot in the heap bound above.
+        // slot in the heap bound above. A material placed in the editor may
+        // not have chosen one yet - the white default keeps the shader's
+        // sample valid instead of leaving the table pointing at nothing.
+        const TextureHandle texture = item.material.texture.IsValid()
+                                    ? item.material.texture
+                                    : m_resources.DefaultTexture();
         m_commandList->SetGraphicsRootDescriptorTable(
-            2, m_resources.TextureSRV(item.material.texture).gpu);
+            2, m_resources.TextureSRV(texture).gpu);
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);

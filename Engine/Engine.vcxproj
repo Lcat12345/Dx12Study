@@ -157,6 +157,7 @@
     <ClCompile Include="Source\Game\DebugUI.cpp" />
     <ClCompile Include="Source\Game\DemoGame.cpp" />
     <ClCompile Include="Source\Game\Main.cpp" />
+    <ClCompile Include="Source\Game\AssetBrowser.cpp" />
     <ClCompile Include="Source\Game\Systems.cpp" />
     <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp" />
     <ClCompile Include="Source\Graphics\GraphicsDevice.cpp" />
@@ -181,6 +182,7 @@
     <ClInclude Include="Source\Core\Timer.h" />
     <ClInclude Include="Source\Core\Window.h" />
     <ClInclude Include="Source\Core\World.h" />
+    <ClInclude Include="Source\Game\AssetBrowser.h" />
     <ClInclude Include="Source\Game\BuildWorld.h" />
     <ClInclude Include="Source\Game\Components.h" />
     <ClInclude Include="Source\Game\DebugUI.h" />

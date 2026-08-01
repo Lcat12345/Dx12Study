@@ -22,6 +22,9 @@ void DemoGame::OnInit()
 {
     // The renderer already exists, so its resource manager can load assets.
     BuildWorld(GetRenderer().Resources(), m_world);
+
+    // Scans Assets/ once here; the panel's Refresh button does it again.
+    m_assets = std::make_unique<AssetBrowser>(GetRenderer().Resources());
 }
 
 void DemoGame::OnUpdate(float dt)
@@ -62,8 +65,10 @@ void DemoGame::OnUpdate(float dt)
     ui.tearingSupported = GetRenderer().IsTearingSupported();
     ui.sceneTexture     = GetRenderer().SceneTextureId();
     ui.maxDrawItems     = GetRenderer().MaxDrawItems();
+    // Last frame's list: OnRender rebuilds it after this runs.
+    ui.drawItemCount    = unsigned(m_drawItems.size());
 
-    DrawDebugUI(m_world, ui);
+    DrawDebugUI(m_world, *m_assets, ui);
 
     m_viewportHovered = ui.viewportHovered;
 
