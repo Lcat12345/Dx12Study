@@ -79,6 +79,13 @@ namespace
             {
                 PostMessageW(hWnd, WM_CLOSE, 0, 0);
             }
+            else if (wParam == 'V')
+            {
+                // Toggling vsync is how we measure: with it on the frame rate
+                // is pinned to the refresh rate and tells us nothing about
+                // how much work the CPU and GPU actually do per frame.
+                Renderer::SetVSync(!Renderer::IsVSync());
+            }
             return 0;
 
         case WM_DESTROY:
@@ -164,11 +171,15 @@ namespace
         {
             // %ls, not %s: in the wide printf family %s means a NARROW
             // string under ISO rules.
-            wchar_t title[128];
+            const wchar_t* sync = Renderer::IsVSync()
+                                      ? L"vsync"
+                                      : (Renderer::IsTearingSupported() ? L"uncapped"
+                                                                        : L"uncapped(no tearing)");
+            wchar_t title[160];
             std::swprintf(title, _countof(title),
-                          L"%ls   %d fps   %.2f ms   %ux%u",
+                          L"%ls   %d fps   %.2f ms   %ux%u   [%ls]  V=toggle",
                           kWindowTitle, frames, 1000.0f * accumulated / float(frames),
-                          g_clientWidth, g_clientHeight);
+                          g_clientWidth, g_clientHeight, sync);
             SetWindowTextW(g_hWnd, title);
             accumulated = 0.0f;
             frames      = 0;

@@ -25,4 +25,10 @@ namespace Renderer
     void Resize(UINT width, UINT height);
 
     void Render(const Scene& scene, const Camera& camera, float totalSeconds);
+
+    // Vsync off only actually uncaps the frame rate when the display path
+    // supports tearing; IsTearingSupported reports whether it does.
+    void SetVSync(bool enabled);
+    bool IsVSync();
+    bool IsTearingSupported();
 }

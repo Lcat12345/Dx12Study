@@ -63,6 +63,31 @@ namespace
     constexpr UINT kObjectCBSize = Align(sizeof(ObjectConstants), 256);
     constexpr UINT kPassCBSize   = Align(sizeof(PassConstants), 256);
 
+    // How many frames the CPU may run ahead of the GPU.
+    //
+    // Everything the CPU writes per frame - the command allocator's memory
+    // and the constant buffers - is still being READ by the GPU until that
+    // frame finishes. With one copy the CPU has no choice but to wait for
+    // the GPU every frame. With one copy PER FRAME IN FLIGHT the CPU can
+    // start frame N+1 while the GPU is still drawing frame N, and only has
+    // to wait when it laps back around to a set the GPU has not released.
+    //
+    // 2 is the usual choice: 3 raises throughput slightly but adds a frame
+    // of input latency.
+    constexpr UINT kFramesInFlight = 2;
+
+    struct FrameResource
+    {
+        ComPtr<ID3D12CommandAllocator> commandAllocator;
+        ComPtr<ID3D12Resource>         objectCB;
+        uint8_t*                       objectCBMapped = nullptr;
+        ComPtr<ID3D12Resource>         passCB;
+        uint8_t*                       passCBMapped   = nullptr;
+        // Fence value signalled when the GPU finishes the frame that used
+        // this set. 0 means "never submitted yet".
+        UINT64                         fenceValue     = 0;
+    };
+
     // ---------------------------------------------------------------- state
     // File-static, so nothing outside this file can touch it.
 
@@ -75,19 +100,19 @@ namespace
     ComPtr<ID3D12Resource>            g_renderTargets[kFrameCount];
     ComPtr<ID3D12DescriptorHeap>      g_rtvHeap;
     UINT                              g_rtvDescriptorSize = 0;
-    ComPtr<ID3D12CommandAllocator>    g_commandAllocator;
     ComPtr<ID3D12GraphicsCommandList> g_commandList;
+
+    // The per-frame sets, used round-robin. g_currentFrame indexes these and
+    // is NOT the same thing as g_frameIndex (which back buffer to draw into):
+    // one is our own ring, the other is chosen by the swap chain.
+    FrameResource g_frames[kFramesInFlight];
+    UINT          g_currentFrame = 0;
 
     ComPtr<ID3D12RootSignature> g_rootSignature;
     ComPtr<ID3D12PipelineState> g_pipelineState;
 
     ComPtr<ID3D12Resource>       g_depthStencilBuffer;
     ComPtr<ID3D12DescriptorHeap> g_dsvHeap;
-
-    ComPtr<ID3D12Resource> g_objectCB;
-    uint8_t*               g_objectCBMapped = nullptr;
-    ComPtr<ID3D12Resource> g_passCB;
-    uint8_t*               g_passCBMapped = nullptr;
 
     ComPtr<ID3D12DescriptorHeap> g_srvHeap;
     ComPtr<ID3D12Resource>       g_texture;
@@ -97,6 +122,15 @@ namespace
     HANDLE              g_fenceEvent = nullptr;
 
     UINT g_frameIndex = 0;
+
+    // Under the flip model, SyncInterval 0 by itself does NOT uncap the
+    // frame rate: the desktop compositor still paces presents to vblank.
+    // Tearing has to be opted into in three places - the swap chain flag,
+    // the sync interval, and a per-Present flag. Miss one and nothing
+    // changes, which is exactly what happens if you only pass Present(0, 0).
+    bool g_tearingSupported = false;
+    bool g_vsync            = true;
+    UINT g_swapChainFlags   = 0;
 
     D3D12_VIEWPORT g_viewport    = {};
     D3D12_RECT     g_scissorRect = {};
@@ -137,8 +171,12 @@ namespace
         return bytecode;
     }
 
-    // Block until the GPU has finished ALL submitted work. Simple but
-    // wasteful - Phase 9 (frame resources) overlaps CPU and GPU properly.
+    // Blocks until the GPU has finished ALL submitted work.
+    //
+    // Since 9.1 this is NOT part of the per-frame path. It is reserved for
+    // the three moments where nothing may be in flight: uploading during
+    // init, resizing (the swap chain cannot free buffers still in use), and
+    // shutdown (never destroy something the GPU is reading).
     void WaitForGpu()
     {
         const UINT64 valueToWait = ++g_fenceValue;
@@ -177,6 +215,21 @@ namespace
         ComPtr<IDXGIFactory6> factory;
         ThrowIfFailed(CreateDXGIFactory2(flags, IID_PPV_ARGS(&factory)),
                       "CreateDXGIFactory2");
+
+        // Tearing must be QUERIED, not assumed - older drivers, remote
+        // desktop sessions and some virtualized GPUs report no support.
+        BOOL allowTearing = FALSE;
+        if (SUCCEEDED(factory->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING,
+                                                   &allowTearing, sizeof(allowTearing))))
+        {
+            g_tearingSupported = (allowTearing == TRUE);
+        }
+        if (g_tearingSupported)
+        {
+            // The swap chain must carry this from creation, and every later
+            // ResizeBuffers must pass the identical flags.
+            g_swapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
+        }
         return factory;
     }
 
@@ -216,14 +269,20 @@ namespace
                                                    IID_PPV_ARGS(&g_commandQueue)),
                       "CreateCommandQueue");
 
-        ThrowIfFailed(g_device->CreateCommandAllocator(
-                          D3D12_COMMAND_LIST_TYPE_DIRECT,
-                          IID_PPV_ARGS(&g_commandAllocator)),
-                      "CreateCommandAllocator");
+        // One allocator per frame in flight. The LIST is shared - it holds no
+        // memory of its own, it just records into whichever allocator it was
+        // Reset with. Only the allocator's memory is the contended resource.
+        for (FrameResource& frame : g_frames)
+        {
+            ThrowIfFailed(g_device->CreateCommandAllocator(
+                              D3D12_COMMAND_LIST_TYPE_DIRECT,
+                              IID_PPV_ARGS(&frame.commandAllocator)),
+                          "CreateCommandAllocator");
+        }
 
         ThrowIfFailed(g_device->CreateCommandList(
                           0, D3D12_COMMAND_LIST_TYPE_DIRECT,
-                          g_commandAllocator.Get(), nullptr,
+                          g_frames[0].commandAllocator.Get(), nullptr,
                           IID_PPV_ARGS(&g_commandList)),
                       "CreateCommandList");
 
@@ -244,6 +303,7 @@ namespace
         desc.BufferUsage      = DXGI_USAGE_RENDER_TARGET_OUTPUT;
         desc.SwapEffect       = DXGI_SWAP_EFFECT_FLIP_DISCARD; // modern flip model
         desc.SampleDesc.Count = 1;                             // no MSAA
+        desc.Flags            = g_swapChainFlags;
 
         ComPtr<IDXGISwapChain1> swapChain1;
         ThrowIfFailed(factory->CreateSwapChainForHwnd(
@@ -358,21 +418,29 @@ namespace
     // [9] Two constant buffers, one per update frequency.
     void CreateConstantBuffers()
     {
-        g_objectCB = CreateUploadBuffer(g_device.Get(), nullptr,
-                                        UINT64(kObjectCBSize) * kMaxObjects,
-                                        "CreateCommittedResource(ObjectCB)");
-        // Map once and keep the pointer: Map/Unmap every frame would be
-        // pure overhead for an upload-heap resource.
+        // Both buffers are duplicated PER FRAME. Forgetting the pass CB here
+        // is an easy mistake: it is written once per frame rather than once
+        // per object, but the GPU is reading it for just as long.
         D3D12_RANGE readRange = {};
-        ThrowIfFailed(g_objectCB->Map(0, &readRange,
-                                      reinterpret_cast<void**>(&g_objectCBMapped)),
-                      "ObjectCB Map");
+        for (FrameResource& frame : g_frames)
+        {
+            frame.objectCB = CreateUploadBuffer(g_device.Get(), nullptr,
+                                                UINT64(kObjectCBSize) * kMaxObjects,
+                                                "CreateCommittedResource(ObjectCB)");
+            // Map once and keep the pointer: Map/Unmap every frame would be
+            // pure overhead for an upload-heap resource.
+            ThrowIfFailed(frame.objectCB->Map(
+                              0, &readRange,
+                              reinterpret_cast<void**>(&frame.objectCBMapped)),
+                          "ObjectCB Map");
 
-        g_passCB = CreateUploadBuffer(g_device.Get(), nullptr, kPassCBSize,
-                                      "CreateCommittedResource(PassCB)");
-        ThrowIfFailed(g_passCB->Map(0, &readRange,
-                                    reinterpret_cast<void**>(&g_passCBMapped)),
-                      "PassCB Map");
+            frame.passCB = CreateUploadBuffer(g_device.Get(), nullptr, kPassCBSize,
+                                              "CreateCommittedResource(PassCB)");
+            ThrowIfFailed(frame.passCB->Map(
+                              0, &readRange,
+                              reinterpret_cast<void**>(&frame.passCBMapped)),
+                          "PassCB Map");
+        }
     }
 
     // [10] Texture. A GPU-local (default heap) resource cannot be written by
@@ -430,8 +498,10 @@ namespace
         }
         uploadBuffer->Unmap(0, nullptr);
 
-        ThrowIfFailed(g_commandAllocator->Reset(), "Allocator Reset (texture)");
-        ThrowIfFailed(g_commandList->Reset(g_commandAllocator.Get(), nullptr),
+        // Init-time work, before any frame has been submitted - frame 0's
+        // allocator is free to borrow.
+        ThrowIfFailed(g_frames[0].commandAllocator->Reset(), "Allocator Reset (texture)");
+        ThrowIfFailed(g_commandList->Reset(g_frames[0].commandAllocator.Get(), nullptr),
                       "CommandList Reset (texture)");
 
         D3D12_TEXTURE_COPY_LOCATION dst = {};
@@ -597,7 +667,8 @@ namespace
     // ---------------------------------------------------------------- per frame
 
     // Written ONCE per frame: camera and lights are shared by every object.
-    void UpdatePassConstants(const Camera& camera, float totalSeconds)
+    void UpdatePassConstants(FrameResource& frame, const Camera& camera,
+                             float totalSeconds)
     {
         const XMVECTOR eye     = XMLoadFloat3(&camera.position);
         const XMVECTOR forward = CameraForward(camera);
@@ -635,11 +706,12 @@ namespace
         constants.pointLightRange = 30.0f;
         constants.pointLightColor = { 1.0f, 0.55f, 0.2f }; // warm orange
 
-        memcpy(g_passCBMapped, &constants, sizeof(constants));
+        memcpy(frame.passCBMapped, &constants, sizeof(constants));
     }
 
     // Written once per OBJECT: its transform and material.
-    void UpdateObjectConstants(const Scene& scene, float totalSeconds)
+    void UpdateObjectConstants(FrameResource& frame, const Scene& scene,
+                               float totalSeconds)
     {
         for (size_t i = 0; i < scene.objects.size() && i < kMaxObjects; ++i)
         {
@@ -672,7 +744,7 @@ namespace
             constants.specularColor = obj.material.specularColor;
             constants.shininess     = obj.material.shininess;
 
-            memcpy(g_objectCBMapped + i * kObjectCBSize, &constants, sizeof(constants));
+            memcpy(frame.objectCBMapped + i * kObjectCBSize, &constants, sizeof(constants));
         }
     }
 }
@@ -719,6 +791,10 @@ namespace Renderer
         return g_device.Get();
     }
 
+    void SetVSync(bool enabled)  { g_vsync = enabled; }
+    bool IsVSync()               { return g_vsync; }
+    bool IsTearingSupported()    { return g_tearingSupported; }
+
     // The only safe order:
     //   1. wait for the GPU  2. release every reference to the old buffers
     //   3. ResizeBuffers     4. recreate views and the depth buffer
@@ -742,8 +818,10 @@ namespace Renderer
         g_clientWidth  = width;
         g_clientHeight = height;
 
+        // Same flags as at creation - mismatching them fails the call.
         ThrowIfFailed(g_swapChain->ResizeBuffers(kFrameCount, g_clientWidth,
-                                                 g_clientHeight, kBackBufferFormat, 0),
+                                                 g_clientHeight, kBackBufferFormat,
+                                                 g_swapChainFlags),
                       "ResizeBuffers");
 
         g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
@@ -752,13 +830,27 @@ namespace Renderer
 
     void Render(const Scene& scene, const Camera& camera, float totalSeconds)
     {
-        UpdatePassConstants(camera, totalSeconds);
-        UpdateObjectConstants(scene, totalSeconds);
+        FrameResource& frame = g_frames[g_currentFrame];
 
-        // Reset = reuse last frame's command memory. Safe only because
-        // WaitForGpu() below guarantees the GPU is done with it.
-        ThrowIfFailed(g_commandAllocator->Reset(), "Allocator Reset");
-        ThrowIfFailed(g_commandList->Reset(g_commandAllocator.Get(), nullptr),
+        // THE change in 9.1. Previously every frame ended with a full flush,
+        // so the CPU could never be more than one command list ahead of the
+        // GPU. Now we wait only until the GPU is done with THIS set of
+        // resources - which, with kFramesInFlight sets, is usually already
+        // true and costs nothing. The CPU keeps going while the GPU draws.
+        if (frame.fenceValue != 0 && g_fence->GetCompletedValue() < frame.fenceValue)
+        {
+            ThrowIfFailed(g_fence->SetEventOnCompletion(frame.fenceValue, g_fenceEvent),
+                          "SetEventOnCompletion(frame)");
+            WaitForSingleObject(g_fenceEvent, INFINITE);
+        }
+
+        // Only now is it safe to overwrite this frame's constant buffers and
+        // recycle its command memory.
+        UpdatePassConstants(frame, camera, totalSeconds);
+        UpdateObjectConstants(frame, scene, totalSeconds);
+
+        ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
+        ThrowIfFailed(g_commandList->Reset(frame.commandAllocator.Get(), nullptr),
                       "CommandList Reset");
 
         ID3D12Resource* backBuffer = g_renderTargets[g_frameIndex].Get();
@@ -796,14 +888,14 @@ namespace Renderer
         // Bound ONCE for the whole frame - the payoff of splitting the
         // constant buffers by update frequency.
         g_commandList->SetGraphicsRootConstantBufferView(
-            1, g_passCB->GetGPUVirtualAddress());
+            1, frame.passCB->GetGPUVirtualAddress());
 
         g_commandList->RSSetViewports(1, &g_viewport);
         g_commandList->RSSetScissorRects(1, &g_scissorRect);
         g_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
         const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase =
-            g_objectCB->GetGPUVirtualAddress();
+            frame.objectCB->GetGPUVirtualAddress();
 
         for (size_t i = 0; i < scene.objects.size() && i < kMaxObjects; ++i)
         {
@@ -833,8 +925,21 @@ namespace Renderer
 
         // Show the back buffer (1 = wait for vsync), then flush and move to
         // the buffer that just left the screen.
-        ThrowIfFailed(g_swapChain->Present(1, 0), "Present");
-        WaitForGpu();
-        g_frameIndex = g_swapChain->GetCurrentBackBufferIndex();
+        // All three have to agree for an uncapped present: the swap chain
+        // flag (set at creation), SyncInterval 0, and this per-Present flag.
+        const UINT syncInterval = g_vsync ? 1u : 0u;
+        const UINT presentFlags = (!g_vsync && g_tearingSupported)
+                                      ? DXGI_PRESENT_ALLOW_TEARING : 0u;
+        ThrowIfFailed(g_swapChain->Present(syncInterval, presentFlags), "Present");
+
+        // Mark when this frame's work will be done, but do NOT wait for it.
+        // The next Render() call that lands back on this FrameResource is
+        // what checks this value.
+        frame.fenceValue = ++g_fenceValue;
+        ThrowIfFailed(g_commandQueue->Signal(g_fence.Get(), frame.fenceValue),
+                      "Queue Signal(frame)");
+
+        g_currentFrame = (g_currentFrame + 1) % kFramesInFlight;
+        g_frameIndex   = g_swapChain->GetCurrentBackBufferIndex();
     }
 }
