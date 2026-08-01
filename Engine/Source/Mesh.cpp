@@ -18,11 +18,11 @@ namespace
 
 Mesh CreateMesh(ID3D12Device* device,
                 const Vertex* vertices, UINT vertexCount,
-                const uint16_t* indices, UINT indexCount)
+                const uint32_t* indices, UINT indexCount)
 {
     Mesh mesh;
     const UINT vertexBytes = vertexCount * sizeof(Vertex);
-    const UINT indexBytes  = indexCount * sizeof(uint16_t);
+    const UINT indexBytes  = indexCount * sizeof(uint32_t);
 
     mesh.vertexBuffer = CreateUploadBuffer(device, vertices, vertexBytes, "Mesh VB");
     mesh.vbv.BufferLocation = mesh.vertexBuffer->GetGPUVirtualAddress();
@@ -32,10 +32,17 @@ Mesh CreateMesh(ID3D12Device* device,
     mesh.indexBuffer = CreateUploadBuffer(device, indices, indexBytes, "Mesh IB");
     mesh.ibv.BufferLocation = mesh.indexBuffer->GetGPUVirtualAddress();
     mesh.ibv.SizeInBytes    = indexBytes;
-    mesh.ibv.Format         = DXGI_FORMAT_R16_UINT;
+    mesh.ibv.Format         = DXGI_FORMAT_R32_UINT;
 
     mesh.indexCount = indexCount;
     return mesh;
+}
+
+Mesh CreateMesh(ID3D12Device* device, const MeshData& data)
+{
+    return CreateMesh(device,
+                      data.vertices.data(), UINT(data.vertices.size()),
+                      data.indices.data(), UINT(data.indices.size()));
 }
 
 Mesh CreateCubeMesh(ID3D12Device* device)
@@ -64,14 +71,14 @@ Mesh CreateCubeMesh(ID3D12Device* device)
     };
 
     // Every face is the same two triangles over its own 4 vertices.
-    std::vector<uint16_t> indices;
+    std::vector<uint32_t> indices;
     indices.reserve(36);
-    for (uint16_t face = 0; face < 6; ++face)
+    for (uint32_t face = 0; face < 6; ++face)
     {
-        const uint16_t base = face * 4;
+        const uint32_t base = face * 4;
         indices.insert(indices.end(),
-                       { uint16_t(base + 0), uint16_t(base + 1), uint16_t(base + 2),
-                         uint16_t(base + 0), uint16_t(base + 2), uint16_t(base + 3) });
+                       { uint32_t(base + 0), uint32_t(base + 1), uint32_t(base + 2),
+                         uint32_t(base + 0), uint32_t(base + 2), uint32_t(base + 3) });
     }
 
     return CreateMesh(device, vertices, UINT(std::size(vertices)),
@@ -114,7 +121,7 @@ Mesh CreatePyramidMesh(ID3D12Device* device)
         { { +1, -1, +1 }, kDown,  { 1, 1 } }, { { -1, -1, +1 }, kDown, { 0, 1 } },
     };
 
-    const uint16_t indices[] = {
+    const uint32_t indices[] = {
         0, 1, 2,   3, 4, 5,   6, 7, 8,   9, 10, 11, // sides
         12, 13, 14,  12, 14, 15,                    // base
     };
@@ -131,7 +138,7 @@ Mesh CreateFloorMesh(ID3D12Device* device, float halfExtent, float uvTiling)
         { { +halfExtent, 0, -halfExtent }, kUp, { uvTiling, uvTiling } },
         { { -halfExtent, 0, -halfExtent }, kUp, { 0,        uvTiling } },
     };
-    const uint16_t indices[] = { 0, 1, 2, 0, 2, 3 };
+    const uint32_t indices[] = { 0, 1, 2, 0, 2, 3 };
 
     return CreateMesh(device, vertices, UINT(std::size(vertices)),
                       indices, UINT(std::size(indices)));

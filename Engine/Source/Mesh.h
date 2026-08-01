@@ -5,6 +5,7 @@
 #include <DirectXMath.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <vector>
 
 // The input layout in Renderer.cpp must match this struct exactly.
 struct Vertex
@@ -23,9 +24,20 @@ struct Mesh
     UINT                                   indexCount = 0;
 };
 
+// Geometry still on the CPU: what a loader produces before upload.
+struct MeshData
+{
+    std::vector<Vertex>   vertices;
+    std::vector<uint32_t> indices;
+};
+
+// Indices are 32-bit. 16-bit halves the index memory but caps a mesh at
+// 65535 vertices, which loaded models pass easily.
 Mesh CreateMesh(ID3D12Device* device,
                 const Vertex* vertices, UINT vertexCount,
-                const uint16_t* indices, UINT indexCount);
+                const uint32_t* indices, UINT indexCount);
+
+Mesh CreateMesh(ID3D12Device* device, const MeshData& data);
 
 // 24 vertices, not 8: a corner is shared by three faces but each face needs
 // its own uv and its own flat normal there, and a vertex carries only one

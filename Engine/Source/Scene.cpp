@@ -1,5 +1,8 @@
 #include "Scene.h"
 
+#include "Common.h"
+#include "ObjLoader.h"
+
 #include <cmath>
 
 using namespace DirectX;
@@ -9,13 +12,29 @@ void BuildScene(ID3D12Device* device, Scene& outScene)
     outScene.meshes.clear();
     outScene.objects.clear();
 
-    // Mesh slots, referenced by index from here on.
+    // Mesh slots, referenced by index from here on. The first three are
+    // built from hardcoded vertices; the last two come off disk.
+    //
+    // These two .obj files are authored in our units already. A model from
+    // anywhere else usually is not - CAD and scan exports routinely arrive
+    // tens of thousands of units across and far from the origin, which puts
+    // them past the 200-unit far plane so they never appear. Run those
+    // through FitMeshToSize first:
+    //
+    //     MeshData m = LoadObj(GetAssetDir() / L"YourModel.obj");
+    //     FitMeshToSize(m, 8.0f);
+    //     outScene.meshes.push_back(CreateMesh(device, m));
     outScene.meshes.push_back(CreateFloorMesh(device, 40.0f, 20.0f));
     outScene.meshes.push_back(CreateCubeMesh(device));
     outScene.meshes.push_back(CreatePyramidMesh(device));
+    outScene.meshes.push_back(CreateMesh(device, LoadObj(GetAssetDir() / L"Sphere.obj")));
+    outScene.meshes.push_back(CreateMesh(device, LoadObj(GetAssetDir() / L"Torus.obj")));
+
     constexpr size_t kFloor   = 0;
     constexpr size_t kCube    = 1;
     constexpr size_t kPyramid = 2;
+    constexpr size_t kSphere  = 3;
+    constexpr size_t kTorus   = 4;
 
     // Floor: rough and wide, barely any highlight.
     SceneObject floor;
@@ -81,4 +100,31 @@ void BuildScene(ID3D12Device* device, Scene& outScene)
     squashed.position = { 6.0f, 0.9f, -13.0f };
     squashed.scale    = { 4.0f, 0.8f, 4.0f };
     outScene.objects.push_back(squashed);
+
+    // --- loaded models ---
+    // Normals come from the file, so the same Blinn-Phong shader that
+    // flat-shades the cube produces a continuous gradient here.
+    // scale is 1: FitMeshToSize already normalized the geometry itself,
+    // so the object transform does not need to compensate.
+    SceneObject sphere;
+    sphere.meshIndex              = kSphere;
+    sphere.position               = { -7.0f, 3.0f, -4.0f }; // resting on the floor
+    sphere.scale                  = { 3.0f, 3.0f, 3.0f };
+    sphere.spinSpeed              = 0.4f; // the texture makes the spin visible
+    sphere.material.specularColor = { 0.7f, 0.7f, 0.7f };
+    sphere.material.shininess     = 96.0f; // tight, glossy highlight
+    outScene.objects.push_back(sphere);
+
+    // The torus model stands upright (its ring lies in the XY plane), so
+    // spinning it around Y actually shows - a flat-lying torus would be
+    // rotationally symmetric about that axis and look frozen.
+    SceneObject torus;
+    torus.meshIndex              = kTorus;
+    torus.position               = { 7.0f, 3.0f, -4.0f };
+    torus.scale                  = { 2.6f, 2.6f, 2.6f };
+    torus.spinSpeed              = 0.6f;
+    torus.material.diffuseAlbedo = { 0.9f, 0.95f, 1.0f, 1.0f };
+    torus.material.specularColor = { 0.5f, 0.5f, 0.5f };
+    torus.material.shininess     = 32.0f;
+    outScene.objects.push_back(torus);
 }
