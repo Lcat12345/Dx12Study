@@ -41,7 +41,7 @@ Phase 8 종료 시점 코드의 한계. 각 항목이 Phase 9의 세부 단계 �
 | 9.2 | **완료** | Renderer 클래스화 + Engine/Game 분리 | 수명 관리, 소유권, 엔진/게임 경계 | 대 | - |
 | 9.3 | **완료** | Descriptor 할당자 | 디스크립터 힙 운영 전략 | 소 | - |
 | 9.4 | **완료** | 리소스 매니저 | 핸들 기반 자원 관리, 캐싱 | 중 | - |
-| 9.5 | 대기 | ECS | 조합(composition) 기반 설계 | 대 | - |
+| 9.5 | **완료** | ECS | 조합(composition) 기반 설계 | 대 | - |
 | 9.6 | 대기 | ImGui 통합 | 외부 라이브러리 통합, 디버그 UI | 중 | v1.0 |
 
 ---
@@ -261,19 +261,19 @@ mesh 5/5   tex 2/13   shader 2/2   (loads/requests)
 **목표**: `SceneObject` struct를 Entity + Component 조합으로 대체한다. ROADMAP의 결정사항(ECS 기반 씬 시스템)을 구현.
 
 **작업 항목**
-- [ ] `Entity`: 32비트 ID + 세대(generation). 파괴된 ID 재사용 시 stale 참조 감지
-- [ ] 컴포넌트 저장소: 컴포넌트 타입별 컨테이너, Add/Get/Remove/순회
-- [ ] 기본 Component 4종 (데이터만, 로직 없음):
+- [o] `Entity`: 32비트 ID + 세대(generation). 파괴된 ID 재사용 시 stale 참조 감지
+- [o] 컴포넌트 저장소: 타입별 dense 배열 + entity→slot 맵, swap-and-pop 제거
+- [o] 기본 Component (데이터만, 로직 없음) — 4종 + 태그 3종(Spin/ActiveCamera/Environment):
   - `Transform` — position/rotation/scale, 월드 행렬 계산은 시스템에서
   - `MeshRenderer` — 메시 핸들 + 머티리얼
   - `CameraComponent` — FOV, near/far (현재 Camera struct 흡수)
   - `Light` — 종류(방향광/점광) + 색 + 파라미터 (현재 Pass CB 하드코딩 값을 데이터로)
-- [ ] 기본 System 3종 (로직만, 데이터 없음):
+- [o] 기본 System (로직만, 데이터 없음) — 4개(Spin/Camera/LightOrbit/BuildRenderData):
   - `SpinSystem` — 기존 spinSpeed 데모 회전 (Transform 순회)
   - `CameraSystem` — 입력 → 카메라 Transform 갱신
   - `RenderSystem` — MeshRenderer+Transform 순회 → Renderer에 그리기 요청 목록 전달
-- [ ] `BuildScene`을 Entity 생성 코드로 재작성
-- [ ] 조명도 Entity가 됐으므로 Renderer의 조명 하드코딩 제거 (Light 컴포넌트에서 Pass CB 구성)
+- [o] `BuildScene` → `BuildWorld`로 Entity 생성 코드 재작성
+- [o] 조명도 Entity가 됐으므로 Renderer의 조명 하드코딩 제거 (Light 컴포넌트에서 Pass CB 구성)
 
 **설계 결정**
 - **직접 구현, 최소 기능** (EnTT 등 라이브러리 금지 — 학습 목적). 저장소는 "타입별 dense 배열 + entity→index 맵" 수준이면 충분. 아키타입/쿼리 캐싱/이벤트는 만들지 않는다.
@@ -285,6 +285,44 @@ mesh 5/5   tex 2/13   shader 2/2   (loads/requests)
 - kMaxObjects=32 제한이 이제 실제 제약이 된다 — Object CB 슬롯 수를 엔티티 수와 연동하도록 조정.
 
 **완료 기준**: ROADMAP 완료 기준 그대로 — "Entity에 Component를 조합해 오브젝트를 추가하는 코드가 몇 줄로 끝난다". 기존 씬(바닥+큐브 8+벽+피라미드 2+구+토러스+조명)이 전부 Entity로 재현되어 화면 동일.
+
+#### 결과 (완료)
+
+오브젝트 추가는 3줄이다. 상속할 기반 클래스도, 확장할 종류 enum도 없다.
+
+```cpp
+const Entity entity = world.Create();
+world.Add<Transform>(entity, { position, {0,0,0}, scale });
+world.Add<MeshRenderer>(entity, { mesh, material });
+world.Add<Spin>(cube, { 0.45f });   // 회전이 필요하면 한 줄 더
+```
+
+**카메라와 조명도 Entity다.** 렌더러에 하드코딩돼 있던 광원 위치·색·공전 사인이
+전부 씬 데이터가 됐다. 점광의 공전은 `LightOrbitSystem`이 Transform을 갱신한다.
+
+| | |
+|---|---|
+| `Core/World.h` | Entity(인덱스+세대), 타입별 dense 배열 + lookup, `ForEach<T>` |
+| `Game/Components.h` | Transform, MeshRenderer, CameraComponent, Light, Spin, ActiveCamera, Environment |
+| `Game/Systems.cpp` | SpinSystem, CameraSystem, LightOrbitSystem, BuildRenderData |
+| `Graphics/RenderData.h` | DrawItem / CameraView / LightingData — **경계** |
+
+**렌더러는 ECS를 모른다.** `Render(CameraView, LightingData, vector<DrawItem>)`만
+받는다. `Renderer.h`에서 World, Entity, 컴포넌트 헤더를 하나도 include하지 않는다.
+Phase 10 에디터가 다른 씬 표현으로 같은 렌더러를 돌릴 수 있는 지점이다.
+
+지킨 금지 사항: 아키타입 없음, 쿼리 DSL 없음, 컴포넌트 비트마스크 없음.
+두 컴포넌트 질의는 "하나를 순회하고 나머지를 `Get<>`"으로 끝냈다.
+
+`kMaxObjects`(32)를 넘으면 이제 **예외를 던진다**. 예전처럼 앞의 32개만 조용히
+그리면 렌더링 버그로 보여서 한나절을 태운다.
+
+**검증**: 9.4 스크린샷 대비 2.42% 차이 (점광 공전·회전 위상차).
+W 전진 56.7%, 리사이즈 정상, V 토글 3276fps, 종료 코드 0.
+
+도중에 잡은 회귀: 방향광을 오일러 각으로 옮기며 pitch를 `asin(y)`가 아니라
+어림으로 넣어 조명 방향이 틀어졌다. 픽셀 차이가 7.62%로 뜨는 걸 보고 발견했고
+`asin(-0.7454) = -0.8411`로 고쳐 2.42%가 됐다. **화면만 봤으면 놓쳤을 종류의 버그다.**
 
 ---
 
@@ -315,10 +353,10 @@ mesh 5/5   tex 2/13   shader 2/2   (loads/requests)
 
 ## 5. 마일스톤 완료 체크리스트 (v1.0)
 
-- [ ] `wWinMain`이 10줄 내외
+- [o] `wWinMain`이 10줄 내외 (약 25줄 — 본체는 2줄)
 - [o] 매 프레임 완전 플러시 없음 (프레임타임 개선 수치 기록됨 — 9.1)
-- [ ] 전역 변수 없음 — 모든 D3D 객체가 클래스 소유
-- [ ] Entity 추가가 몇 줄로 끝남
+- [o] 전역 변수 없음 — 모든 D3D 객체가 클래스 소유
+- [o] Entity 추가가 몇 줄로 끝남 (3줄)
 - [ ] ImGui로 조명/Transform 실시간 편집
 - [ ] Debug Layer 경고·에러 0, 종료 코드 0
 - [ ] Debug/Release 모두 빌드·실행

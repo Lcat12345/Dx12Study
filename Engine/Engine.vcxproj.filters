@@ -27,7 +27,7 @@
     <ClCompile Include="Source\Core\Window.cpp">
       <Filter>Core</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Game\Camera.cpp">
+    <ClCompile Include="Source\Game\BuildWorld.cpp">
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Source\Game\DemoGame.cpp">
@@ -36,7 +36,7 @@
     <ClCompile Include="Source\Game\Main.cpp">
       <Filter>Game</Filter>
     </ClCompile>
-    <ClCompile Include="Source\Game\Scene.cpp">
+    <ClCompile Include="Source\Game\Systems.cpp">
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp">
@@ -77,13 +77,19 @@
     <ClInclude Include="Source\Core\Window.h">
       <Filter>Core</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Game\Camera.h">
+    <ClInclude Include="Source\Core\World.h">
+      <Filter>Core</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Game\BuildWorld.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Game\Components.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Source\Game\DemoGame.h">
       <Filter>Game</Filter>
     </ClInclude>
-    <ClInclude Include="Source\Game\Scene.h">
+    <ClInclude Include="Source\Game\Systems.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\DescriptorAllocator.h">
@@ -99,6 +105,9 @@
       <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\Mesh.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\RenderData.h">
       <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\Renderer.h">

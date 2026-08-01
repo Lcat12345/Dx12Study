@@ -1,4 +1,4 @@
-// Renderer.h : draws a Scene. Everything D3D12 lives behind this.
+// Renderer.h : draws a list of DrawItems. Everything D3D12 lives behind this.
 #pragma once
 
 #include "Graphics/GraphicsDevice.h"
@@ -6,12 +6,12 @@
 #include "Graphics/FrameResource.h"
 #include "Graphics/DescriptorAllocator.h"
 #include "Graphics/ResourceManager.h"
+#include "Graphics/RenderData.h"
+
+#include <vector>
 
 #include <d3d12.h>
 #include <wrl/client.h>
-
-struct Scene;
-struct Camera;
 
 class Renderer
 {
@@ -22,18 +22,21 @@ public:
     Renderer(const Renderer&)            = delete;
     Renderer& operator=(const Renderer&) = delete;
 
-    // Meshes and textures are created against this device (see BuildScene).
+    // Meshes and textures are created against this device (see BuildWorld).
     ID3D12Device* Device() const { return m_device.Device(); }
 
     // The shader-visible heap other systems draw slots from. ImGui takes one
     // for its font atlas in 9.6; it is deliberately larger than we need.
     DescriptorAllocator& ShaderVisibleDescriptors() { return m_srvAllocator; }
 
-    // Assets are loaded and cached here (see BuildScene).
+    // Assets are loaded and cached here (see BuildWorld).
     ResourceManager& Resources() { return m_resources; }
 
     void Resize(UINT width, UINT height);
-    void Render(const Scene& scene, const Camera& camera, float totalSeconds);
+    // Takes flattened data, not a scene graph - the renderer has no idea
+    // entities exist. See RenderData.h.
+    void Render(const CameraView& camera, const LightingData& lighting,
+                const std::vector<DrawItem>& items);
 
     // Vsync off only actually uncaps the frame rate when the display path
     // supports tearing.
@@ -48,10 +51,10 @@ private:
     void CreateRootSignature();
     void CreatePipelineState();
 
-    void UpdatePassConstants(FrameResource& frame, const Camera& camera,
-                             float totalSeconds);
-    void UpdateObjectConstants(FrameResource& frame, const Scene& scene,
-                               float totalSeconds);
+    void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
+                             const LightingData& lighting);
+    void UpdateObjectConstants(FrameResource& frame,
+                               const std::vector<DrawItem>& items);
 
     // Declaration order IS destruction order, reversed: the device is first
     // so everything created from it dies before it does.

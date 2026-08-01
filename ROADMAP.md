@@ -201,9 +201,9 @@ Dx12Engine/                  # 저장소 루트
 - [o] Frame Resource 패턴 — 프레임 인플라이트 개수만큼 커맨드 할당자·CB 링버퍼링 (Fence 동기화 최소화) *(9.1 완료: 0.20ms → 0.18ms)*
 - [o] Descriptor 할당자 (힙에서 슬롯을 나눠주는 간단한 매니저) *(9.3: 범프+프리리스트, 핸들 산술 캡슐화)*
 - [o] 리소스 매니저 (텍스처/메시/셰이더 캐싱, 중복 로드 방지) *(9.4: 텍스처 요청 13회 → 로드 2회)*
-- [ ] Entity / Component / System 기반의 간단한 ECS 구조 — Entity 생성·삭제, Component 추가·조회
-- [ ] 기본 Component 정의: Transform, MeshRenderer, Camera, Light
-- [ ] 기본 System 구현 (Component를 순회하며 렌더링/카메라 갱신 등을 처리)
+- [o] Entity / Component / System 기반의 간단한 ECS 구조 — Entity 생성·삭제, Component 추가·조회 *(9.5)*
+- [o] 기본 Component 정의: Transform, MeshRenderer, Camera, Light *(+ Spin/ActiveCamera/Environment)*
+- [o] 기본 System 구현 (Component를 순회하며 렌더링/카메라 갱신 등을 처리) *(렌더러는 ECS를 모름)*
 - [ ] ImGui 통합 — 디버그 UI로 오브젝트 위치, 조명 값 실시간 조정
 
 **핵심 개념**: 프레임 파이프라이닝(CPU가 N프레임 준비하는 동안 GPU가 N-1 렌더), 소유권과 수명 관리(ComPtr), 엔진/게임 경계 설계, Entity=ID·Component=데이터·System=로직으로 나누는 조합(compose) 기반 설계가 상속 기반 구조보다 유리한 이유

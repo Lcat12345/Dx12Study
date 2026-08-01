@@ -2,8 +2,6 @@
 
 #include "Core/Common.h"
 #include "Graphics/Mesh.h"
-#include "Game/Scene.h"
-#include "Game/Camera.h"
 
 #include <DirectXMath.h>
 #include <stdexcept>
@@ -282,60 +280,60 @@ void Renderer::Resize(UINT width, UINT height)
 }
 
 // Written ONCE per frame: camera and lights are shared by every object.
-void Renderer::UpdatePassConstants(FrameResource& frame, const Camera& camera,
-                                   float totalSeconds)
+// Every value here now arrives from the caller - the light positions and
+// colours used to be hardcoded in this function.
+void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camera,
+                                   const LightingData& lighting)
 {
     const XMVECTOR eye     = XMLoadFloat3(&camera.position);
-    const XMVECTOR forward = CameraForward(camera);
-    const XMVECTOR up      = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    const XMVECTOR forward = XMVector3Normalize(XMLoadFloat3(&camera.forward));
+    const XMVECTOR up      = XMLoadFloat3(&camera.up);
 
     // LookTo (not LookAt): we have a direction, not a target point. The view
     // matrix is the INVERSE of the camera's world transform - moving the
     // camera right shifts the whole world left.
     const XMMATRIX view = XMMatrixLookToLH(eye, forward, up);
 
-    // Aspect ratio comes from the CURRENT client size, so resizing keeps the
-    // image correctly proportioned.
+    // The aspect ratio is deliberately NOT part of CameraView: it belongs to
+    // the swap chain, so resizing stays correct without the game's help.
     const XMMATRIX proj = XMMatrixPerspectiveFovLH(
-        XM_PIDIV4,
+        camera.fovY,
         float(m_swapChain.Width()) / float(m_swapChain.Height()),
-        0.1f, 200.0f);
+        camera.nearZ, camera.farZ);
 
     PassConstants constants;
     XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
     constants.eyePosW = camera.position;
 
-    // Ambient: a cheap stand-in for global bounced light.
-    constants.ambientLight = { 0.18f, 0.19f, 0.22f };
-
-    // Directional light: only a DIRECTION, no position - it models a source
-    // so far away (the sun) that all its rays are parallel.
-    XMVECTOR dir = XMVector3Normalize(XMVectorSet(0.6f, -0.75f, 0.3f, 0.0f));
-    XMStoreFloat3(&constants.dirLightDirection, dir);
-    constants.dirLightColor = { 0.85f, 0.82f, 0.75f };
-
-    // Point light: orbits the scene so the falloff is easy to see.
-    constants.pointLightPos   = { 14.0f * std::cos(totalSeconds * 0.7f),
-                                  4.0f,
-                                  14.0f * std::sin(totalSeconds * 0.7f) };
-    constants.pointLightRange = 30.0f;
-    constants.pointLightColor = { 1.0f, 0.55f, 0.2f }; // warm orange
+    constants.ambientLight     = lighting.ambient;
+    constants.dirLightDirection = lighting.directionalDirection;
+    constants.dirLightColor     = lighting.directionalColor;
+    constants.pointLightPos     = lighting.pointPosition;
+    constants.pointLightRange   = lighting.pointRange;
+    constants.pointLightColor   = lighting.pointColor;
 
     memcpy(frame.passCBMapped, &constants, sizeof(constants));
 }
 
 // Written once per OBJECT: its transform and material.
-void Renderer::UpdateObjectConstants(FrameResource& frame, const Scene& scene,
-                                     float totalSeconds)
+// The world matrix arrives already built - composing it from a Transform is
+// the render system's job, on the other side of the boundary.
+void Renderer::UpdateObjectConstants(FrameResource& frame,
+                                     const std::vector<DrawItem>& items)
 {
-    for (size_t i = 0; i < scene.objects.size() && i < kMaxObjects; ++i)
+    if (items.size() > kMaxObjects)
     {
-        const SceneObject& obj = scene.objects[i];
+        // Silently drawing only the first 32 would look like a rendering bug
+        // and cost an afternoon. Say exactly what to change instead.
+        throw std::runtime_error(
+            "More draw items than the object constant buffer holds - "
+            "raise kMaxObjects in FrameResource.h");
+    }
 
-        const XMMATRIX world =
-            XMMatrixScaling(obj.scale.x, obj.scale.y, obj.scale.z) *
-            XMMatrixRotationY(obj.spinSpeed * totalSeconds) *
-            XMMatrixTranslation(obj.position.x, obj.position.y, obj.position.z);
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const DrawItem& item  = items[i];
+        const XMMATRIX  world = XMLoadFloat4x4(&item.world);
 
         // Normals need the INVERSE TRANSPOSE, not the world matrix.
         // Squashing a surface tilts it one way, but squashing its normal the
@@ -354,15 +352,16 @@ void Renderer::UpdateObjectConstants(FrameResource& frame, const Scene& scene,
         XMStoreFloat4x4(&constants.world, XMMatrixTranspose(world));
         XMStoreFloat4x4(&constants.worldInvTranspose,
                         XMMatrixTranspose(worldInvTranspose));
-        constants.diffuseAlbedo = obj.material.diffuseAlbedo;
-        constants.specularColor = obj.material.specularColor;
-        constants.shininess     = obj.material.shininess;
+        constants.diffuseAlbedo = item.material.diffuseAlbedo;
+        constants.specularColor = item.material.specularColor;
+        constants.shininess     = item.material.shininess;
 
         memcpy(frame.objectCBMapped + i * kObjectCBSize, &constants, sizeof(constants));
     }
 }
 
-void Renderer::Render(const Scene& scene, const Camera& camera, float totalSeconds)
+void Renderer::Render(const CameraView& camera, const LightingData& lighting,
+                      const std::vector<DrawItem>& items)
 {
     FrameResource& frame = m_frames[m_currentFrame];
 
@@ -373,8 +372,8 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
 
     // Only now is it safe to overwrite this frame's constant buffers and
     // recycle its command memory.
-    UpdatePassConstants(frame, camera, totalSeconds);
-    UpdateObjectConstants(frame, scene, totalSeconds);
+    UpdatePassConstants(frame, camera, lighting);
+    UpdateObjectConstants(frame, items);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
     ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr),
@@ -420,10 +419,10 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
 
     const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
 
-    for (size_t i = 0; i < scene.objects.size() && i < kMaxObjects; ++i)
+    for (size_t i = 0; i < items.size(); ++i)
     {
-        const SceneObject& object = scene.objects[i];
-        const Mesh&        mesh   = m_resources.GetMesh(object.mesh);
+        const DrawItem& item = items[i];
+        const Mesh&     mesh = m_resources.GetMesh(item.mesh);
 
         // Point the root CBV at this object's slot - no descriptor heap
         // juggling, just an address.
@@ -433,7 +432,7 @@ void Renderer::Render(const Scene& scene, const Camera& camera, float totalSecon
         // Each material names its own texture; the handle resolves to a
         // slot in the heap bound above.
         m_commandList->SetGraphicsRootDescriptorTable(
-            2, m_resources.TextureSRV(object.material.texture).gpu);
+            2, m_resources.TextureSRV(item.material.texture).gpu);
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);

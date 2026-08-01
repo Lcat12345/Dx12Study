@@ -2,11 +2,13 @@
 #pragma once
 
 #include "Core/Engine.h"
-#include "Game/Scene.h"
-#include "Game/Camera.h"
+#include "Core/World.h"
+#include "Graphics/RenderData.h"
+
+#include <vector>
 
 // Everything specific to this demo lives here; Engine and Renderer stay
-// unaware of Scene and Camera.
+// unaware of entities.
 class DemoGame : public Engine
 {
 public:
@@ -18,6 +20,11 @@ protected:
     void OnRender() override;
 
 private:
-    Scene  m_scene;
-    Camera m_camera;
+    World m_world;
+
+    // Rebuilt every frame by the render system. Kept as a member so the
+    // vector's storage is reused instead of reallocated 5000 times a second.
+    std::vector<DrawItem> m_drawItems;
+    CameraView            m_camera;
+    LightingData          m_lighting;
 };
