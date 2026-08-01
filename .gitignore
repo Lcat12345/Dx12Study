@@ -21,6 +21,10 @@ mono_crash.*
 # Dx12Engine: all build output (exe + intermediates) goes here, see Engine.vcxproj
 Output/
 
+# ImGui saves its panel layout next to the exe (so inside Output/). This is a
+# safety net in case it is ever launched with a different working directory.
+imgui.ini
+
 [Dd]ebug/
 [Dd]ebugPublic/
 [Rr]elease/

@@ -42,6 +42,11 @@ public:
     // Returns a slot for reuse. Safe to call with an invalid handle.
     void Free(const DescriptorHandle& handle);
 
+    // Recovers the slot a CPU handle belongs to. Needed because third-party
+    // code (ImGui's descriptor callbacks) hands back raw handles rather than
+    // the DescriptorHandle we gave it.
+    void FreeByCpuHandle(D3D12_CPU_DESCRIPTOR_HANDLE cpu);
+
     // Only shader-visible heaps get bound with SetDescriptorHeaps.
     ID3D12DescriptorHeap* Heap() const { return m_heap.Get(); }
 

@@ -16,6 +16,9 @@
     <Filter Include="Shaders">
       <UniqueIdentifier>{B672E808-F862-45A0-AFBC-D24F2139EBC4}</UniqueIdentifier>
     </Filter>
+    <Filter Include="ThirdParty">
+      <UniqueIdentifier>{5BE3BF77-B65F-4BB2-B206-4829634536AA}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Source\Core\Common.cpp">
@@ -28,6 +31,9 @@
       <Filter>Core</Filter>
     </ClCompile>
     <ClCompile Include="Source\Game\BuildWorld.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Game\DebugUI.cpp">
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Source\Game\DemoGame.cpp">
@@ -48,6 +54,9 @@
     <ClCompile Include="Source\Graphics\Image.cpp">
       <Filter>Graphics</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Graphics\ImGuiLayer.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Graphics\Mesh.cpp">
       <Filter>Graphics</Filter>
     </ClCompile>
@@ -62,6 +71,24 @@
     </ClCompile>
     <ClCompile Include="Source\Loaders\ObjLoader.cpp">
       <Filter>Loaders</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ThirdParty\imgui\imgui.cpp">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ThirdParty\imgui\imgui_draw.cpp">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ThirdParty\imgui\imgui_tables.cpp">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ThirdParty\imgui\imgui_widgets.cpp">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ThirdParty\imgui\backends\imgui_impl_win32.cpp">
+      <Filter>ThirdParty</Filter>
+    </ClCompile>
+    <ClCompile Include="..\ThirdParty\imgui\backends\imgui_impl_dx12.cpp">
+      <Filter>ThirdParty</Filter>
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
@@ -86,6 +113,9 @@
     <ClInclude Include="Source\Game\Components.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Game\DebugUI.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Game\DemoGame.h">
       <Filter>Game</Filter>
     </ClInclude>
@@ -102,6 +132,9 @@
       <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\Image.h">
+      <Filter>Graphics</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\ImGuiLayer.h">
       <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\Mesh.h">

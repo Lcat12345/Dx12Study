@@ -37,6 +37,7 @@ void BuildWorld(ResourceManager& resources, World& world)
     const MeshHandle pyramidMesh = resources.AddMesh(L"#pyramid", MakePyramidMeshData());
     const MeshHandle sphereMesh  = resources.LoadMesh(L"Sphere.obj");
     const MeshHandle torusMesh   = resources.LoadMesh(L"Torus.obj");
+	const MeshHandle laevatMesh  = resources.LoadMesh( L"Laevat.obj", 8.0f );
 
     // --- floor: rough and wide, barely any highlight ---
     Material floorMaterial;
@@ -116,6 +117,15 @@ void BuildWorld(ResourceManager& resources, World& world)
     const Entity torus = SpawnMesh(world, torusMesh, torusMaterial,
                                    { 7.0f, 3.0f, -4.0f }, { 2.6f, 2.6f, 2.6f });
     world.Add<Spin>(torus, { 0.6f });
+
+	Material laevatMaterial;
+	laevatMaterial.texture = resources.LoadTexture( L"Crate.png" );
+	laevatMaterial.diffuseAlbedo = { 0.9f, 0.95f, 1.0f, 1.0f };
+	laevatMaterial.specularColor = { 0.5f, 0.5f, 0.5f };
+	laevatMaterial.shininess = 32.0f;
+	const Entity laevat = SpawnMesh( world, laevatMesh, laevatMaterial,
+		{ 0.0f, 3.0f, -4.0f }, { 2.6f, 2.6f, 2.6f } );
+
 
     // --- the camera is an entity too ---
     const Entity camera = world.Create();

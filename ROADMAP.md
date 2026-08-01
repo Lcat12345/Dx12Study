@@ -204,7 +204,7 @@ Dx12Engine/                  # 저장소 루트
 - [o] Entity / Component / System 기반의 간단한 ECS 구조 — Entity 생성·삭제, Component 추가·조회 *(9.5)*
 - [o] 기본 Component 정의: Transform, MeshRenderer, Camera, Light *(+ Spin/ActiveCamera/Environment)*
 - [o] 기본 System 구현 (Component를 순회하며 렌더링/카메라 갱신 등을 처리) *(렌더러는 ECS를 모름)*
-- [ ] ImGui 통합 — 디버그 UI로 오브젝트 위치, 조명 값 실시간 조정
+- [o] ImGui 통합 — 디버그 UI로 오브젝트 위치, 조명 값 실시간 조정 *(9.6: docking, ThirdParty에 벤더링)*
 
 **핵심 개념**: 프레임 파이프라이닝(CPU가 N프레임 준비하는 동안 GPU가 N-1 렌더), 소유권과 수명 관리(ComPtr), 엔진/게임 경계 설계, Entity=ID·Component=데이터·System=로직으로 나누는 조합(compose) 기반 설계가 상속 기반 구조보다 유리한 이유
 

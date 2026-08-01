@@ -1,7 +1,10 @@
 #include "Game/DemoGame.h"
 
 #include "Game/BuildWorld.h"
+#include "Game/DebugUI.h"
 #include "Game/Systems.h"
+
+#include "Graphics/ImGuiLayer.h"
 
 namespace
 {
@@ -23,19 +26,35 @@ void DemoGame::OnInit()
 
 void DemoGame::OnUpdate(float dt)
 {
+    ImGuiLayer* overlay = GetRenderer().Overlay();
+
+    // Without this check, dragging a slider would also spin the camera.
+    const bool uiHasMouse    = overlay && overlay->WantsMouse();
+    const bool uiHasKeyboard = overlay && overlay->WantsKeyboard();
+
     float mouseDeltaX = 0.0f;
     float mouseDeltaY = 0.0f;
     GetWindow().ConsumeMouseDelta(mouseDeltaX, mouseDeltaY);
+    if (uiHasMouse)
+    {
+        mouseDeltaX = 0.0f;
+        mouseDeltaY = 0.0f;
+    }
 
     // Systems, in order. Each one reads and writes components; none of them
     // owns state of its own.
-    CameraSystem(m_world, mouseDeltaX, mouseDeltaY, dt);
+    CameraSystem(m_world, mouseDeltaX, mouseDeltaY, uiHasKeyboard ? 0.0f : dt);
     SpinSystem(m_world, dt);
     LightOrbitSystem(m_world, TotalSeconds());
 
-    // Toggling vsync is how we measure: with it on, the frame rate is pinned
-    // to the refresh rate and says nothing about how much work a frame does.
-    if (GetWindow().ConsumeKeyPress('V'))
+    // The panels read and WRITE components directly - editing a Transform in
+    // the inspector is the same operation a system performs.
+    bool vsyncToggled = false;
+    DrawDebugUI(m_world, dt, CurrentFps(),
+                GetRenderer().IsVSync(), GetRenderer().IsTearingSupported(),
+                vsyncToggled);
+
+    if (vsyncToggled || GetWindow().ConsumeKeyPress('V'))
     {
         GetRenderer().SetVSync(!GetRenderer().IsVSync());
     }

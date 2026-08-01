@@ -42,7 +42,7 @@ Phase 8 종료 시점 코드의 한계. 각 항목이 Phase 9의 세부 단계 �
 | 9.3 | **완료** | Descriptor 할당자 | 디스크립터 힙 운영 전략 | 소 | - |
 | 9.4 | **완료** | 리소스 매니저 | 핸들 기반 자원 관리, 캐싱 | 중 | - |
 | 9.5 | **완료** | ECS | 조합(composition) 기반 설계 | 대 | - |
-| 9.6 | 대기 | ImGui 통합 | 외부 라이브러리 통합, 디버그 UI | 중 | v1.0 |
+| 9.6 | **완료** | ImGui 통합 | 외부 라이브러리 통합, 디버그 UI | 중 | v1.0 |
 
 ---
 
@@ -359,12 +359,12 @@ OBJ는 오른손 좌표계라 로더가 Z를 음수화하는데, **Z 음수화�
 **목표**: 디버그 UI로 씬을 실시간 조작한다. v1.0 마일스톤 마감.
 
 **작업 항목**
-- [ ] ImGui 소스를 `ThirdParty/imgui/`에 벤더링 (서브모듈 대신 소스 복사 — 빌드 단순)
-- [ ] `imgui_impl_win32` + `imgui_impl_dx12` 백엔드 연결
-- [ ] WndProc에 ImGui 핸들러 체인 (입력을 ImGui가 먼저 소비 — 마우스 캡처 충돌 처리)
-- [ ] 셰이더 가시 힙에서 ImGui 폰트용 슬롯 할당 (9.3의 할당자 사용)
-- [ ] 디버그 패널: 엔티티 목록 → 선택 → Transform/머티리얼/조명 값 편집 (9.5의 ECS 순회가 UI 코드가 됨)
-- [ ] FPS/프레임타임 그래프 (타이틀바 표시를 UI로 이전)
+- [o] ImGui 소스를 `ThirdParty/imgui/`에 벤더링 — docking 브랜치, **커밋 고정**(VENDORED_COMMIT.txt), 15개 파일 3.6MB
+- [o] `imgui_impl_win32` + `imgui_impl_dx12` 백엔드 연결
+- [o] WndProc에 메시지 훅 (Window는 ImGui를 모른 채 "훅"만 안다). `WantCaptureMouse`로 카메라 회전 차단
+- [o] 9.3 할당자를 백엔드의 `SrvDescriptorAllocFn` 콜백에 그대로 연결
+- [o] 디버그 패널: 엔티티 목록 → 선택 → Transform/Material/Light/Spin 편집 (9.5의 ECS 순회가 그대로 UI 코드가 됨)
+- [o] FPS/프레임타임 그래프 + VSync 체크박스
 
 **설계 결정**
 - **docking 브랜치 권장**: Phase 10 맵 에디터가 도킹·다중 뷰포트를 쓰게 되므로 처음부터 docking으로. (기본 브랜치로 시작했다가 갈아타는 비용이 더 크다)
@@ -377,6 +377,43 @@ OBJ는 오른손 좌표계라 로더가 Z를 음수화하는데, **Z 음수화�
 
 **완료 기준**: ROADMAP 완료 기준 — "ImGui로 씬을 실시간 조작". 조명 색을 슬라이더로 바꾸면 즉시 반영, 엔티티 위치 편집 가능. **여기서 `v1.0` 태그.**
 
+#### 결과 (완료)
+
+**9.3 할당자가 그대로 맞아떨어졌다.** 최신 DX12 백엔드는 힙을 직접 만들지 않고
+`SrvDescriptorAllocFn` 콜백으로 슬롯을 요청한다. 우리 `DescriptorAllocator`를
+`UserData`로 넘기니 특별 처리 없이 연결됐다. 9.3에서 "ImGui가 슬롯을 받아갈 수
+있는 구조인지 확인"해 둔 항목이 실제로 값을 했다.
+
+경계는 둘로 나눴다:
+
+| 파일 | 아는 것 | 모르는 것 |
+|---|---|---|
+| `Graphics/ImGuiLayer` | 백엔드 초기화, 프레임 브래킷, 메시지 핸들러 | World, Entity |
+| `Game/DebugUI` | World 순회, 컴포넌트별 편집 UI | D3D12 |
+
+- `Window`는 ImGui를 모른다. `MessageHook`(std::function)만 노출하고
+  Engine이 거기에 ImGui 핸들러를 꽂는다. 훅이 소비해도 `WM_SIZE`/`WM_DESTROY`는
+  통과시킨다 — 안 그러면 리사이즈와 종료가 먹통이 된다
+- `WantCaptureMouse`로 카메라 회전을 차단한다. 없으면 슬라이더를 드래그할 때
+  화면도 같이 돈다
+- Inspector는 **컴포넌트 타입별 블록**이다. 엔티티가 가진 것만 표시된다
+  (점광에는 Material 섹션이 안 뜬다). 컴포넌트를 추가하면 여기 블록 하나를
+  더하면 되고, 중앙 switch 같은 건 없다
+- `NumFramesInFlight`를 `kFramesInFlight`와 맞췄다. 백엔드도 프레임마다
+  정점/인덱스 버퍼를 따로 갖는다 — 우리 FrameResource와 같은 이유다
+
+**검증**(실제 마우스 입력 자동화):
+엔티티 18개 목록 표시 → `Point #17` 클릭 → Inspector에 Transform(공전 중인
+실시간 좌표)·Light(Type/Color/Range)·Spin 표시 → Range 슬라이더 드래그로
+`30.0 → 0.1` → 주황 점광이 씬에서 사라짐(바닥 픽셀 10.8% 변화). 종료 코드 0.
+
+**벤더링 방식**: 서브모듈이 아니라 소스 복사. 브랜치가 아니라 **커밋 고정**
+(`ThirdParty/imgui/VENDORED_COMMIT.txt`)이라 나중에 어느 버전이었는지 추적된다.
+
+도중에 잡은 것: ImGui는 `imgui.ini`를 **작업 디렉터리**에 쓴다. 디버거로
+실행하면 그게 저장소 루트라 커밋 대상으로 잡혔다. `io.IniFilename`을 exe 옆으로
+고정하고 `.gitignore`에도 안전장치를 넣었다.
+
 ---
 
 ## 5. 마일스톤 완료 체크리스트 (v1.0)
@@ -385,10 +422,10 @@ OBJ는 오른손 좌표계라 로더가 Z를 음수화하는데, **Z 음수화�
 - [o] 매 프레임 완전 플러시 없음 (프레임타임 개선 수치 기록됨 — 9.1)
 - [o] 전역 변수 없음 — 모든 D3D 객체가 클래스 소유
 - [o] Entity 추가가 몇 줄로 끝남 (3줄)
-- [ ] ImGui로 조명/Transform 실시간 편집
-- [ ] Debug Layer 경고·에러 0, 종료 코드 0
-- [ ] Debug/Release 모두 빌드·실행
-- [ ] docs/에 배운 것 정리 (프레임 파이프라이닝 타임라인 그림 권장)
+- [o] ImGui로 조명/Transform 실시간 편집
+- [o] Debug Layer 경고·에러 0, 종료 코드 0
+- [o] Debug/Release 모두 빌드·실행
+- [ ] docs/에 배운 것 정리 (프레임 파이프라이닝 타임라인 그림 권장) — 학습 노트는 사용자 몫
 
 ## 6. Phase 10과의 연결
 

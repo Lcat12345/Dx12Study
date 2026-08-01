@@ -37,6 +37,9 @@ protected:
     Renderer& GetRenderer() { return *m_renderer; }
     float     TotalSeconds() const { return m_timer.TotalSeconds(); }
 
+    // Whole-second average, so the UI and the title bar agree.
+    int       CurrentFps() const { return m_lastFps; }
+
 private:
     void UpdateTitleFps(float dt);
 
@@ -48,7 +51,8 @@ private:
     std::unique_ptr<Renderer> m_renderer;
     Timer  m_timer;
 
-    // Title-bar FPS is averaged over one second.
+    // FPS is averaged over one second.
     float m_fpsAccumulator = 0.0f;
     int   m_fpsFrames      = 0;
+    int   m_lastFps        = 0;
 };

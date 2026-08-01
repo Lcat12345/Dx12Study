@@ -64,3 +64,19 @@ void DescriptorAllocator::Free(const DescriptorHandle& handle)
         m_freeList.push_back(handle.index);
     }
 }
+
+void DescriptorAllocator::FreeByCpuHandle(D3D12_CPU_DESCRIPTOR_HANDLE cpu)
+{
+    if (cpu.ptr < m_cpuStart.ptr || m_descriptorSize == 0)
+    {
+        return;
+    }
+    const SIZE_T offset = cpu.ptr - m_cpuStart.ptr;
+    if (offset % m_descriptorSize != 0)
+    {
+        return; // not a handle this heap ever produced
+    }
+    DescriptorHandle handle;
+    handle.index = UINT(offset / m_descriptorSize);
+    Free(handle);
+}

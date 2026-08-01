@@ -39,8 +39,18 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
 
 Renderer::~Renderer()
 {
-    // Never destroy anything the GPU might still be reading.
+    // Never destroy anything the GPU might still be reading. The overlay
+    // holds GPU buffers too, so this has to happen before it unwinds.
     m_device.WaitForGpu();
+}
+
+void Renderer::InitializeOverlay(HWND hwnd)
+{
+    // NumFramesInFlight must match ours: the backend keeps one vertex and
+    // index buffer per frame for exactly the reason our FrameResources do.
+    m_overlay = std::make_unique<ImGuiLayer>(hwnd, m_device, m_srvAllocator,
+                                             SwapChain::kFormat, kDepthFormat,
+                                             int(kFramesInFlight));
 }
 
 // Allocator = command memory, list = recorder, queue = where lists go.
@@ -437,6 +447,14 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
         m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+    }
+
+    // The overlay draws last, into the same command list and the same render
+    // target, so it lands on top of the scene. It must come before the
+    // transition to PRESENT below.
+    if (m_overlay)
+    {
+        m_overlay->Render(m_commandList.Get());
     }
 
     D3D12_RESOURCE_BARRIER toPresent = TransitionBarrier(

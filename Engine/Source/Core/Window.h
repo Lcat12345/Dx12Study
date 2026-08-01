@@ -3,11 +3,19 @@
 
 #include <Windows.h>
 
+#include <functional>
+
 // Owns one window and the input it observes. Knows nothing about D3D12 -
 // the renderer only ever receives a HWND and a size from here.
 class Window
 {
 public:
+    // Gets first look at every message; returning true means "consumed,
+    // stop". This is how ImGui sees input without Window having to know
+    // ImGui exists.
+    using MessageHook = std::function<bool(HWND, UINT, WPARAM, LPARAM)>;
+    void SetMessageHook(MessageHook hook) { m_messageHook = std::move(hook); }
+
     Window(HINSTANCE instance, const wchar_t* title, UINT width, UINT height);
     ~Window();
 
@@ -56,4 +64,6 @@ private:
     float m_mouseDeltaY = 0.0f;
 
     bool m_keyPressed[256] = {};
+
+    MessageHook m_messageHook;
 };

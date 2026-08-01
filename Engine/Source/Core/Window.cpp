@@ -88,6 +88,22 @@ LRESULT CALLBACK Window::WndProcThunk(HWND hwnd, UINT message,
 
 LRESULT Window::HandleMessage(UINT message, WPARAM wParam, LPARAM lParam)
 {
+    // The hook runs first so overlay UI can claim input before the game
+    // reacts to it. WM_SIZE and WM_DESTROY still have to reach us, so the
+    // hook is only allowed to swallow input messages.
+    if (m_messageHook && m_messageHook(m_hwnd, message, wParam, lParam))
+    {
+        switch (message)
+        {
+        case WM_SIZE:
+        case WM_DESTROY:
+        case WM_CLOSE:
+            break; // fall through to our own handling below
+        default:
+            return 0;
+        }
+    }
+
     switch (message)
     {
     case WM_SIZE:

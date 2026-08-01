@@ -7,6 +7,9 @@
 #include "Graphics/DescriptorAllocator.h"
 #include "Graphics/ResourceManager.h"
 #include "Graphics/RenderData.h"
+#include "Graphics/ImGuiLayer.h"
+
+#include <memory>
 
 #include <vector>
 
@@ -31,6 +34,11 @@ public:
 
     // Assets are loaded and cached here (see BuildWorld).
     ResourceManager& Resources() { return m_resources; }
+
+    // The debug overlay, created separately because it needs the window
+    // handle and must be torn down before the device.
+    void        InitializeOverlay(HWND hwnd);
+    ImGuiLayer* Overlay() { return m_overlay.get(); }
 
     void Resize(UINT width, UINT height);
     // Takes flattened data, not a scene graph - the renderer has no idea
@@ -64,7 +72,9 @@ private:
     // Depth needs exactly one slot. The shader-visible heap gets room to
     // spare so later systems can Allocate() without resizing anything.
     static constexpr UINT kDsvHeapCapacity = 1;
-    static constexpr UINT kSrvHeapCapacity = 16;
+    // ImGui's font atlas (and, from 1.92, its dynamic textures) draw from
+    // the same heap, so leave generous room.
+    static constexpr UINT kSrvHeapCapacity = 64;
 
     DescriptorAllocator m_dsvAllocator;
     DescriptorAllocator m_srvAllocator;
@@ -89,6 +99,9 @@ private:
 
     D3D12_VIEWPORT m_viewport    = {};
     D3D12_RECT     m_scissorRect = {};
+
+    // Declared last: it is torn down before the device and heaps it uses.
+    std::unique_ptr<ImGuiLayer> m_overlay;
 
     bool m_vsync = true;
 };
