@@ -15,6 +15,11 @@
 // A ray in world space. The direction is deliberately NOT normalized: it is
 // "near plane to far plane", and every use here is a ratio where its length
 // cancels out.
+//
+// That choice gives t a meaning worth relying on: for a ray from RayFromNdc,
+// **t = 0 is the near plane and t = 1 is the far plane**, so 0..1 is exactly
+// the depth range the renderer draws. Anything a hit test finds past t = 1
+// was clipped out of the picture and must not be treated as visible.
 struct Ray
 {
     DirectX::XMFLOAT3 origin    = { 0.0f, 0.0f, 0.0f };
@@ -63,5 +68,8 @@ bool RayAabb(const Ray& ray, const Aabb& bounds, float& outDistance);
 // Bounds only, not triangles: a box test picks a mesh from its silhouette
 // closely enough for an editor, and per-triangle precision costs a spatial
 // structure nobody needs yet.
+//
+// Only hits within the camera's depth range count - see Ray above. What the
+// far plane removed from the picture is not selectable.
 bool PickEntity(World& world, const ResourceManager& resources, const Ray& ray,
                 Entity& outEntity);

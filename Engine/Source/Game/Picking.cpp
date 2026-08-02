@@ -158,6 +158,21 @@ bool PickEntity(World& world, const ResourceManager& resources, const Ray& ray,
             return;
         }
 
+        // Clip to the same depth range the renderer draws.
+        //
+        // RayFromNdc builds its direction as (far point - near point), so
+        // t = 0 is the near plane and t = 1 is the FAR plane. RayToLocalSpace
+        // preserves t - transforming origin and direction by the same matrix
+        // maps O + t*D to O' + t*D' - so the scale survives into local space.
+        //
+        // Without this an entity past farZ is still hit by the ray even
+        // though the far plane clipped it out of the picture. Clicking empty
+        // background would select something invisible.
+        if (distance > 1.0f)
+        {
+            return;
+        }
+
         // Comparable across objects because RayToLocalSpace leaves the
         // direction unnormalized: t stays in world-ray units.
         if (distance < nearestDistance)
