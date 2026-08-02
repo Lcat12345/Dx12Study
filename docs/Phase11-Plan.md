@@ -507,6 +507,17 @@ DDS 로더는 추가하지 않는다. 이 단계의 학습 목표는 texture arr
   없는 하위 폴더, 빠진 확장자, 다른 대소문자. 파일 **이름만** 믿고 `.obj`
   옆에서 찾되 `.png`를 붙여보는 식으로 해결했다. 대소문자는 기존 경로 정규화
   정책이 흡수한다
+
+  **경로 복구와 디코더 지원은 서로 다른 문제다.** 지금 상태를 정확히 적으면:
+
+  | `map_Kd`가 쓴 것 | 결과 |
+  |---|---|
+  | `foo.jpg` (확장자 명시) | **된다** — 첫 후보가 그대로 맞고 WIC가 JPEG를 디코딩 |
+  | `foo` (확장자 생략) | PNG만 복구 후보라 **PNG일 때만** 된다 |
+  | `foo.tga` | 경로는 찾지만 **디코딩이 안 된다** — Windows 기본 WIC에 TGA 코덱이 없다 |
+
+  즉 확장자를 생략한 비-PNG는 *경로 복구* 문제이고, TGA는 그와 별개인
+  *코덱* 문제다. 전자는 후보 목록을 늘리면 되고, 후자는 디코더를 붙여야 한다
 - `BuildRenderData`가 submesh당 `DrawItem` 하나를 만든다. 텍스처는 submesh의
   것이 이기고, **색·스페큘러·광택은 항상 MeshRenderer의 것**이다 — 그쪽이
   Inspector가 편집하는 값이다
@@ -709,6 +720,15 @@ normal map이 픽셀 단위 표면 방향을 바꾸도록 한다.
 - [ ] 공유 정점에 기여도를 누적한 뒤 normal에 대해 Gram-Schmidt 직교화
 - [ ] bitangent 방향과 `cross(normal, tangent)`를 비교해 `w` 결정
 - [ ] UV 면적이 0에 가까운 삼각형의 fallback tangent 처리
+- [ ] **기하 면적이 0인 삼각형을 누적에서 제외** — UV determinant 검사만으로는
+      부족하다. 7314689의 `MakeSphereMeshData`는 극점에 **퇴화 삼각형 64개를
+      의도적으로 남긴다**(극 두 줄 × slices 32). 래스터라이저는 이들을 버리지만
+      tangent 누적 루프는 버리지 않으므로, `cross(e1, e2)`가 0인 삼각형이
+      극점 정점의 tangent/bitangent를 오염시키거나 정규화 단계에서 0으로
+      나누어 **NaN**을 만든다. 한 정점의 NaN은 그 정점을 쓰는 모든 삼각형으로
+      번진다. UV 검사와 **기하 검사 둘 다** 필요하다
+- [ ] 극점처럼 기여 삼각형이 전부 퇴화한 정점의 tangent를 어떻게 채울지 결정
+      (인접 링에서 복사 / normal로부터 임의의 직교축 생성)
 - [ ] OBJ normal 생성 이후 tangent 생성 순서 보장
 - [ ] cube, pyramid, floor를 포함한 절차 메시도 같은 후처리 사용
 - [ ] input layout과 HLSL `VSInput`을 새 stride에 맞게 변경
