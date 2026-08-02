@@ -69,14 +69,34 @@ Mesh CreateMesh(ID3D12Device* device,
     mesh.vertexCount = vertexCount;
     // Last chance: the caller's MeshData goes out of scope after this.
     mesh.bounds      = ComputeBounds(vertices, vertexCount);
+
+    // One submesh covering everything, unless a caller replaces it. Every
+    // mesh having at least one means the draw loop never asks "does this
+    // have submeshes?".
+    mesh.submeshes.push_back(Submesh{ 0, indexCount, TextureHandle{}, L"" });
     return mesh;
 }
 
 Mesh CreateMesh(ID3D12Device* device, const MeshData& data)
 {
-    return CreateMesh(device,
-                      data.vertices.data(), UINT(data.vertices.size()),
-                      data.indices.data(), UINT(data.indices.size()));
+    Mesh mesh = CreateMesh(device,
+                           data.vertices.data(), UINT(data.vertices.size()),
+                           data.indices.data(), UINT(data.indices.size()));
+
+    // Replace the synthesised single submesh when the loader found real
+    // material groups. Textures stay invalid here - only the ResourceManager
+    // can turn a path into a handle, and it does that right after.
+    if (!data.submeshes.empty())
+    {
+        mesh.submeshes.clear();
+        for (const SubmeshData& source : data.submeshes)
+        {
+            mesh.submeshes.push_back(
+                Submesh{ source.indexOffset, source.indexCount,
+                         TextureHandle{}, source.materialName });
+        }
+    }
+    return mesh;
 }
 
 MeshData MakeCubeMeshData()

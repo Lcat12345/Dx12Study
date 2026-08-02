@@ -1,6 +1,7 @@
 // ResourceManager.h : loads and caches meshes, textures and shaders.
 #pragma once
 
+#include "Graphics/Handles.h"
 #include "Graphics/Mesh.h"
 #include "Graphics/DescriptorAllocator.h"
 
@@ -13,37 +14,6 @@
 #include <vector>
 
 class GraphicsDevice;
-
-// Handles, not pointers. An index survives the storage vector reallocating,
-// and it costs 4 bytes in a Material instead of 8-plus-lifetime-questions.
-//
-// No generation counter yet: nothing is ever unloaded, so a handle cannot go
-// stale. When the Phase 10 editor starts freeing assets, add a generation
-// field here and bump it on release - that is what turns a dangling handle
-// into a detectable error instead of a silent wrong-mesh.
-struct MeshHandle
-{
-    static constexpr uint32_t kInvalid = uint32_t(-1);
-    uint32_t index = kInvalid;
-    bool IsValid() const { return index != kInvalid; }
-};
-
-struct TextureHandle
-{
-    static constexpr uint32_t kInvalid = uint32_t(-1);
-    uint32_t index = kInvalid;
-    bool IsValid() const { return index != kInvalid; }
-};
-
-// A separate type from TextureHandle on purpose. A cube SRV and a 2D SRV are
-// different view dimensions, and binding one where the shader declares the
-// other is a class of bug the compiler can catch here instead.
-struct CubeTextureHandle
-{
-    static constexpr uint32_t kInvalid = uint32_t(-1);
-    uint32_t index = kInvalid;
-    bool IsValid() const { return index != kInvalid; }
-};
 
 // Owns every loaded asset for the lifetime of the app. Loading the same path
 // twice returns the same handle and does no work the second time.

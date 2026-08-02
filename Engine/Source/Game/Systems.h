@@ -42,7 +42,12 @@ bool GetActiveCameraView(World& world, CameraView& outCamera);
 // --- the render boundary ---
 // Walks the world once and flattens it into what the renderer accepts.
 // Nothing below this line knows about entities.
+//
+// Needs the ResourceManager to read each mesh's submesh table: a model with
+// several materials becomes several DrawItems, and only the loaded mesh
+// knows where those ranges are.
 void BuildRenderData(World& world,
+                     const ResourceManager& resources,
                      std::vector<DrawItem>& outItems,
                      CameraView& outCamera,
                      LightingData& outLighting);

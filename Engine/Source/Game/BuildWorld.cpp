@@ -74,11 +74,15 @@ void BuildWorld(ResourceManager& resources, World& world)
     const MeshHandle pyramidMesh = resources.ResolveMesh(L"#pyramid");
     const MeshHandle sphereMesh  = resources.LoadMesh(L"Sphere.obj");
     const MeshHandle torusMesh   = resources.LoadMesh(L"Torus.obj");
-	// Spelled exactly as the file is on disk. Windows would open "Laevat.obj"
-	// just as happily, but the resource cache keys on the STRING - and the
-	// asset browser asks for "laevat.obj", so a mismatch would load 24 MB of
-	// geometry a second time into a second GPU buffer.
-	const MeshHandle laevatMesh  = resources.LoadMesh( L"laevat.obj", 8.0f );
+	// The model now ships as its whole download: the .obj, its .mtl, and the
+	// textures both reference, in one folder. A path under Assets/ rather
+	// than a bare filename, because the pieces only make sense together.
+	//
+	// Spelled exactly as it is on disk. Windows would open "Laevat" just as
+	// happily, but the resource cache keys on the STRING - and the asset
+	// browser asks for the on-disk spelling, so a mismatch would load 24 MB
+	// of geometry a second time into a second GPU buffer.
+	const MeshHandle laevatMesh  = resources.LoadMesh( L"laevat/laevat.obj", 8.0f );
 
     // --- floor: rough and wide, barely any highlight ---
     Material floorMaterial;

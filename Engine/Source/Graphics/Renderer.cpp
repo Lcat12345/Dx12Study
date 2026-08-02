@@ -467,7 +467,12 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
-        m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+        // StartIndexLocation is what splits one shared index buffer into
+        // per-material draws. indexCount 0 means "the whole mesh", which is
+        // what a caller that knows nothing about submeshes would pass.
+        m_commandList->DrawIndexedInstanced(
+            item.indexCount != 0 ? item.indexCount : mesh.indexCount,
+            1, item.indexOffset, 0, 0);
     }
 }
 

@@ -67,8 +67,13 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
 
     // Opening the directory is the only failure worth giving up on. A
     // missing Assets/ means an empty list, not a crash.
+    //
+    // RECURSIVE: a downloaded model arrives as a folder - the .obj, its .mtl
+    // and the textures they reference only make sense together - so assets
+    // are no longer all at the top level.
+    const std::filesystem::path root = GetAssetDir();
     std::error_code openError;
-    std::filesystem::directory_iterator directory(GetAssetDir(), openError);
+    std::filesystem::recursive_directory_iterator directory(root, openError);
     if (openError)
     {
         return;
@@ -81,6 +86,16 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
         // skipped as if it did not exist.
         std::error_code itemError;
 
+        // Skyboxes are six faces that mean nothing individually; they have
+        // their own list. Scenes are not assets at all.
+        const std::wstring relative =
+            std::filesystem::relative(item.path(), root, itemError).wstring();
+        if (itemError || relative.rfind(L"Skyboxes", 0) == 0 ||
+                         relative.rfind(L"Scenes", 0) == 0)
+        {
+            continue;
+        }
+
         if (!item.is_regular_file(itemError) || itemError)
         {
             continue;
@@ -91,7 +106,10 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
         }
 
         Entry entry;
-        entry.fileName = item.path().filename().wstring();
+        // The path RELATIVE TO Assets/, which is exactly the string the
+        // ResourceManager keys its cache on. A bare filename would collide
+        // the moment two folders each hold a "model.obj".
+        entry.fileName = relative;
         entry.label    = ToUtf8(entry.fileName);
         // file_size returns uintmax_t(-1) on failure, which would print as a
         // nonsense size. Zero reads as "unknown" instead.

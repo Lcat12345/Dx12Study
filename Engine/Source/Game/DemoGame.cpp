@@ -90,6 +90,6 @@ void DemoGame::OnRender()
 {
     // The one place the two halves meet: the world is flattened into plain
     // arrays, and the renderer takes it from there.
-    BuildRenderData(m_world, m_drawItems, m_camera, m_lighting);
+    BuildRenderData(m_world, GetRenderer().Resources(), m_drawItems, m_camera, m_lighting);
     GetRenderer().Render(m_camera, m_lighting, m_drawItems);
 }

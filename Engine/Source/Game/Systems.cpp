@@ -167,6 +167,7 @@ bool GetActiveCameraView(World& world, CameraView& outCamera)
 }
 
 void BuildRenderData(World& world,
+                     const ResourceManager& resources,
                      std::vector<DrawItem>& outItems,
                      CameraView& outCamera,
                      LightingData& outLighting)
@@ -179,11 +180,33 @@ void BuildRenderData(World& world,
         {
             return; // a mesh with no place to be is not an error, just nothing
         }
-        DrawItem item;
-        item.mesh     = renderer.mesh;
-        item.material = renderer.material;
-        XMStoreFloat4x4(&item.world, WorldMatrixOf(*transform));
-        outItems.push_back(item);
+
+        XMFLOAT4X4 world;
+        XMStoreFloat4x4(&world, WorldMatrixOf(*transform));
+
+        // ONE DRAW ITEM PER SUBMESH. A model that switches material partway
+        // through its faces needs a draw per run, because a texture is bound
+        // per draw. Every mesh has at least one submesh, so single-material
+        // geometry falls out of the same loop with no special case.
+        for (const Submesh& submesh : resources.GetMesh(renderer.mesh).submeshes)
+        {
+            DrawItem item;
+            item.mesh        = renderer.mesh;
+            item.indexOffset = submesh.indexOffset;
+            item.indexCount  = submesh.indexCount;
+            item.world       = world;
+            item.material    = renderer.material;
+
+            // The submesh's own texture wins when the .mtl named one;
+            // otherwise whatever the MeshRenderer carries applies. Colour,
+            // specular and shininess always come from the renderer - those
+            // are what the Inspector edits.
+            if (submesh.texture.IsValid())
+            {
+                item.material.texture = submesh.texture;
+            }
+            outItems.push_back(item);
+        }
     });
 
     // --- where to draw it from ---

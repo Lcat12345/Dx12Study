@@ -24,6 +24,11 @@ struct Material
 struct DrawItem
 {
     MeshHandle          mesh;
+    // Which slice of the mesh's index buffer this call draws. A mesh with
+    // several materials produces one DrawItem per range - the buffers are
+    // shared, only the draw is split.
+    UINT                indexOffset = 0;
+    UINT                indexCount  = 0;
     DirectX::XMFLOAT4X4 world;
     Material            material;
 };

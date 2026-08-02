@@ -120,8 +120,32 @@ MeshHandle ResourceManager::LoadMesh(const std::wstring& fileName, float fitToSi
         FitMeshToSize(data, fitToSize);
     }
 
+    Mesh mesh = CreateMesh(m_device.Device(), data);
+
+    // The loader hands over texture PATHS because it cannot make handles.
+    // Resolving them here is what connects a .mtl's material to a real SRV.
+    // A texture that fails to load leaves the submesh's handle invalid,
+    // which the renderer reads as "use the MeshRenderer's" - one broken
+    // texture must not cost the whole model.
+    for (size_t i = 0; i < mesh.submeshes.size() && i < data.submeshes.size(); ++i)
+    {
+        const std::wstring& texturePath = data.submeshes[i].diffuseTexture;
+        if (texturePath.empty())
+        {
+            continue;
+        }
+        try
+        {
+            mesh.submeshes[i].texture = LoadTexture(texturePath);
+        }
+        catch (const std::exception&)
+        {
+            // Left invalid on purpose.
+        }
+    }
+
     const MeshHandle handle{ uint32_t(m_meshes.size()) };
-    m_meshes.push_back(CreateMesh(m_device.Device(), data));
+    m_meshes.push_back(std::move(mesh));
     m_meshNames.push_back(key);
     m_meshCache.emplace(key, handle);
     ++m_stats.meshLoads;

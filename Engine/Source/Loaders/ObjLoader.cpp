@@ -1,5 +1,6 @@
 #include "Loaders/ObjLoader.h"
 
+#include "Core/Common.h"
 #include "Core/TextEncoding.h"
 
 #include <fstream>
@@ -135,6 +136,104 @@ namespace
     }
 }
 
+namespace
+{
+    // Turns a `map_Kd` value into a path this engine can actually load.
+    //
+    // Exporters write these optimistically. laevat.mtl says
+    //     map_Kd laevat_textures/T_actor_laevat_face_01_D
+    // and every part of that is wrong on disk: the subfolder does not exist,
+    // there is no extension, and the case differs. What IS true is the file
+    // name, so keep that and go looking beside the .obj.
+    //
+    // Returns the path RELATIVE TO Assets/, because that is what LoadTexture
+    // takes. Empty when nothing matches - the caller falls back to the
+    // MeshRenderer's own texture rather than failing the whole model.
+    std::wstring ResolveMtlTexture(const std::wstring& declared,
+                                   const std::filesystem::path& objPath)
+    {
+        if (declared.empty())
+        {
+            return {};
+        }
+
+        const std::filesystem::path modelDir = objPath.parent_path();
+        const std::filesystem::path stated(declared);
+        const std::wstring          bareName = stated.filename().wstring();
+
+        // Candidates in order of how much of the .mtl we are willing to
+        // believe: exactly what it said, then the same name with the
+        // extension it forgot.
+        const std::wstring candidates[] = {
+            bareName,
+            bareName + L".png",
+        };
+
+        for (const std::wstring& candidate : candidates)
+        {
+            std::error_code error;
+            const std::filesystem::path full = modelDir / candidate;
+            if (std::filesystem::is_regular_file(full, error) && !error)
+            {
+                const std::filesystem::path relative =
+                    std::filesystem::relative(full, GetAssetDir(), error);
+                return error ? std::wstring() : relative.wstring();
+            }
+        }
+        return {};
+    }
+
+    // material name -> texture path relative to Assets/.
+    //
+    // Only map_Kd is read. Ka/Kd/Ks/Ns are material CONSTANTS this engine
+    // takes from the MeshRenderer instead, and pulling them from the file
+    // would silently override what the editor shows.
+    std::unordered_map<std::wstring, std::wstring> LoadMtlTextures(
+        const std::filesystem::path& mtlPath, const std::filesystem::path& objPath)
+    {
+        std::unordered_map<std::wstring, std::wstring> textures;
+
+        std::ifstream file(mtlPath);
+        if (!file)
+        {
+            // A missing .mtl is not fatal. The submeshes still split the
+            // draw correctly; they just have no textures of their own.
+            return textures;
+        }
+
+        std::wstring current;
+        std::string  line;
+        while (std::getline(file, line))
+        {
+            std::istringstream stream(line);
+            std::string tag;
+            stream >> tag;
+
+            if (tag == "newmtl")
+            {
+                std::string name;
+                std::getline(stream >> std::ws, name);
+                while (!name.empty() && (name.back() == '\r' || name.back() == ' '))
+                {
+                    name.pop_back();
+                }
+                current = ToWide(name);
+            }
+            else if (tag == "map_Kd" && !current.empty())
+            {
+                std::string value;
+                std::getline(stream >> std::ws, value);
+                while (!value.empty() && (value.back() == '\r' || value.back() == ' '))
+                {
+                    value.pop_back();
+                }
+                textures[current] = ResolveMtlTexture(ToWide(value), objPath);
+            }
+        }
+        return textures;
+    }
+}
+
 MeshData LoadObj(const std::filesystem::path& path)
 {
     if (!std::filesystem::exists(path))
@@ -156,6 +255,32 @@ MeshData LoadObj(const std::filesystem::path& path)
     MeshData mesh;
     std::unordered_map<VertexRef, uint32_t, VertexRefHash> emitted;
     bool fileHasNormals = false;
+
+    // Material groups. `usemtl` closes the run in progress and opens a new
+    // one; the .mtl named by `mtllib` says what texture each name means.
+    std::unordered_map<std::wstring, std::wstring> materialTextures;
+    std::wstring currentMaterial;
+
+    // Closes the open run. Zero-length runs are dropped - an .obj may name a
+    // material and then emit no faces for it.
+    auto closeSubmesh = [&mesh, &currentMaterial, &materialTextures]() {
+        if (mesh.submeshes.empty())
+        {
+            return;
+        }
+        SubmeshData& open = mesh.submeshes.back();
+        open.indexCount = UINT(mesh.indices.size()) - open.indexOffset;
+        if (open.indexCount == 0)
+        {
+            mesh.submeshes.pop_back();
+            return;
+        }
+        auto it = materialTextures.find(open.materialName);
+        if (it != materialTextures.end())
+        {
+            open.diffuseTexture = it->second;
+        }
+    };
 
     std::string line;
     while (std::getline(file, line))
@@ -244,8 +369,52 @@ MeshData LoadObj(const std::filesystem::path& path)
                 mesh.indices.push_back(corners[i - 1]);
             }
         }
-        // Everything else (#, o, g, s, usemtl, mtllib) is ignored.
+        else if (tag == "mtllib")
+        {
+            std::string name;
+            std::getline(stream >> std::ws, name);
+            while (!name.empty() && (name.back() == '\r' || name.back() == ' '))
+            {
+                name.pop_back();
+            }
+            // Beside the .obj, not under Assets/ - a downloaded model keeps
+            // its pieces together.
+            materialTextures = LoadMtlTextures(path.parent_path() / ToWide(name), path);
+        }
+        else if (tag == "usemtl")
+        {
+            std::string name;
+            std::getline(stream >> std::ws, name);
+            while (!name.empty() && (name.back() == '\r' || name.back() == ' '))
+            {
+                name.pop_back();
+            }
+
+            // Faces before the FIRST usemtl belong to no named material.
+            // Without a run to hold them they would be silently dropped -
+            // geometry vanishing with no error is the worst kind of bug, so
+            // give them an unnamed run instead.
+            if (mesh.submeshes.empty() && !mesh.indices.empty())
+            {
+                SubmeshData unnamed;
+                unnamed.indexOffset = 0;
+                unnamed.indexCount  = UINT(mesh.indices.size());
+                mesh.submeshes.push_back(unnamed);
+            }
+            else
+            {
+                closeSubmesh();
+            }
+            currentMaterial = ToWide(name);
+
+            SubmeshData next;
+            next.indexOffset  = UINT(mesh.indices.size());
+            next.materialName = currentMaterial;
+            mesh.submeshes.push_back(next);
+        }
+        // Everything else (#, o, g, s) is ignored.
     }
+    closeSubmesh();
 
     if (mesh.vertices.empty() || mesh.indices.empty())
     {

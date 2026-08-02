@@ -1,10 +1,13 @@
 // Mesh.h : vertex format and GPU geometry buffers.
 #pragma once
 
+#include "Graphics/Handles.h"
+
 #include <d3d12.h>
 #include <DirectXMath.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 // The input layout in Renderer.cpp must match this struct exactly.
@@ -43,6 +46,25 @@ struct Aabb
     bool IsEmpty() const { return min.x > max.x || min.y > max.y || min.z > max.z; }
 };
 
+// One material's worth of a mesh: a contiguous run of the index buffer.
+//
+// An .obj switches material with `usemtl` partway through its faces, and a
+// real model does it several times - hair, cloth, skin. Drawing the whole
+// index buffer with one texture paints all of them with whichever one
+// happened to be assigned.
+//
+// The vertex and index buffers stay single and shared; only the draw call is
+// split, by StartIndexLocation.
+struct Submesh
+{
+    UINT          indexOffset = 0;
+    UINT          indexCount  = 0;
+    // From the .mtl. Invalid when the file named no texture, in which case
+    // whatever the MeshRenderer carries is used instead.
+    TextureHandle texture;
+    std::wstring  materialName; // as written in the .obj, for the inspector
+};
+
 struct Mesh
 {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
@@ -50,6 +72,9 @@ struct Mesh
     D3D12_VERTEX_BUFFER_VIEW               vbv = {};
     D3D12_INDEX_BUFFER_VIEW                ibv = {};
     UINT                                   indexCount = 0;
+    // ALWAYS at least one, covering the whole index buffer, so nothing has
+    // to special-case "single material".
+    std::vector<Submesh>                   submeshes;
     // Not needed to draw - kept so the asset browser can report what a file
     // actually contained after the loader deduplicated its vertices.
     UINT                                   vertexCount = 0;
@@ -62,11 +87,27 @@ struct Mesh
 // vertices, so IsEmpty() reports it rather than a box at the origin.
 Aabb ComputeBounds(const Vertex* vertices, UINT vertexCount);
 
+// A submesh as the LOADER sees it: index range plus the names it read. The
+// loader cannot resolve a texture - that needs the ResourceManager - so it
+// hands over the path it found and lets the manager turn it into a handle.
+struct SubmeshData
+{
+    UINT         indexOffset = 0;
+    UINT         indexCount  = 0;
+    std::wstring materialName;
+    // Relative to Assets/, ready for LoadTexture. Empty when the .mtl named
+    // no map_Kd, or when the file it named could not be found.
+    std::wstring diffuseTexture;
+};
+
 // Geometry still on the CPU: what a loader produces before upload.
 struct MeshData
 {
-    std::vector<Vertex>   vertices;
-    std::vector<uint32_t> indices;
+    std::vector<Vertex>      vertices;
+    std::vector<uint32_t>    indices;
+    // Empty means "one material" - CreateMesh then synthesises the single
+    // submesh, so procedural geometry needs to say nothing about this.
+    std::vector<SubmeshData> submeshes;
 };
 
 // Indices are 32-bit. 16-bit halves the index memory but caps a mesh at
