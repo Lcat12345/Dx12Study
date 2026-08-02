@@ -143,12 +143,26 @@ bool GetActiveCameraView(World& world, CameraView& outCamera)
     XMStoreFloat3(&outCamera.forward, ForwardFrom(*transform));
     outCamera.up = { 0.0f, 1.0f, 0.0f };
 
-    if (const CameraComponent* lens = world.Get<CameraComponent>(cameraEntity))
+    // EVERY field is written, including when there is no lens. Leaving the
+    // lens fields alone would make the answer depend on what the caller's
+    // struct already held - and the two callers seed it differently: the
+    // renderer reuses one CameraView across frames, picking passes a fresh
+    // one. Strip the CameraComponent off after editing its FOV and the two
+    // would quietly disagree about the projection, so the click would land
+    // somewhere other than where it was pointed.
+    //
+    // A default-constructed component stands in for the missing one: an
+    // entity can be a viewpoint with only a Transform, and this is what
+    // "no lens specified" means.
+    CameraComponent lens;
+    if (const CameraComponent* found = world.Get<CameraComponent>(cameraEntity))
     {
-        outCamera.fovY  = lens->fovY;
-        outCamera.nearZ = lens->nearZ;
-        outCamera.farZ  = lens->farZ;
+        lens = *found;
     }
+    outCamera.fovY  = lens.fovY;
+    outCamera.nearZ = lens.nearZ;
+    outCamera.farZ  = lens.farZ;
+
     return true;
 }
 

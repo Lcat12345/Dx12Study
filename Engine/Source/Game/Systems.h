@@ -24,6 +24,12 @@ void LightOrbitSystem(World& world, float totalSeconds);
 // Split out of BuildRenderData because picking needs exactly the same camera
 // the renderer drew with - reconstructing it separately is how a click ends
 // up landing somewhere the user did not point at.
+//
+// On success it overwrites EVERY field, so the result never depends on what
+// outCamera happened to contain. On failure it writes nothing, and the two
+// callers then diverge deliberately: the renderer keeps drawing from the
+// last good view, while picking refuses to place anything. Both are the
+// safe answer to "there is no camera" for their own job.
 bool GetActiveCameraView(World& world, CameraView& outCamera);
 
 // --- the render boundary ---
