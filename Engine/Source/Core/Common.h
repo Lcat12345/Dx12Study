@@ -5,6 +5,7 @@
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <filesystem>
+#include <string>
 
 // Throws std::runtime_error carrying the HRESULT when hr indicates failure.
 // 'what' names the call site so the message box is actually useful.
@@ -28,6 +29,15 @@ D3D12_RESOURCE_BARRIER TransitionBarrier(ID3D12Resource* resource,
 std::filesystem::path GetProjectRoot();
 std::filesystem::path GetShaderDir();
 std::filesystem::path GetAssetDir();
+// Saved scenes. Created on demand - the folder need not exist until the
+// first save.
+std::filesystem::path GetSceneDir();
+
+// Paths are wide (a Korean folder name has to survive the round trip);
+// ImGui and the scene file format are UTF-8. These are the only two places
+// the two worlds meet.
+std::string  ToUtf8(const std::wstring& text);
+std::wstring ToWide(const std::string& text);
 
 // Upload-heap buffer: CPU-writable, GPU-readable. Pass initData to fill it
 // on creation, or nullptr to leave it empty (for buffers written per frame).

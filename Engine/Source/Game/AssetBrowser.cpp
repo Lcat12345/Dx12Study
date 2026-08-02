@@ -16,22 +16,6 @@
 
 namespace
 {
-    // Paths are wide (a Korean folder name has to survive the round trip);
-    // ImGui speaks UTF-8. This is the only place the two meet.
-    std::string ToUtf8(const std::wstring& text)
-    {
-        if (text.empty())
-        {
-            return {};
-        }
-        const int size = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()),
-                                             nullptr, 0, nullptr, nullptr);
-        std::string result(size_t(size), '\0');
-        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), int(text.size()),
-                            result.data(), size, nullptr, nullptr);
-        return result;
-    }
-
     std::wstring ToLowerExtension(const std::filesystem::path& path)
     {
         std::wstring extension = path.extension().wstring();

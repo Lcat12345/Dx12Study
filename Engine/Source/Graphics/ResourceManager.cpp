@@ -7,6 +7,8 @@
 #include "Loaders/ObjLoader.h"
 
 #include <d3dcompiler.h>
+#include <algorithm>
+#include <cwctype>
 #include <stdexcept>
 
 #pragma comment(lib, "d3dcompiler.lib")
@@ -58,13 +60,32 @@ void ResourceManager::EndUpload()
     m_device.WaitForGpu();
 }
 
+std::wstring ResourceManager::NormalizeKey(const std::wstring& name)
+{
+    // Procedural recipes are names, not paths. '#cube' is already canonical.
+    if (name.empty() || name.front() == L'#')
+    {
+        return name;
+    }
+
+    std::wstring key = name;
+    std::replace(key.begin(), key.end(), L'\\', L'/');
+    // On WIDE characters, never on the UTF-8 bytes: tolower() on a char
+    // would slice multi-byte sequences apart.
+    std::transform(key.begin(), key.end(), key.begin(),
+                   [](wchar_t c) { return wchar_t(std::towlower(c)); });
+    return key;
+}
+
 // ---------------------------------------------------------------- meshes
 
 MeshHandle ResourceManager::AddMesh(const std::wstring& name, const MeshData& data)
 {
     ++m_stats.meshRequests;
 
-    auto it = m_meshCache.find(name);
+    const std::wstring key = NormalizeKey(name);
+
+    auto it = m_meshCache.find(key);
     if (it != m_meshCache.end())
     {
         return it->second;
@@ -72,7 +93,8 @@ MeshHandle ResourceManager::AddMesh(const std::wstring& name, const MeshData& da
 
     const MeshHandle handle{ uint32_t(m_meshes.size()) };
     m_meshes.push_back(CreateMesh(m_device.Device(), data));
-    m_meshCache.emplace(name, handle);
+    m_meshNames.push_back(key);
+    m_meshCache.emplace(key, handle);
     ++m_stats.meshLoads;
     return handle;
 }
@@ -81,13 +103,17 @@ MeshHandle ResourceManager::LoadMesh(const std::wstring& fileName, float fitToSi
 {
     ++m_stats.meshRequests;
 
-    auto it = m_meshCache.find(fileName);
+    const std::wstring key = NormalizeKey(fileName);
+
+    auto it = m_meshCache.find(key);
     if (it != m_meshCache.end())
     {
         return it->second; // already on the GPU - no file read, no upload
     }
 
-    MeshData data = LoadObj(GetAssetDir() / fileName);
+    // Opened by the canonical name too, so there is exactly one spelling in
+    // play. Windows resolves it to the file whatever its case on disk.
+    MeshData data = LoadObj(GetAssetDir() / key);
     if (fitToSize > 0.0f)
     {
         FitMeshToSize(data, fitToSize);
@@ -95,9 +121,32 @@ MeshHandle ResourceManager::LoadMesh(const std::wstring& fileName, float fitToSi
 
     const MeshHandle handle{ uint32_t(m_meshes.size()) };
     m_meshes.push_back(CreateMesh(m_device.Device(), data));
-    m_meshCache.emplace(fileName, handle);
+    m_meshNames.push_back(key);
+    m_meshCache.emplace(key, handle);
     ++m_stats.meshLoads;
     return handle;
+}
+
+MeshHandle ResourceManager::ResolveMesh(const std::wstring& name)
+{
+    if (name.empty())
+    {
+        return MeshHandle{};
+    }
+    if (name.front() != L'#')
+    {
+        return LoadMesh(name);
+    }
+
+    // The procedural recipes. Their PARAMETERS live here and nowhere else -
+    // a name like "#floor" has to mean the same geometry in the scene that
+    // saved it and the one that loads it.
+    const std::wstring key = NormalizeKey(name);
+    if (key == L"#cube")    { return AddMesh(key, MakeCubeMeshData()); }
+    if (key == L"#pyramid") { return AddMesh(key, MakePyramidMeshData()); }
+    if (key == L"#floor")   { return AddMesh(key, MakeFloorMeshData(40.0f, 20.0f)); }
+
+    return MeshHandle{}; // unknown recipe - the caller reports it
 }
 
 const Mesh& ResourceManager::GetMesh(MeshHandle handle) const
@@ -109,16 +158,36 @@ const Mesh& ResourceManager::GetMesh(MeshHandle handle) const
     return m_meshes[handle.index];
 }
 
+const std::wstring& ResourceManager::MeshName(MeshHandle handle) const
+{
+    static const std::wstring kNone;
+    if (!handle.IsValid() || handle.index >= m_meshNames.size())
+    {
+        return kNone;
+    }
+    return m_meshNames[handle.index];
+}
+
+const std::wstring& ResourceManager::TextureName(TextureHandle handle) const
+{
+    static const std::wstring kNone;
+    if (!handle.IsValid() || handle.index >= m_textureNames.size())
+    {
+        return kNone;
+    }
+    return m_textureNames[handle.index];
+}
+
 MeshHandle ResourceManager::FindMesh(const std::wstring& name) const
 {
     // Not a request: asking does no work and must not skew the cache stats.
-    auto it = m_meshCache.find(name);
+    auto it = m_meshCache.find(NormalizeKey(name));
     return it == m_meshCache.end() ? MeshHandle{} : it->second;
 }
 
 TextureHandle ResourceManager::FindTexture(const std::wstring& name) const
 {
-    auto it = m_textureCache.find(name);
+    auto it = m_textureCache.find(NormalizeKey(name));
     return it == m_textureCache.end() ? TextureHandle{} : it->second;
 }
 
@@ -126,7 +195,9 @@ TextureHandle ResourceManager::FindTexture(const std::wstring& name) const
 
 TextureHandle ResourceManager::LoadTexture(const std::wstring& fileName)
 {
-    auto it = m_textureCache.find(fileName);
+    const std::wstring key = NormalizeKey(fileName);
+
+    auto it = m_textureCache.find(key);
     if (it != m_textureCache.end())
     {
         // The whole point of the cache: five materials naming the same
@@ -136,14 +207,16 @@ TextureHandle ResourceManager::LoadTexture(const std::wstring& fileName)
     }
     // Decoding is the only file-specific part; everything after it is the
     // same upload whether the pixels came from disk or from code.
-    return AddTexture(fileName, LoadImageRGBA(GetAssetDir() / fileName));
+    return AddTexture(key, LoadImageRGBA(GetAssetDir() / key));
 }
 
 TextureHandle ResourceManager::AddTexture(const std::wstring& name, const ImageData& image)
 {
     ++m_stats.textureRequests;
 
-    auto it = m_textureCache.find(name);
+    const std::wstring key = NormalizeKey(name);
+
+    auto it = m_textureCache.find(key);
     if (it != m_textureCache.end())
     {
         return it->second;
@@ -237,7 +310,8 @@ TextureHandle ResourceManager::AddTexture(const std::wstring& name, const ImageD
 
     const TextureHandle handle{ uint32_t(m_textures.size()) };
     m_textures.push_back(std::move(texture));
-    m_textureCache.emplace(name, handle);
+    m_textureNames.push_back(key);
+    m_textureCache.emplace(key, handle);
     ++m_stats.textureLoads;
     return handle;
 }

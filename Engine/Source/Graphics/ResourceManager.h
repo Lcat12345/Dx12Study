@@ -53,7 +53,19 @@ public:
     // models authored elsewhere are rarely in our units.
     MeshHandle LoadMesh(const std::wstring& fileName, float fitToSize = 0.0f);
 
+    // Turns a saved name back into a handle: a '#' prefix means a procedural
+    // recipe built in code, anything else is a file under Assets/. This is
+    // what a scene file's mesh names go through on load, so the recipes and
+    // their parameters live in exactly one place.
+    MeshHandle ResolveMesh(const std::wstring& name);
+
     const Mesh& GetMesh(MeshHandle handle) const;
+
+    // The canonical name a handle was registered under - what a scene file
+    // stores instead of the index, which means nothing in the next run.
+    // Empty for an invalid handle.
+    const std::wstring& MeshName(MeshHandle handle) const;
+    const std::wstring& TextureName(TextureHandle handle) const;
 
     // "Is this already loaded?" without loading it. The asset browser needs
     // to say so from the first frame, and assets loaded by the startup scene
@@ -114,8 +126,27 @@ private:
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator>    m_uploadAllocator;
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_uploadCommandList;
 
+    // The cache key for an asset name.
+    //
+    // POLICY (decided in 10.5, deferred from 10.3): lowercase, forward
+    // slashes. The cache keys on the STRING, and Windows opens "Laevat.obj"
+    // and "laevat.obj" as the same file - without this, two spellings of one
+    // path become two entries and the same 23 MB of geometry is uploaded
+    // twice. Scene files store this canonical form.
+    //
+    // Lowercasing is a WINDOWS ASSUMPTION. On a case-sensitive filesystem it
+    // is the wrong answer and this has to become the identity function.
+    // Names starting with '#' are procedural recipes, not paths, and pass
+    // through untouched.
+    static std::wstring NormalizeKey(const std::wstring& name);
+
     std::vector<Mesh>    m_meshes;
     std::vector<Texture> m_textures;
+
+    // Parallel to the two vectors above: the canonical name each was
+    // registered under, so serialization can go from handle back to name.
+    std::vector<std::wstring> m_meshNames;
+    std::vector<std::wstring> m_textureNames;
 
     TextureHandle m_defaultTexture;
 

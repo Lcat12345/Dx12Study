@@ -38,6 +38,24 @@ namespace
     }
 }
 
+void BuildEmptyScene(World& world)
+{
+    const Entity camera = world.Create();
+    SetName(world, camera, "Camera");
+    world.Add<Transform>(camera, { { 0.0f, 3.5f, -22.0f }, { 0, 0, 0 }, { 1, 1, 1 } });
+    world.Add<CameraComponent>(camera, { XM_PIDIV4, 0.1f, 200.0f });
+    world.Add<ActiveCamera>(camera);
+
+    const Entity sun = world.Create();
+    SetName(world, sun, "Sun");
+    world.Add<Transform>(sun, { { 0, 0, 0 }, { -0.8411f, 1.1071f, 0.0f }, { 1, 1, 1 } });
+    world.Add<Light>(sun, { Light::Type::Directional, { 0.85f, 0.82f, 0.75f }, 0.0f });
+
+    const Entity environment = world.Create();
+    SetName(world, environment, "Environment");
+    world.Add<Environment>(environment, { { 0.18f, 0.19f, 0.22f } });
+}
+
 void BuildWorld(ResourceManager& resources, World& world)
 {
     // Procedural geometry is registered under a name; files are keyed by
@@ -48,9 +66,12 @@ void BuildWorld(ResourceManager& resources, World& world)
     // exports routinely arrive tens of thousands of units across and far
     // from the origin, past the far plane. Those go through fitToSize:
     //     resources.LoadMesh(L"YourModel.obj", 8.0f);
-    const MeshHandle floorMesh   = resources.AddMesh(L"#floor", MakeFloorMeshData(40.0f, 20.0f));
-    const MeshHandle cubeMesh    = resources.AddMesh(L"#cube", MakeCubeMeshData());
-    const MeshHandle pyramidMesh = resources.AddMesh(L"#pyramid", MakePyramidMeshData());
+    // ResolveMesh, not AddMesh: the recipe behind "#floor" now lives in the
+    // ResourceManager so that a saved scene naming it rebuilds the SAME
+    // geometry. Two definitions of "#floor" would round-trip to two shapes.
+    const MeshHandle floorMesh   = resources.ResolveMesh(L"#floor");
+    const MeshHandle cubeMesh    = resources.ResolveMesh(L"#cube");
+    const MeshHandle pyramidMesh = resources.ResolveMesh(L"#pyramid");
     const MeshHandle sphereMesh  = resources.LoadMesh(L"Sphere.obj");
     const MeshHandle torusMesh   = resources.LoadMesh(L"Torus.obj");
 	// Spelled exactly as the file is on disk. Windows would open "Laevat.obj"

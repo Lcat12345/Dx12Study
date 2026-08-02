@@ -1,14 +1,19 @@
 #include "Game/DebugUI.h"
 
 #include "Game/AssetBrowser.h"
+#include "Game/BuildWorld.h"
 #include "Game/Components.h"
 #include "Game/Picking.h"
+#include "Game/Scene.h"
 #include "Game/Systems.h"
+
+#include "Core/Common.h"
 
 #include "imgui.h"
 
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <string>
 #include <vector>
@@ -87,9 +92,15 @@ namespace
     // sliders write directly and only the buttons queue.
     // ---------------------------------------------------------------------
 
+    // --- scene file state (editor state, never saved with the scene) ---
+    std::filesystem::path g_scenePath;   // empty until saved or opened once
+    std::string           g_sceneStatus; // last save/load result, shown in the bar
+    bool                  g_openSaveAs = false;
+
     struct Command
     {
-        enum class Kind { Create, Destroy, Duplicate, AddComponent, RemoveComponent, Place };
+        enum class Kind { Create, Destroy, Duplicate, AddComponent, RemoveComponent, Place,
+                          NewScene, LoadScene };
 
         Kind   kind;
         Entity target;
@@ -125,7 +136,15 @@ namespace
         g_commands.push_back(std::move(command));
     }
 
-    void ApplyCommands(World& world)
+    void QueueScene(Command::Kind kind, const std::wstring& path = {})
+    {
+        Command command;
+        command.kind = kind;
+        command.name = ToUtf8(path);
+        g_commands.push_back(std::move(command));
+    }
+
+    void ApplyCommands(World& world, ResourceManager& resources)
     {
         for (const Command& command : g_commands)
         {
@@ -202,6 +221,36 @@ namespace
                 world.Add<MeshRenderer>(placed, renderer);
 
                 g_selected = placed;
+                break;
+            }
+
+            case Command::Kind::NewScene:
+                // Replacing the world invalidates every handle into it.
+                world = World{};
+                BuildEmptyScene(world);
+                g_selected    = Entity{};
+                g_scenePath.clear();
+                g_sceneStatus = "new scene";
+                break;
+
+            case Command::Kind::LoadScene:
+            {
+                const std::filesystem::path path = ToWide(command.name);
+                World       loaded;
+                std::string error;
+                if (LoadScene(path, resources, loaded, error))
+                {
+                    world         = std::move(loaded);
+                    g_selected    = Entity{};
+                    g_scenePath   = path;
+                    g_sceneStatus = "opened " + ToUtf8(path.filename().wstring());
+                }
+                else
+                {
+                    // The current scene is untouched - LoadScene built into
+                    // a temporary and never got as far as swapping it in.
+                    g_sceneStatus = "open failed: " + error;
+                }
                 break;
             }
 
@@ -498,6 +547,141 @@ namespace
         ImGui::End();
     }
 
+    // Saving is the one action that does NOT go through the command queue:
+    // it only reads the world, so there is nothing to defer.
+    void SaveTo(World& world, const ResourceManager& resources,
+                const std::filesystem::path& path)
+    {
+        std::string error;
+        if (SaveScene(world, resources, path, error))
+        {
+            g_scenePath   = path;
+            g_sceneStatus = "saved " + ToUtf8(path.filename().wstring());
+        }
+        else
+        {
+            g_sceneStatus = "save failed: " + error;
+        }
+    }
+
+    void DrawMainMenuBar(World& world, ResourceManager& resources)
+    {
+        if (!ImGui::BeginMainMenuBar())
+        {
+            return;
+        }
+
+        if (ImGui::BeginMenu("File"))
+        {
+            if (ImGui::MenuItem("New"))
+            {
+                QueueScene(Command::Kind::NewScene);
+            }
+
+            // Scanned while the menu is open rather than cached: a folder
+            // with a handful of scenes costs nothing to re-read, and a stale
+            // list is worse than none.
+            if (ImGui::BeginMenu("Open"))
+            {
+                std::error_code error;
+                std::filesystem::directory_iterator directory(GetSceneDir(), error);
+                bool any = false;
+                if (!error)
+                {
+                    for (const auto& item : directory)
+                    {
+                        std::error_code itemError;
+                        if (!item.is_regular_file(itemError) || itemError ||
+                            item.path().extension() != L".scene")
+                        {
+                            continue;
+                        }
+                        any = true;
+                        const std::string label = ToUtf8(item.path().filename().wstring());
+                        if (ImGui::MenuItem(label.c_str()))
+                        {
+                            QueueScene(Command::Kind::LoadScene, item.path().wstring());
+                        }
+                    }
+                }
+                if (!any)
+                {
+                    ImGui::TextDisabled("(no scenes yet)");
+                }
+                ImGui::EndMenu();
+            }
+
+            // Save falls back to Save As when the scene has no file yet -
+            // otherwise it would silently do nothing on a brand new scene.
+            if (ImGui::MenuItem("Save", nullptr, false))
+            {
+                if (g_scenePath.empty()) { g_openSaveAs = true; }
+                else                     { SaveTo(world, resources, g_scenePath); }
+            }
+            if (ImGui::MenuItem("Save As..."))
+            {
+                g_openSaveAs = true;
+            }
+            ImGui::EndMenu();
+        }
+
+        if (!g_sceneStatus.empty())
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("%s", g_sceneStatus.c_str());
+        }
+
+        ImGui::EndMainMenuBar();
+    }
+
+    // A modal rather than a Win32 file dialog: the scenes folder is a known
+    // place, so a name is all that is missing.
+    void DrawSaveAsPopup(World& world, const ResourceManager& resources)
+    {
+        if (g_openSaveAs)
+        {
+            ImGui::OpenPopup("Save Scene As");
+            g_openSaveAs = false;
+        }
+
+        // Centred, because a modal that appears under the cursor is easy to
+        // dismiss by accident.
+        const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+
+        if (!ImGui::BeginPopupModal("Save Scene As", nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            return;
+        }
+
+        static char name[64] = "MyScene";
+        ImGui::TextDisabled("Assets/Scenes/");
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(200.0f);
+        const bool entered = ImGui::InputText("##scenename", name, sizeof(name),
+                                              ImGuiInputTextFlags_EnterReturnsTrue);
+        ImGui::SameLine();
+        ImGui::TextDisabled(".scene");
+
+        const bool valid = name[0] != '\0';
+        ImGui::BeginDisabled(!valid);
+        const bool confirmed = ImGui::Button("Save") || (entered && valid);
+        ImGui::EndDisabled();
+
+        if (confirmed)
+        {
+            SaveTo(world, resources, GetSceneDir() / (ToWide(name) + L".scene"));
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+    }
+
     // Turns a click on the scene image into an entity on the floor.
     //
     // imageMin is the image's top-left in SCREEN coordinates and imageSize
@@ -635,8 +819,13 @@ namespace
     }
 }
 
-void DrawDebugUI(World& world, AssetBrowser& assets, DebugUIContext& ui)
+void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
+                 DebugUIContext& ui)
 {
+    // Before the dock space, which sizes itself around the menu bar.
+    DrawMainMenuBar(world, resources);
+    DrawSaveAsPopup(world, resources);
+
     // A full-window dock space so the panels can be rearranged and docked.
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
                                  ImGuiDockNodeFlags_PassthruCentralNode);
@@ -652,6 +841,6 @@ void DrawDebugUI(World& world, AssetBrowser& assets, DebugUIContext& ui)
     assets.Draw();
 
     // Every panel has finished iterating, so it is finally safe to change
-    // the shape of the world.
-    ApplyCommands(world);
+    // the shape of the world - or to replace it entirely.
+    ApplyCommands(world, resources);
 }

@@ -9,6 +9,7 @@
 #include <cstdint>
 
 class AssetBrowser;
+class ResourceManager;
 
 // What the panels read from the engine, and what they hand back. A struct
 // rather than a parameter list: the viewport panel alone would have added
@@ -48,4 +49,8 @@ struct DebugUIContext
 // Builds this frame's UI. Call between ImGuiLayer::NewFrame and Render.
 // The browser is passed in rather than owned here: it holds scan results
 // across frames, and the inspector assigns whatever it has selected.
-void DrawDebugUI(World& world, AssetBrowser& assets, DebugUIContext& ui);
+//
+// 'world' may be REPLACED wholesale when a scene is loaded, which is why it
+// is a mutable reference rather than something this file only reads.
+void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
+                 DebugUIContext& ui);

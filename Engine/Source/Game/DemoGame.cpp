@@ -69,7 +69,7 @@ void DemoGame::OnUpdate(float dt)
     ui.drawItemCount    = unsigned(m_drawItems.size());
     ui.sceneAspect      = GetRenderer().SceneAspectRatio();
 
-    DrawDebugUI(m_world, *m_assets, ui);
+    DrawDebugUI(m_world, GetRenderer().Resources(), *m_assets, ui);
 
     m_viewportHovered = ui.viewportHovered;
 
