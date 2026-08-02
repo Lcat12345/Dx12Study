@@ -664,7 +664,29 @@ namespace
         ImGui::SameLine();
         ImGui::TextDisabled(".scene");
 
-        const bool valid = name[0] != '\0';
+        // A FILE NAME, not a path. "sub/foo" would save somewhere the Open
+        // menu never looks, and "../../foo" would escape the scenes folder
+        // entirely - the text box is not a place to accept either.
+        const char* problem = nullptr;
+        if (name[0] == '\0')
+        {
+            problem = "enter a name";
+        }
+        else if (std::strpbrk(name, "/\\:*?\"<>|") != nullptr)
+        {
+            problem = "no path separators or wildcards";
+        }
+        else if (std::strcmp(name, ".") == 0 || std::strcmp(name, "..") == 0)
+        {
+            problem = "not a usable name";
+        }
+
+        if (problem)
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "%s", problem);
+        }
+
+        const bool valid = problem == nullptr;
         ImGui::BeginDisabled(!valid);
         const bool confirmed = ImGui::Button("Save") || (entered && valid);
         ImGui::EndDisabled();

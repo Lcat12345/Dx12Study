@@ -84,7 +84,14 @@ bool SaveScene(World& world, const ResourceManager& resources,
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
 
-    std::ofstream file(path, std::ios::binary);
+    // Written to a sibling temporary and moved into place at the end.
+    // Opening the real file directly truncates it FIRST, so a disk full, a
+    // write error or a crash halfway through would destroy the last good
+    // save - the one thing a save must never do. The temporary lives in the
+    // same directory so the move is a rename within one volume, not a copy.
+    const std::filesystem::path tempPath = path.string() + ".tmp";
+
+    std::ofstream file(tempPath, std::ios::binary);
     if (!file)
     {
         outError = "could not open the file for writing";
@@ -165,16 +172,28 @@ bool SaveScene(World& world, const ResourceManager& resources,
         }
     });
 
+    file.close(); // flush before asking whether it all landed
     if (!file)
     {
         outError = "the file could not be written completely";
+        std::filesystem::remove(tempPath, error);
+        return false;
+    }
+
+    // The swap. rename replaces an existing file on Windows, so the old
+    // scene is only gone once the new one is complete on disk.
+    std::filesystem::rename(tempPath, path, error);
+    if (error)
+    {
+        outError = "could not replace the existing file: " + error.message();
+        std::filesystem::remove(tempPath, error);
         return false;
     }
     return true;
 }
 
-bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
-               World& outWorld, std::string& outError)
+static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& resources,
+                          World& outWorld, std::string& outError)
 {
     std::ifstream file(path, std::ios::binary);
     if (!file)
@@ -298,18 +317,32 @@ bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
             // Name -> handle. This is the whole reason names are stored:
             // ResolveMesh either finds it in the cache, loads the file, or
             // rebuilds the procedural recipe.
-            if (!meshName.empty())
+            //
+            // Both of these THROW when the file is missing or malformed, and
+            // a scene naming an asset that has since been renamed is an
+            // ordinary thing to open - not a reason to take the editor down.
+            // Turned into an error string here, where the line number is
+            // still known.
+            try
             {
-                renderer.mesh = resources.ResolveMesh(ToWide(meshName));
-                if (!renderer.mesh.IsValid())
+                if (!meshName.empty())
                 {
-                    outError = Where(lineNumber, "unknown mesh '" + meshName + "'");
-                    return false;
+                    renderer.mesh = resources.ResolveMesh(ToWide(meshName));
+                    if (!renderer.mesh.IsValid())
+                    {
+                        outError = Where(lineNumber, "unknown mesh '" + meshName + "'");
+                        return false;
+                    }
+                }
+                if (!textureName.empty())
+                {
+                    renderer.material.texture = resources.LoadTexture(ToWide(textureName));
                 }
             }
-            if (!textureName.empty())
+            catch (const std::exception& e)
             {
-                renderer.material.texture = resources.LoadTexture(ToWide(textureName));
+                outError = Where(lineNumber, "could not load asset: " + std::string(e.what()));
+                return false;
             }
             loaded.Add<MeshRenderer>(current, renderer);
         }
@@ -368,6 +401,16 @@ bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
         }
     }
 
+    // getline stops on end of file AND on a read error, and the two are not
+    // the same thing: bad() means the stream broke partway, so what parsed
+    // is only part of the scene. Replacing the live world with it would be
+    // silent data loss dressed up as a successful load.
+    if (file.bad())
+    {
+        outError = "the file could not be read completely";
+        return false;
+    }
+
     if (!sawVersion)
     {
         outError = "empty file - no 'scene' line";
@@ -377,4 +420,26 @@ bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
     // Only now, with nothing left that can fail.
     outWorld = std::move(loaded);
     return true;
+}
+
+bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
+               World& outWorld, std::string& outError)
+{
+    // The backstop. Opening a file the user picked must never be able to
+    // end the process, whatever the file turns out to contain - the parser
+    // above converts what it anticipates, this catches what it does not.
+    try
+    {
+        return LoadSceneImpl(path, resources, outWorld, outError);
+    }
+    catch (const std::exception& e)
+    {
+        outError = e.what();
+        return false;
+    }
+    catch (...)
+    {
+        outError = "unknown error while loading";
+        return false;
+    }
 }

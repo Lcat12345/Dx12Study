@@ -567,10 +567,37 @@ entity
    |------|------|-----------|
    | `Broken.scene` (`transform 1 2`) | `line 4: transform expects 9 numbers` | 19 (그대로) |
    | `Future.scene` (`scene 99`) | `line 1: scene version 99, but this build reads 1` | 19 (그대로) |
+   | `AMissing.scene` (없는 `ghost.obj` 참조) | `line 5: could not load asset: Model file not found` | 19 (그대로) |
    | `MyScene.scene` | `opened MyScene.scene` | 5 |
 
    두 번 실패한 뒤에도 세 번째가 정상 로드된다는 것이 "실패가 아무것도
    남기지 않았다"는 증거다. **버전 필드가 첫날부터 값을 했다.**
+
+   마지막 줄은 리뷰에서 나온 것이다. `ResolveMesh`/`LoadTexture`는 파일이
+   없으면 **예외를 던지는데** LoadScene이 잡지 않아서, 저장 후 에셋 이름을
+   바꾸는 흔한 상황이 "open failed"가 아니라 **프로세스 종료**로 이어졌다.
+   줄 번호를 아는 자리에서 문자열로 바꾸고, 파서 바깥에 예상하지 못한
+   예외를 위한 백스톱을 하나 더 뒀다 — 사용자가 고른 파일이 무엇이든 앱을
+   끝낼 수 있어서는 안 된다.
+
+5. **저장이 원자적이다** — 대상 파일을 바로 열면 **먼저 truncate**되므로,
+   디스크가 차거나 프로세스가 죽으면 마지막 정상 저장본까지 함께 잃는다.
+   저장은 절대 그러면 안 되는 연산이다. 같은 폴더의 `.tmp`에 다 쓰고
+   `rename`으로 갈아끼운다(같은 볼륨이라 복사가 아니다).
+
+   재현: 대상 파일을 읽기 전용으로 만들고 Save →
+   `save failed: could not replace the existing file: Access is denied.`,
+   원본 61바이트 그대로, `.tmp` 잔여물 없음.
+
+6. **이름은 경로가 아니다** — Save As 입력이 비었는지만 보고 있었다.
+   `sub/foo`는 Open 메뉴가 찾지 않는 하위 폴더에 저장되고 `../../foo`는
+   Scenes 폴더를 벗어난다. 구분자·와일드카드·`.`/`..`를 거부하고 이유를
+   표시한다. 재현: `../evil` 입력 → 빨간 "no path separators or wildcards",
+   Save 버튼 비활성
+
+   `getline` 루프가 끝난 뒤 `file.bad()`도 확인한다. EOF와 I/O 오류는
+   다른 일이고, 후자면 절반만 읽은 월드가 현재 씬을 대체할 뻔했다.
+   **이것만은 재현하지 못했다** — 읽는 도중 실패하는 장치가 필요하다.
 4. 디버그 레이어 메시지 0건, Debug/Release 종료 코드 0
 
 **테스트가 잡은 결함**: 위 실패 테스트를 처음 돌렸을 때 두 파일 **모두**
