@@ -30,6 +30,9 @@ struct DebugUIContext
     // MeshRenderer". One with no mesh assigned yet is skipped, and a counter
     // that disagreed with the picture would be worse than none.
     unsigned drawItemCount = 0;
+    // The aspect the scene was drawn with. Unprojecting a click needs the
+    // render target's shape, not the window's.
+    float sceneAspect = 1.0f;
 
     // --- out ---
     bool vsyncToggled = false;

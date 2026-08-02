@@ -67,6 +67,7 @@ void DemoGame::OnUpdate(float dt)
     ui.maxDrawItems     = GetRenderer().MaxDrawItems();
     // Last frame's list: OnRender rebuilds it after this runs.
     ui.drawItemCount    = unsigned(m_drawItems.size());
+    ui.sceneAspect      = GetRenderer().SceneAspectRatio();
 
     DrawDebugUI(m_world, *m_assets, ui);
 

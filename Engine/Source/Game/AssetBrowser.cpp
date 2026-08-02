@@ -349,6 +349,15 @@ void AssetBrowser::Draw()
         ImGui::SetTooltip("%s", m_assetDirLabel.c_str());
     }
 
+    ImGui::BeginDisabled(!SelectedMesh().IsValid());
+    ImGui::Checkbox("Place on click", &m_placeOnClick);
+    ImGui::EndDisabled();
+    if (PlaceOnClick())
+    {
+        ImGui::SameLine();
+        ImGui::TextDisabled("- click the floor");
+    }
+
     ImGui::Separator();
 
     if (ImGui::CollapsingHeader("Meshes", ImGuiTreeNodeFlags_DefaultOpen))

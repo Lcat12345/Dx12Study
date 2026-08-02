@@ -45,6 +45,9 @@
     <ClCompile Include="Source\Game\AssetBrowser.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Game\Picking.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Game\Systems.cpp">
       <Filter>Game</Filter>
     </ClCompile>
@@ -126,6 +129,9 @@
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Source\Game\DemoGame.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Game\Picking.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Source\Game\Systems.h">

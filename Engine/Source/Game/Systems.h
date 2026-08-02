@@ -18,6 +18,14 @@ void CameraSystem(World& world, float mouseDeltaX, float mouseDeltaY, float dt);
 // data rather than a hardcoded sine in the renderer.
 void LightOrbitSystem(World& world, float totalSeconds);
 
+// Fills outCamera from the entity tagged ActiveCamera. False when there is
+// none, or when it has no Transform to sit in.
+//
+// Split out of BuildRenderData because picking needs exactly the same camera
+// the renderer drew with - reconstructing it separately is how a click ends
+// up landing somewhere the user did not point at.
+bool GetActiveCameraView(World& world, CameraView& outCamera);
+
 // --- the render boundary ---
 // Walks the world once and flattens it into what the renderer accepts.
 // Nothing below this line knows about entities.

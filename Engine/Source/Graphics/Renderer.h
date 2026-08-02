@@ -54,6 +54,11 @@ public:
     // no D3D type leaks into the UI code.
     uint64_t SceneTextureId() const { return m_sceneTarget->SRV().ptr; }
 
+    // The aspect the scene was last drawn with. Picking has to unproject
+    // through the same projection the renderer built, so it needs this
+    // rather than the window's shape.
+    float SceneAspectRatio() const { return m_sceneTarget->AspectRatio(); }
+
     // How many DrawItems Render() will accept before throwing. The editor
     // shows it next to the live count so the ceiling is visible before it
     // is hit.

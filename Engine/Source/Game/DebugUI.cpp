@@ -2,12 +2,15 @@
 
 #include "Game/AssetBrowser.h"
 #include "Game/Components.h"
+#include "Game/Picking.h"
+#include "Game/Systems.h"
 
 #include "imgui.h"
 
 #include <cstdio>
 #include <cstring>
 #include <iterator>
+#include <string>
 #include <vector>
 
 using namespace DirectX;
@@ -86,18 +89,40 @@ namespace
 
     struct Command
     {
-        enum class Kind { Create, Destroy, Duplicate, AddComponent, RemoveComponent };
+        enum class Kind { Create, Destroy, Duplicate, AddComponent, RemoveComponent, Place };
 
         Kind   kind;
         Entity target;
         Comp   component = Comp::Count; // only for Add/RemoveComponent
+
+        // Place only.
+        DirectX::XMFLOAT3 position = { 0.0f, 0.0f, 0.0f };
+        MeshHandle        mesh;
+        TextureHandle     texture;
+        std::string       name;
     };
 
     std::vector<Command> g_commands;
 
     void Queue(Command::Kind kind, Entity target, Comp component = Comp::Count)
     {
-        g_commands.push_back({ kind, target, component });
+        Command command;
+        command.kind      = kind;
+        command.target    = target;
+        command.component = component;
+        g_commands.push_back(std::move(command));
+    }
+
+    void QueuePlace(const XMFLOAT3& position, MeshHandle mesh, TextureHandle texture,
+                    const char* name)
+    {
+        Command command;
+        command.kind     = Command::Kind::Place;
+        command.position = position;
+        command.mesh     = mesh;
+        command.texture  = texture;
+        command.name     = name;
+        g_commands.push_back(std::move(command));
     }
 
     void ApplyCommands(World& world)
@@ -154,6 +179,31 @@ namespace
                     g_selected = Entity{};
                 }
                 break;
+
+            case Command::Kind::Place:
+            {
+                const Entity placed = world.Create();
+
+                Name name;
+                std::snprintf(name.value, Name::kCapacity, "%s", command.name.c_str());
+                world.Add<Name>(placed, name);
+
+                Transform transform;
+                transform.position = command.position;
+                world.Add<Transform>(placed, transform);
+
+                // Sits ON the plane, which means half-buried for any mesh
+                // whose origin is at its centre. Lifting it correctly needs
+                // the mesh's bounds, which nothing computes yet - the same
+                // trigger that ray-AABB picking waits for.
+                MeshRenderer renderer;
+                renderer.mesh             = command.mesh;
+                renderer.material.texture = command.texture;
+                world.Add<MeshRenderer>(placed, renderer);
+
+                g_selected = placed;
+                break;
+            }
 
             case Command::Kind::AddComponent:
                 kComponents[size_t(command.component)].add(world, command.target);
@@ -448,10 +498,59 @@ namespace
         ImGui::End();
     }
 
+    // Turns a click on the scene image into an entity on the floor.
+    //
+    // imageMin is the image's top-left in SCREEN coordinates and imageSize
+    // its size - the panel's, not the window's and not the render target's.
+    void HandleViewportClick(World& world, AssetBrowser& assets, const DebugUIContext& ui,
+                             const ImVec2& imageMin, const ImVec2& imageSize)
+    {
+        // IsItemHovered, not IsWindowHovered: the title bar and the resize
+        // grip belong to the window too, and a click on those is not a click
+        // in the scene.
+        if (!assets.PlaceOnClick() ||
+            !ImGui::IsItemHovered() ||
+            !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        {
+            return;
+        }
+
+        const ImVec2 mouse = ImGui::GetIO().MousePos;
+
+        // Pixels within the image -> clip space. Two conversions in one line,
+        // and the Y flip is the one that silently produces a mirrored result
+        // if forgotten: ImGui counts pixels DOWN from the top, clip space
+        // counts UP from the centre.
+        const float ndcX = ((mouse.x - imageMin.x) / imageSize.x) * 2.0f - 1.0f;
+        const float ndcY = 1.0f - ((mouse.y - imageMin.y) / imageSize.y) * 2.0f;
+
+        CameraView camera;
+        if (!GetActiveCameraView(world, camera))
+        {
+            return;
+        }
+
+        XMFLOAT3 hit;
+        if (!RayPlaneY(RayFromNdc(camera, ui.sceneAspect, ndcX, ndcY), 0.0f, hit))
+        {
+            return; // clicked the sky
+        }
+
+        // "Sphere.obj" -> "Sphere". The extension is noise in an entity list.
+        std::string name = assets.SelectedMeshLabel();
+        const size_t dot = name.find_last_of('.');
+        if (dot != std::string::npos)
+        {
+            name.erase(dot);
+        }
+
+        QueuePlace(hit, assets.SelectedMesh(), assets.SelectedTexture(), name.c_str());
+    }
+
     // The scene, as a texture inside a window. Everything about this panel is
     // driven by the size ImGui gives it - the renderer follows the panel, not
     // the other way round.
-    void DrawSceneViewport(DebugUIContext& ui)
+    void DrawSceneViewport(World& world, AssetBrowser& assets, DebugUIContext& ui)
     {
         // No padding: the image should reach the window border, the way every
         // editor's viewport does.
@@ -476,10 +575,16 @@ namespace
             ui.viewportWidth  = unsigned(size.x);
             ui.viewportHeight = unsigned(size.y);
 
+            // Where the image lands on screen, taken BEFORE drawing it -
+            // afterwards the cursor has already moved past.
+            const ImVec2 imageMin = ImGui::GetCursorScreenPos();
+
             // The texture is one frame old in the sense that it was rendered
             // at the PREVIOUS size if the panel was just resized. It is
             // stretched for that one frame, then matches again.
             ImGui::Image(ImTextureID(ui.sceneTexture), size);
+
+            HandleViewportClick(world, assets, ui, imageMin, size);
         }
 
         ui.viewportHovered = ImGui::IsWindowHovered();
@@ -540,7 +645,7 @@ void DrawDebugUI(World& world, AssetBrowser& assets, DebugUIContext& ui)
     world.ForEachEntity([&](Entity) { ++entityCount; });
 
     // Before DrawStats, which reports the size this panel just asked for.
-    DrawSceneViewport(ui);
+    DrawSceneViewport(world, assets, ui);
     DrawStats(ui, entityCount);
     DrawEntityList(world);
     DrawInspector(world, assets);

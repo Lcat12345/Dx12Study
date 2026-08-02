@@ -29,8 +29,9 @@ struct DrawItem
 };
 
 // The camera as the renderer needs it. Note what is NOT here: the aspect
-// ratio. That belongs to the swap chain, so the renderer builds the
-// projection itself and resizing keeps working without the game's help.
+// ratio. That belongs to whatever surface the scene lands on - since 10.1
+// the offscreen render target - so the renderer builds the projection itself
+// and resizing the viewport keeps working without the game's help.
 struct CameraView
 {
     DirectX::XMFLOAT3 position = { 0.0f, 0.0f, 0.0f };

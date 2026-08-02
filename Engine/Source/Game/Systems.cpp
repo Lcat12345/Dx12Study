@@ -130,6 +130,28 @@ void LightOrbitSystem(World& world, float totalSeconds)
     });
 }
 
+bool GetActiveCameraView(World& world, CameraView& outCamera)
+{
+    const Entity cameraEntity = FindActiveCamera(world);
+    const Transform* transform = world.Get<Transform>(cameraEntity);
+    if (!transform)
+    {
+        return false;
+    }
+
+    outCamera.position = transform->position;
+    XMStoreFloat3(&outCamera.forward, ForwardFrom(*transform));
+    outCamera.up = { 0.0f, 1.0f, 0.0f };
+
+    if (const CameraComponent* lens = world.Get<CameraComponent>(cameraEntity))
+    {
+        outCamera.fovY  = lens->fovY;
+        outCamera.nearZ = lens->nearZ;
+        outCamera.farZ  = lens->farZ;
+    }
+    return true;
+}
+
 void BuildRenderData(World& world,
                      std::vector<DrawItem>& outItems,
                      CameraView& outCamera,
@@ -151,20 +173,9 @@ void BuildRenderData(World& world,
     });
 
     // --- where to draw it from ---
-    const Entity cameraEntity = FindActiveCamera(world);
-    if (const Transform* transform = world.Get<Transform>(cameraEntity))
-    {
-        outCamera.position = transform->position;
-        XMStoreFloat3(&outCamera.forward, ForwardFrom(*transform));
-        outCamera.up = { 0.0f, 1.0f, 0.0f };
-
-        if (const CameraComponent* lens = world.Get<CameraComponent>(cameraEntity))
-        {
-            outCamera.fovY  = lens->fovY;
-            outCamera.nearZ = lens->nearZ;
-            outCamera.farZ  = lens->farZ;
-        }
-    }
+    // Leaves outCamera untouched when there is no camera, so the last good
+    // view is kept rather than snapping to the origin.
+    GetActiveCameraView(world, outCamera);
 
     // --- how it is lit ---
     outLighting = LightingData{};

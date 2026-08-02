@@ -32,6 +32,12 @@ public:
     const char*   SelectedMeshLabel() const;
     const char*   SelectedTextureLabel() const;
 
+    // Armed placement: while this is on, a click on the scene viewport drops
+    // the selected mesh there. A mode rather than "always place when a mesh
+    // is selected", so the viewport stays clickable for everything else -
+    // picking an existing entity lands here next.
+    bool PlaceOnClick() const { return m_placeOnClick && SelectedMesh().IsValid(); }
+
 private:
     struct Entry
     {
@@ -71,6 +77,8 @@ private:
 
     enum class Focus { None, Mesh, Texture };
     Focus m_focus = Focus::None;
+
+    bool m_placeOnClick = false;
 
     std::string m_assetDirLabel;
 };
