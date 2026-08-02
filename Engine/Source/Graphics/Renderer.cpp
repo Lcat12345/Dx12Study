@@ -18,10 +18,13 @@ namespace
     // makes the boundary of the scene viewport obvious at a glance.
     constexpr float kEditorClearColor[4] = { 0.10f, 0.10f, 0.12f, 1.0f };
 
-    constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_D32_FLOAT;
     // The scene texture matches the back buffer's format so one PSO serves
     // both - nothing here needs HDR yet.
     constexpr DXGI_FORMAT kSceneColorFormat = SwapChain::kFormat;
+    // What a PSO must declare to draw into the scene's depth. DepthTarget
+    // owns the resource format; this is the VIEW format, and the two differ
+    // once a depth buffer becomes sampleable.
+    constexpr DXGI_FORMAT kSceneDepthViewFormat = DXGI_FORMAT_D32_FLOAT;
 }
 
 Renderer::Renderer(HWND hwnd, UINT width, UINT height)
@@ -40,13 +43,20 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
     // The scene has its own surface now, so it no longer shares the window's
     // size. Starting at the client size just avoids a resize on frame one -
     // the viewport panel takes over as soon as it reports its size.
-    m_sceneTarget = std::make_unique<RenderTarget>(
-        m_device, m_rtvAllocator, m_dsvAllocator, m_srvAllocator,
-        width, height, kSceneColorFormat, kDepthFormat, kSceneClearColor);
+    //
+    // Colour and depth are built separately and used together. Passing no
+    // SRV allocator for the depth says "never sampled", which is true for
+    // the scene's own depth and false for the shadow map that arrives in
+    // 11.4.
+    m_sceneColor = std::make_unique<RenderTarget>(
+        m_device, m_rtvAllocator, m_srvAllocator,
+        width, height, kSceneColorFormat, kSceneClearColor);
+    m_sceneDepth = std::make_unique<DepthTarget>(
+        m_device, m_dsvAllocator, /*srvAllocator*/ nullptr, width, height);
 
     CreateConstantBuffers();
     CreateRootSignature();
-    CreatePipelineState();
+    CreatePipelineStates();
 }
 
 Renderer::~Renderer()
@@ -177,23 +187,22 @@ void Renderer::CreateRootSignature()
     }
     ThrowIfFailed(m_device.Device()->CreateRootSignature(0, blob->GetBufferPointer(),
                                                          blob->GetBufferSize(),
-                                                         IID_PPV_ARGS(&m_rootSignature)),
+                                                         IID_PPV_ARGS(&m_sceneRootSignature)),
                   "CreateRootSignature");
 }
 
-// Nearly every pipeline setting baked into ONE immutable object: shaders,
-// vertex layout, rasterizer/blend/depth state, output formats. Validated
-// once here, cheap to switch at runtime.
-void Renderer::CreatePipelineState()
+// The state every shaded scene pass agrees on. A role then changes only the
+// few fields that make it that role.
+//
+// The formats are the part worth centralising: RTVFormats, DSVFormat and
+// SampleDesc must match the attachments the pass actually binds, and a
+// mismatch is a Debug Layer error or a silently skipped draw. With one
+// template that is one place to be right instead of one per pass.
+D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate() const
 {
-    // Both entry points live in one file, so the cache key includes them.
-    const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
-    ComPtr<ID3DBlob> vs = m_resources.LoadShader(shaderFile, "VSMain", "vs_5_0");
-    ComPtr<ID3DBlob> ps = m_resources.LoadShader(shaderFile, "PSMain", "ps_5_0");
-
     // Offsets must match struct Vertex in Mesh.h exactly. Mismatches produce
     // no error - just a wrong picture.
-    const D3D12_INPUT_ELEMENT_DESC inputLayout[] = {
+    static const D3D12_INPUT_ELEMENT_DESC kInputLayout[] = {
         { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
@@ -202,48 +211,63 @@ void Renderer::CreatePipelineState()
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
-    D3D12_RASTERIZER_DESC rasterizer = {};
-    rasterizer.FillMode              = D3D12_FILL_MODE_SOLID;
-    rasterizer.CullMode              = D3D12_CULL_MODE_BACK; // drop back faces
-    rasterizer.FrontCounterClockwise = FALSE;                // clockwise = front
-    rasterizer.DepthClipEnable       = TRUE;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
+    desc.pRootSignature = m_sceneRootSignature.Get();
+    desc.SampleMask     = UINT_MAX;
 
-    D3D12_BLEND_DESC blend = {};
-    blend.RenderTarget[0].BlendEnable           = FALSE; // opaque for now
-    blend.RenderTarget[0].SrcBlend              = D3D12_BLEND_ONE;
-    blend.RenderTarget[0].DestBlend             = D3D12_BLEND_ZERO;
-    blend.RenderTarget[0].BlendOp               = D3D12_BLEND_OP_ADD;
-    blend.RenderTarget[0].SrcBlendAlpha         = D3D12_BLEND_ONE;
-    blend.RenderTarget[0].DestBlendAlpha        = D3D12_BLEND_ZERO;
-    blend.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
-    blend.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
+    desc.RasterizerState.FillMode              = D3D12_FILL_MODE_SOLID;
+    desc.RasterizerState.CullMode              = D3D12_CULL_MODE_BACK;
+    desc.RasterizerState.FrontCounterClockwise = FALSE; // clockwise = front
+    desc.RasterizerState.DepthClipEnable       = TRUE;
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC psoDesc = {};
-    psoDesc.pRootSignature  = m_rootSignature.Get();
-    psoDesc.VS              = { vs->GetBufferPointer(), vs->GetBufferSize() };
-    psoDesc.PS              = { ps->GetBufferPointer(), ps->GetBufferSize() };
-    psoDesc.BlendState      = blend;
-    psoDesc.SampleMask      = UINT_MAX;
-    psoDesc.RasterizerState = rasterizer;
+    desc.BlendState.RenderTarget[0].BlendEnable           = FALSE;
+    desc.BlendState.RenderTarget[0].SrcBlend              = D3D12_BLEND_ONE;
+    desc.BlendState.RenderTarget[0].DestBlend             = D3D12_BLEND_ZERO;
+    desc.BlendState.RenderTarget[0].BlendOp               = D3D12_BLEND_OP_ADD;
+    desc.BlendState.RenderTarget[0].SrcBlendAlpha         = D3D12_BLEND_ONE;
+    desc.BlendState.RenderTarget[0].DestBlendAlpha        = D3D12_BLEND_ZERO;
+    desc.BlendState.RenderTarget[0].BlendOpAlpha          = D3D12_BLEND_OP_ADD;
+    desc.BlendState.RenderTarget[0].RenderTargetWriteMask = D3D12_COLOR_WRITE_ENABLE_ALL;
 
     // LESS = keep the fragment closer to the camera.
-    psoDesc.DepthStencilState.DepthEnable    = TRUE;
-    psoDesc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
-    psoDesc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
-    psoDesc.DepthStencilState.StencilEnable  = FALSE;
-    psoDesc.DSVFormat                        = kDepthFormat;
+    desc.DepthStencilState.DepthEnable    = TRUE;
+    desc.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ALL;
+    desc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
+    desc.DepthStencilState.StencilEnable  = FALSE;
 
-    psoDesc.InputLayout           = { inputLayout, _countof(inputLayout) };
-    psoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-    psoDesc.NumRenderTargets      = 1;
-    // The PSO's formats must match the pass it is used in - and this PSO now
-    // draws into the scene target, not the back buffer.
-    psoDesc.RTVFormats[0]         = kSceneColorFormat;
-    psoDesc.SampleDesc.Count      = 1;
+    desc.InputLayout           = { kInputLayout, _countof(kInputLayout) };
+    desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
+
+    // The scene target's shape, not the window's.
+    desc.NumRenderTargets = 1;
+    desc.RTVFormats[0]    = kSceneColorFormat;
+    desc.DSVFormat        = kSceneDepthViewFormat;
+    desc.SampleDesc.Count = 1;
+
+    return desc;
+}
+
+// Nearly every pipeline setting baked into ONE immutable object: shaders,
+// vertex layout, rasterizer/blend/depth state, output formats. Validated
+// once here, cheap to switch at runtime.
+//
+// Only Opaque exists so far. Skybox, Transparent and ShadowDepth get built
+// here too as their steps land - the point of the role table is that adding
+// one is a few lines rather than a new member and a new call site.
+void Renderer::CreatePipelineStates()
+{
+    // Both entry points live in one file, so the cache key includes them.
+    const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
+    ComPtr<ID3DBlob> vs = m_resources.LoadShader(shaderFile, "VSMain", "vs_5_0");
+    ComPtr<ID3DBlob> ps = m_resources.LoadShader(shaderFile, "PSMain", "ps_5_0");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque = SceneShadedPsoTemplate();
+    opaque.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+    opaque.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
 
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
-                      &psoDesc, IID_PPV_ARGS(&m_pipelineState)),
-                  "CreateGraphicsPipelineState");
+                      &opaque, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Opaque)])),
+                  "CreateGraphicsPipelineState(Opaque)");
 }
 
 // The only safe order:
@@ -295,7 +319,7 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     // window - taking it from the swap chain would stretch the image by the
     // exact amount the panels occupy.
     const XMMATRIX proj = XMMatrixPerspectiveFovLH(
-        camera.fovY, m_sceneTarget->AspectRatio(), camera.nearZ, camera.farZ);
+        camera.fovY, m_sceneColor->AspectRatio(), camera.nearZ, camera.farZ);
 
     PassConstants constants;
     XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
@@ -356,33 +380,15 @@ void Renderer::UpdateObjectConstants(FrameResource& frame,
     }
 }
 
-// Pass 1: the world, into the offscreen target. Nothing here knows a window
-// exists.
-void Renderer::DrawScene(FrameResource& frame, const std::vector<DrawItem>& items)
+// State every geometry pass into the scene target needs. Extracted so that
+// adding a pass is choosing a role, not copying six bind calls that must
+// stay in sync.
+void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
 {
-    // The texture spends most of its life being sampled by ImGui; borrow it
-    // back to write into.
-    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
-        m_sceneTarget->ColorResource(),
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        D3D12_RESOURCE_STATE_RENDER_TARGET);
-    m_commandList->ResourceBarrier(1, &toRenderTarget);
-
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneTarget->RTV();
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneTarget->DSV();
-
-    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-    m_commandList->ClearRenderTargetView(rtvHandle, m_sceneTarget->ClearColor(),
-                                         0, nullptr);
-    // Depth must be cleared to 1.0 (far) every frame, or last frame's depths
-    // would reject this frame's pixels.
-    m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
-                                         1.0f, 0, 0, nullptr);
-
     // Command lists are stateless after Reset: root signature, PSO,
     // viewport/scissor, topology and buffers are set every frame.
-    m_commandList->SetGraphicsRootSignature(m_rootSignature.Get());
-    m_commandList->SetPipelineState(m_pipelineState.Get());
+    m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
+    m_commandList->SetPipelineState(m_pipelineStates[size_t(role)].Get());
 
     // Bound ONCE for the whole frame - the payoff of splitting the constant
     // buffers by update frequency.
@@ -391,12 +397,20 @@ void Renderer::DrawScene(FrameResource& frame, const std::vector<DrawItem>& item
 
     // Viewport and scissor come from the TARGET, not the window: this is what
     // makes the image fill the panel exactly.
-    const D3D12_VIEWPORT viewport = m_sceneTarget->Viewport();
-    const D3D12_RECT     scissor  = m_sceneTarget->ScissorRect();
+    const D3D12_VIEWPORT viewport = m_sceneColor->Viewport();
+    const D3D12_RECT     scissor  = m_sceneColor->ScissorRect();
     m_commandList->RSSetViewports(1, &viewport);
     m_commandList->RSSetScissorRects(1, &scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+}
 
+// One draw per item, with its per-object constants and texture.
+//
+// The index into items IS the index into the object constant buffer, which
+// is why anything that reorders draws (11.6's transparent sorting) has to
+// reorder the constants with them.
+void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& items)
+{
     const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
 
     for (size_t i = 0; i < items.size(); ++i)
@@ -423,20 +437,48 @@ void Renderer::DrawScene(FrameResource& frame, const std::vector<DrawItem>& item
         m_commandList->IASetIndexBuffer(&mesh.ibv);
         m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
     }
+}
+
+// Pass: the world, into the offscreen target. Nothing here knows a window
+// exists.
+void Renderer::DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items)
+{
+    // The texture spends most of its life being sampled by ImGui; borrow it
+    // back to write into.
+    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
+        m_sceneColor->ColorResource(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    m_commandList->ResourceBarrier(1, &toRenderTarget);
+
+    // Two separate objects, bound together as one attachment set.
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneColor->RTV();
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneDepth->DSV();
+
+    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+    m_commandList->ClearRenderTargetView(rtvHandle, m_sceneColor->ClearColor(),
+                                         0, nullptr);
+    // Depth must be cleared to 1.0 (far) every frame, or last frame's depths
+    // would reject this frame's pixels.
+    m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
+                                         1.0f, 0, 0, nullptr);
+
+    BindScenePass(frame, PsoRole::Opaque);
+    DrawItems(frame, items);
 
     // Hand it back to the pixel shader - the UI pass is about to sample it.
     // Miss this barrier and the picture is undefined, not merely stale.
     D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
-        m_sceneTarget->ColorResource(),
+        m_sceneColor->ColorResource(),
         D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     m_commandList->ResourceBarrier(1, &toShaderResource);
 }
 
-// Pass 2: the editor, into the back buffer. The scene appears here only as a
+// Pass: the editor, into the back buffer. The scene appears here only as a
 // texture inside an ImGui window - the back buffer no longer needs a depth
 // buffer at all.
-void Renderer::DrawOverlay()
+void Renderer::DrawOverlayPass()
 {
     ID3D12Resource* backBuffer = m_swapChain.CurrentBackBuffer();
 
@@ -489,11 +531,14 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     // idle, so this costs a full flush - but only on frames where the panel
     // actually changed size, i.e. while the user is dragging a splitter.
     if (m_requestedViewportWidth  != 0 &&
-        (m_requestedViewportWidth  != m_sceneTarget->Width() ||
-         m_requestedViewportHeight != m_sceneTarget->Height()))
+        (m_requestedViewportWidth  != m_sceneColor->Width() ||
+         m_requestedViewportHeight != m_sceneColor->Height()))
     {
         m_device.WaitForGpu();
-        m_sceneTarget->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
+        // Both halves of the attachment, together - a colour and depth pair
+        // of different sizes is an invalid render target.
+        m_sceneColor->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
+        m_sceneDepth->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
     }
 
     // Only now is it safe to overwrite this frame's constant buffers and
@@ -510,8 +555,17 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-    DrawScene(frame, items);
-    DrawOverlay();
+    // The frame, spelled out. Every pass Phase 11 adds appears in this list
+    // rather than inside another one, so the order stays readable:
+    //
+    //   Directional Shadow Depth  (11.4)
+    //   Opaque Scene
+    //   Skybox                    (11.2)
+    //   Transparent Scene         (11.6)
+    //   MSAA Resolve              (11.7)
+    //   ImGui Overlay
+    DrawOpaquePass(frame, items);
+    DrawOverlayPass();
 
     ThrowIfFailed(m_commandList->Close(), "CommandList Close");
 

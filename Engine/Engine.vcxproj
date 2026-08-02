@@ -162,6 +162,7 @@
     <ClCompile Include="Source\Game\Picking.cpp" />
     <ClCompile Include="Source\Game\Scene.cpp" />
     <ClCompile Include="Source\Game\Systems.cpp" />
+    <ClCompile Include="Source\Graphics\DepthTarget.cpp" />
     <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp" />
     <ClCompile Include="Source\Graphics\GraphicsDevice.cpp" />
     <ClCompile Include="Source\Graphics\Image.cpp" />
@@ -194,6 +195,7 @@
     <ClInclude Include="Source\Game\Picking.h" />
     <ClInclude Include="Source\Game\Scene.h" />
     <ClInclude Include="Source\Game\Systems.h" />
+    <ClInclude Include="Source\Graphics\DepthTarget.h" />
     <ClInclude Include="Source\Graphics\DescriptorAllocator.h" />
     <ClInclude Include="Source\Graphics\FrameResource.h" />
     <ClInclude Include="Source\Graphics\GraphicsDevice.h" />

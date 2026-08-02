@@ -103,7 +103,7 @@ Directional Shadow Depth
 | 단계 | 상태 | 주제 | 핵심 학습 | 규모(예상) | 태그 |
 |------|------|------|-----------|-----------|------|
 | 11.0 | 완료 | 메시 AABB + 기존 엔티티 클릭 선택 | 로컬/월드 공간, ray-AABB | 중 | - |
-| 11.1 | 예정 | 깊이 타깃 + 복수 패스/PSO 기반 | attachment 역할, PSO 전환 | 중 | - |
+| 11.1 | 완료 | 깊이 타깃 + 복수 패스/PSO 기반 | attachment 역할, PSO 전환 | 중 | - |
 | 11.2 | 예정 | 6면 PNG 큐브맵 + 스카이박스 | texture array, `TextureCube` | 대 | - |
 | 11.3 | 예정 | 탄젠트 생성 + 노멀 매핑 | 탄젠트 공간, TBN | 대 | - |
 | 11.4 | 예정 | directional shadow depth pass | depth-only 렌더링, light space | 대 | - |
@@ -253,15 +253,15 @@ ROADMAP의 AABB 트리거는 이미 발화했다. 현재 뷰포트 클릭은 선
 
 **작업 항목**
 
-- [ ] `DepthTarget` 클래스 추가: resource, DSV, 선택적 SRV, 크기, sample count
-- [ ] 기존 `RenderTarget`의 깊이 리소스를 `DepthTarget`으로 교체
-- [ ] scene depth는 DSV 전용, shadow depth는 DSV+SRV가 가능하도록 생성 옵션 분리
-- [ ] shader-readable depth는 typeless resource + DSV/SRV view format 조합 사용
-- [ ] PSO 생성을 공통 descriptor를 복사·수정하는 helper로 정리
-- [ ] 단일 `m_pipelineState`를 역할별 PSO 저장 구조로 변경
-- [ ] viewport/scissor, object CB, mesh buffer 바인딩 공통 코드 추출
-- [ ] 최종 패스 순서가 드러나는 명시적 함수 골격 마련
-- [ ] 현 단계에서는 opaque scene + ImGui만 실행해 이전 결과 유지
+- [o] `DepthTarget` 클래스 추가: resource, DSV, 선택적 SRV, 크기, sample count
+- [o] 기존 `RenderTarget`의 깊이 리소스를 `DepthTarget`으로 교체
+- [o] scene depth는 DSV 전용, shadow depth는 DSV+SRV가 가능하도록 생성 옵션 분리
+- [o] shader-readable depth는 typeless resource + DSV/SRV view format 조합 사용
+- [o] PSO 생성을 공통 descriptor를 복사·수정하는 helper로 정리
+- [o] 단일 `m_pipelineState`를 역할별 PSO 저장 구조로 변경
+- [o] viewport/scissor, object CB, mesh buffer 바인딩 공통 코드 추출
+- [o] 최종 패스 순서가 드러나는 명시적 함수 골격 마련
+- [o] 현 단계에서는 opaque scene + ImGui만 실행해 이전 결과 유지
 
 **설계 결정**
 
@@ -291,6 +291,49 @@ ROADMAP의 AABB 트리거는 이미 발화했다. 현재 뷰포트 클릭은 선
 
 **완료 기준**: 기존 씬 외형과 조작은 그대로이고, 색상 없이 DSV만 소유할 수 있는
 타입과 역할별 PSO를 추가할 자리가 생긴다.
+
+**결과**
+
+- `Graphics/DepthTarget` 신설. `RenderTarget`은 **색상만** 남았고, 깊이는
+  패스가 둘을 조합해 쓴다. 하나의 클래스에 `hasColor` 플래그를 다는 대신
+  타입을 나눈 계획대로다
+- **하나의 깊이 버퍼에 포맷 이름이 셋이다.** 샘플링하지 않는 깊이는 그냥
+  `D32_FLOAT`여도 되지만, 샘플링할 깊이는 그럴 수 없다 — depth-stencil
+  포맷의 SRV는 무효다. 그래서 리소스를 `R32_TYPELESS`(해석 없는 비트)로 만들고
+  DSV는 `D32_FLOAT`, SRV는 `R32_FLOAT`로 각자 읽는 법을 지정한다.
+  샘플링하지 않을 때는 `DENY_SHADER_RESOURCE`까지 붙여 드라이버가 압축 레이아웃을
+  쓸 수 있게 한다
+- `SceneShadedPsoTemplate()` — 모든 씬 PSO가 공유하는 상태를 한곳에.
+  특히 `RTVFormats`/`DSVFormat`/`SampleDesc`는 실제 attachment와 어긋나면
+  디버그 레이어 에러이거나 조용한 draw 실패라, 맞출 곳이 패스마다가 아니라
+  한 곳이어야 한다. 11.7의 1x/4x variant도 이 템플릿 한 줄로 갈린다
+- `m_pipelineState` 하나 → `PsoRole { Opaque, Skybox, Transparent, ShadowDepth }`
+  로 인덱싱하는 배열. 아직 없는 셰이더의 슬롯은 null이고, 해당 단계가 채운다
+- `BindScenePass(frame, role)` / `DrawItems(frame, items)`로 공통 바인딩을
+  뽑았다. 패스를 추가하는 일이 "역할을 고르는 것"이 되고, 여섯 개의 bind 호출을
+  복사해 동기화를 유지하는 일이 아니게 된다
+- `Render()`가 최종 패스 순서를 주석으로 나열한다. 각 패스는 자기 배리어를
+  자기가 책임진다 — Render Graph도 리소스 상태 추적기도 아직 만들지 않는다
+- `DSVFormat`은 **뷰 포맷**이라는 점을 상수 이름(`kSceneDepthViewFormat`)에
+  남겼다. 리소스 포맷과 갈리는 순간이 곧 온다
+
+**검증**
+
+1. **리팩터 전후 픽셀 비교** — 애니메이션이 없는 정적 씬(`Spin` 없음 →
+   `SpinSystem`도 `LightOrbitSystem`도 아무것도 못 움직인다)을 만들어 같은
+   카메라에서 캡처했다.
+
+   | | |
+   |---|---|
+   | 비교한 뷰포트 픽셀 | 317,460 |
+   | 다른 픽셀 | **0** |
+   | 최대 채널 합 차이 | **0** |
+
+   패널 영역은 제외했다 — 프레임 타임 그래프와 fps는 매 실행 달라지고
+   렌더러가 바뀌었는지에 대해 아무것도 말해주지 않는다.
+2. 뷰포트 그립 드래그(660×500 → 확대 → 축소), 접기/펼치기, OS 창 리사이즈,
+   정상 종료를 연속 수행 — 크래시·lifetime 오류 없음, 종료 코드 0
+3. 디버그 레이어 경고·에러 0건, Debug/Release 빌드
 
 ---
 

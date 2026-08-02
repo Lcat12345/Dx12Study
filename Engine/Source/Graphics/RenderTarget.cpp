@@ -9,27 +9,24 @@ using Microsoft::WRL::ComPtr;
 
 RenderTarget::RenderTarget(GraphicsDevice& device,
                            DescriptorAllocator& rtvAllocator,
-                           DescriptorAllocator& dsvAllocator,
                            DescriptorAllocator& srvAllocator,
                            UINT width, UINT height,
-                           DXGI_FORMAT colorFormat, DXGI_FORMAT depthFormat,
+                           DXGI_FORMAT colorFormat,
                            const float clearColor[4])
     : m_device(device)
     , m_width(std::max(width, 1u))
     , m_height(std::max(height, 1u))
     , m_colorFormat(colorFormat)
-    , m_depthFormat(depthFormat)
 {
     for (int i = 0; i < 4; ++i)
     {
         m_clearColor[i] = clearColor[i];
     }
 
-    // Taken once for the lifetime of this target. Resizing swaps the
-    // textures underneath but keeps the same three slots, so anyone holding
-    // the SRV handle (ImGui) stays valid.
+    // Taken once for the lifetime of this target. Resizing swaps the texture
+    // underneath but keeps the same slots, so anyone holding the SRV handle
+    // (ImGui) stays valid.
     m_rtv = rtvAllocator.Allocate();
-    m_dsv = dsvAllocator.Allocate();
     m_srv = srvAllocator.Allocate();
 
     CreateResources();
@@ -40,7 +37,6 @@ void RenderTarget::CreateResources()
     D3D12_HEAP_PROPERTIES heapProps = {};
     heapProps.Type = D3D12_HEAP_TYPE_DEFAULT; // GPU-local
 
-    // --- colour: render target AND shader resource ---
     D3D12_RESOURCE_DESC colorDesc = {};
     colorDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
     colorDesc.Width            = m_width;
@@ -75,23 +71,6 @@ void RenderTarget::CreateResources()
     srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels     = 1;
     m_device.Device()->CreateShaderResourceView(m_color.Get(), &srvDesc, m_srv.cpu);
-
-    // --- depth ---
-    D3D12_RESOURCE_DESC depthDesc = colorDesc;
-    depthDesc.Format = m_depthFormat;
-    depthDesc.Flags  = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
-
-    D3D12_CLEAR_VALUE depthClear = {};
-    depthClear.Format             = m_depthFormat;
-    depthClear.DepthStencil.Depth = 1.0f; // 1.0 = farthest
-
-    ThrowIfFailed(m_device.Device()->CreateCommittedResource(
-                      &heapProps, D3D12_HEAP_FLAG_NONE, &depthDesc,
-                      D3D12_RESOURCE_STATE_DEPTH_WRITE,
-                      &depthClear, IID_PPV_ARGS(&m_depth)),
-                  "CreateCommittedResource(RenderTarget depth)");
-
-    m_device.Device()->CreateDepthStencilView(m_depth.Get(), nullptr, m_dsv.cpu);
 }
 
 void RenderTarget::Resize(UINT width, UINT height)
@@ -109,10 +88,9 @@ void RenderTarget::Resize(UINT width, UINT height)
     m_width  = width;
     m_height = height;
 
-    // Dropping the old textures here is only safe because the caller
-    // flushed the GPU first.
+    // Dropping the old texture here is only safe because the caller flushed
+    // the GPU first.
     m_color.Reset();
-    m_depth.Reset();
     CreateResources();
 }
 

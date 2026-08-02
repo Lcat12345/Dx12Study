@@ -5,6 +5,7 @@
 #include "Graphics/SwapChain.h"
 #include "Graphics/FrameResource.h"
 #include "Graphics/DescriptorAllocator.h"
+#include "Graphics/DepthTarget.h"
 #include "Graphics/RenderTarget.h"
 #include "Graphics/ResourceManager.h"
 #include "Graphics/RenderData.h"
@@ -52,12 +53,12 @@ public:
 
     // The scene texture, as ImGui wants it. Returned as a plain integer so
     // no D3D type leaks into the UI code.
-    uint64_t SceneTextureId() const { return m_sceneTarget->SRV().ptr; }
+    uint64_t SceneTextureId() const { return m_sceneColor->SRV().ptr; }
 
     // The aspect the scene was last drawn with. Picking has to unproject
     // through the same projection the renderer built, so it needs this
     // rather than the window's shape.
-    float SceneAspectRatio() const { return m_sceneTarget->AspectRatio(); }
+    float SceneAspectRatio() const { return m_sceneColor->AspectRatio(); }
 
     // How many DrawItems Render() will accept before throwing. The editor
     // shows it next to the live count so the ceiling is visible before it
@@ -76,18 +77,48 @@ public:
     bool IsTearingSupported() const { return m_device.IsTearingSupported(); }
 
 private:
+    // What a pipeline state is FOR. Phase 11 adds passes that draw the same
+    // geometry with different state; naming the role keeps "which PSO" from
+    // becoming a comment.
+    //
+    // Skybox, Transparent and ShadowDepth have no shaders yet - each arrives
+    // with the step that needs it, and until then its slot stays null.
+    enum class PsoRole
+    {
+        Opaque,
+        Skybox,
+        Transparent,
+        ShadowDepth,
+        Count
+    };
+
     void CreateCommandObjects();
     void CreateConstantBuffers();
     void CreateRootSignature();
-    void CreatePipelineState();
+    void CreatePipelineStates();
+
+    // The settings every scene PSO shares: input layout, root signature,
+    // topology, and the scene target's formats. Each role starts from this
+    // and changes only what makes it that role - so a format mismatch is one
+    // fix rather than four.
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC SceneShadedPsoTemplate() const;
 
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                              const LightingData& lighting);
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
 
-    void DrawScene(FrameResource& frame, const std::vector<DrawItem>& items);
-    void DrawOverlay();
+    // --- the passes, in the order they run ---
+    // Written out rather than hidden behind a render graph: at this many
+    // passes the order IS the documentation, and each one owns its own
+    // barriers.
+    void DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items);
+    void DrawOverlayPass();
+
+    // Shared setup every geometry pass needs, so adding a pass does not mean
+    // copying six bind calls.
+    void BindScenePass(FrameResource& frame, PsoRole role);
+    void DrawItems(FrameResource& frame, const std::vector<DrawItem>& items);
 
     // Declaration order IS destruction order, reversed: the device is first
     // so everything created from it dies before it does.
@@ -105,8 +136,10 @@ private:
     DescriptorAllocator m_dsvAllocator;
     DescriptorAllocator m_srvAllocator;
 
-    // The scene is drawn here, never straight to the back buffer.
-    std::unique_ptr<RenderTarget> m_sceneTarget;
+    // The scene is drawn here, never straight to the back buffer. Colour and
+    // depth are separate objects that this pass happens to combine.
+    std::unique_ptr<RenderTarget> m_sceneColor;
+    std::unique_ptr<DepthTarget>  m_sceneDepth;
     UINT m_requestedViewportWidth  = 0;
     UINT m_requestedViewportHeight = 0;
 
@@ -118,8 +151,13 @@ private:
     FrameResource m_frames[kFramesInFlight];
     UINT          m_currentFrame = 0;
 
-    Microsoft::WRL::ComPtr<ID3D12RootSignature> m_rootSignature;
-    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_pipelineState;
+    // Shared by the scene passes for as long as they need the same inputs.
+    // Not a rule: a pass whose contract genuinely differs - shadow depth
+    // wants no textures at all - may bring its own rather than pad this one.
+    Microsoft::WRL::ComPtr<ID3D12RootSignature> m_sceneRootSignature;
+
+    // Indexed by PsoRole. Null until the step that introduces that pass.
+    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_pipelineStates[size_t(PsoRole::Count)];
 
     // Declared after the allocators it borrows a slot from, so it is
     // destroyed before them.

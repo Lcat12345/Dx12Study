@@ -57,6 +57,9 @@
     <ClCompile Include="Source\Game\Systems.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Graphics\DepthTarget.cpp">
+      <Filter>Graphics</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp">
       <Filter>Graphics</Filter>
     </ClCompile>
@@ -148,6 +151,9 @@
     </ClInclude>
     <ClInclude Include="Source\Game\Systems.h">
       <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Graphics\DepthTarget.h">
+      <Filter>Graphics</Filter>
     </ClInclude>
     <ClInclude Include="Source\Graphics\DescriptorAllocator.h">
       <Filter>Graphics</Filter>
