@@ -33,12 +33,6 @@ std::filesystem::path GetAssetDir();
 // first save.
 std::filesystem::path GetSceneDir();
 
-// Paths are wide (a Korean folder name has to survive the round trip);
-// ImGui and the scene file format are UTF-8. These are the only two places
-// the two worlds meet.
-std::string  ToUtf8(const std::wstring& text);
-std::wstring ToWide(const std::string& text);
-
 // Upload-heap buffer: CPU-writable, GPU-readable. Pass initData to fill it
 // on creation, or nullptr to leave it empty (for buffers written per frame).
 Microsoft::WRL::ComPtr<ID3D12Resource> CreateUploadBuffer(

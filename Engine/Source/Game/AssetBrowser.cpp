@@ -1,6 +1,7 @@
 #include "Game/AssetBrowser.h"
 
 #include "Core/Common.h"
+#include "Core/TextEncoding.h"
 #include "Graphics/Mesh.h"
 
 #include "imgui.h"

@@ -151,6 +151,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="Source\Core\Common.cpp" />
+    <ClCompile Include="Source\Core\TextEncoding.cpp" />
     <ClCompile Include="Source\Core\Engine.cpp" />
     <ClCompile Include="Source\Core\Window.cpp" />
     <ClCompile Include="Source\Game\BuildWorld.cpp" />
@@ -181,6 +182,7 @@
   <ItemGroup>
     <ClInclude Include="Source\Core\Common.h" />
     <ClInclude Include="Source\Core\Engine.h" />
+    <ClInclude Include="Source\Core\TextEncoding.h" />
     <ClInclude Include="Source\Core\Timer.h" />
     <ClInclude Include="Source\Core\Window.h" />
     <ClInclude Include="Source\Core\World.h" />

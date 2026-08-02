@@ -1,6 +1,7 @@
 #include "Game/Scene.h"
 
 #include "Core/Common.h"
+#include "Core/TextEncoding.h"
 #include "Game/Components.h"
 
 #include <cstdio>
@@ -78,8 +79,8 @@ namespace
     }
 }
 
-bool SaveScene(World& world, const ResourceManager& resources,
-               const std::filesystem::path& path, std::string& outError)
+static bool SaveSceneImpl(World& world, const ResourceManager& resources,
+                          const std::filesystem::path& path, std::string& outError)
 {
     std::error_code error;
     std::filesystem::create_directories(path.parent_path(), error);
@@ -89,7 +90,14 @@ bool SaveScene(World& world, const ResourceManager& resources,
     // write error or a crash halfway through would destroy the last good
     // save - the one thing a save must never do. The temporary lives in the
     // same directory so the move is a rename within one volume, not a copy.
-    const std::filesystem::path tempPath = path.string() + ".tmp";
+    //
+    // Built by APPENDING to the path, never through path::string(): that
+    // converts the native UTF-16 to the ANSI code page and throws on
+    // anything it cannot represent - a Korean scene name on an English
+    // Windows would have taken the process down here, in the one function
+    // whose whole job is not to lose the file.
+    std::filesystem::path tempPath = path;
+    tempPath += L".tmp";
 
     std::ofstream file(tempPath, std::ios::binary);
     if (!file)
@@ -190,6 +198,27 @@ bool SaveScene(World& world, const ResourceManager& resources,
         return false;
     }
     return true;
+}
+
+bool SaveScene(World& world, const ResourceManager& resources,
+               const std::filesystem::path& path, std::string& outError)
+{
+    // The same backstop LoadScene has. Losing a save is bad; losing the
+    // whole session because a save failed is worse.
+    try
+    {
+        return SaveSceneImpl(world, resources, path, outError);
+    }
+    catch (const std::exception& e)
+    {
+        outError = e.what();
+        return false;
+    }
+    catch (...)
+    {
+        outError = "unknown error while saving";
+        return false;
+    }
 }
 
 static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& resources,

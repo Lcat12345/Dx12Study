@@ -1,6 +1,7 @@
 #include "Graphics/ResourceManager.h"
 
 #include "Core/Common.h"
+#include "Core/TextEncoding.h"
 #include "Graphics/GraphicsDevice.h"
 #include "Graphics/Image.h"
 #include "Graphics/SwapChain.h"
@@ -348,7 +349,7 @@ ComPtr<ID3DBlob> ResourceManager::LoadShader(const std::filesystem::path& path,
     ++m_stats.shaderRequests;
 
     // One .hlsl holds several entry points, so the key has to include them.
-    const std::string key = path.string() + "|" + entryPoint + "|" + target;
+    const std::string key = ToUtf8(path.wstring()) + "|" + entryPoint + "|" + target;
     auto it = m_shaderCache.find(key);
     if (it != m_shaderCache.end())
     {
@@ -359,7 +360,7 @@ ComPtr<ID3DBlob> ResourceManager::LoadShader(const std::filesystem::path& path,
     // which is painful to diagnose - check first and name the path.
     if (!std::filesystem::exists(path))
     {
-        throw std::runtime_error("Shader file not found:\n" + path.string());
+        throw std::runtime_error("Shader file not found:\n" + ToUtf8(path.wstring()));
     }
 
     UINT flags = 0;

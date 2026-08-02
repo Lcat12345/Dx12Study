@@ -1,5 +1,7 @@
 #include "Loaders/ObjLoader.h"
 
+#include "Core/TextEncoding.h"
+
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -137,13 +139,13 @@ MeshData LoadObj(const std::filesystem::path& path)
 {
     if (!std::filesystem::exists(path))
     {
-        throw std::runtime_error("Model file not found:\n" + path.string());
+        throw std::runtime_error("Model file not found:\n" + ToUtf8(path.wstring()));
     }
 
     std::ifstream file(path);
     if (!file)
     {
-        throw std::runtime_error("Could not open model file:\n" + path.string());
+        throw std::runtime_error("Could not open model file:\n" + ToUtf8(path.wstring()));
     }
 
     // The three source lists, each with its own numbering.
@@ -247,7 +249,7 @@ MeshData LoadObj(const std::filesystem::path& path)
 
     if (mesh.vertices.empty() || mesh.indices.empty())
     {
-        throw std::runtime_error("No geometry found in:\n" + path.string());
+        throw std::runtime_error("No geometry found in:\n" + ToUtf8(path.wstring()));
     }
 
     if (!fileHasNormals)

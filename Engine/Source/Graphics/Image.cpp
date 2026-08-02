@@ -1,4 +1,6 @@
 #include "Graphics/Image.h"
+
+#include "Core/TextEncoding.h"
 #include "Core/Common.h"
 
 #include <wincodec.h>
@@ -13,7 +15,7 @@ ImageData LoadImageRGBA(const std::filesystem::path& path)
 {
     if (!std::filesystem::exists(path))
     {
-        throw std::runtime_error("Texture file not found:\n" + path.string());
+        throw std::runtime_error("Texture file not found:\n" + ToUtf8(path.wstring()));
     }
 
     ComPtr<IWICImagingFactory> factory;

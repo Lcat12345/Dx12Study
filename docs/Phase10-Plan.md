@@ -598,6 +598,36 @@ entity
    `getline` 루프가 끝난 뒤 `file.bad()`도 확인한다. EOF와 I/O 오류는
    다른 일이고, 후자면 절반만 읽은 월드가 현재 씬을 대체할 뻔했다.
    **이것만은 재현하지 못했다** — 읽는 도중 실패하는 장치가 필요하다.
+
+7. **경로를 narrow로 바꾸지 않는다** — 임시 경로를 `path.string() + ".tmp"`로
+   만들고 있었다. 윈도우에서 `path`의 네이티브 타입은 `wchar_t`이고
+   `string()`은 **ANSI 코드 페이지로 변환하며 표현 못 하는 문자에서
+   `std::system_error`를 던진다.** 저장 함수에는 백스톱이 없었으니 앱이
+   그대로 종료된다 — 하필 파일을 잃지 않는 것이 유일한 임무인 함수에서.
+
+   ```cpp
+   std::filesystem::path tempPath = path;   // 변환 없음
+   tempPath += L".tmp";
+   ```
+
+   격리 재현 (CP949):
+
+   | | 결과 |
+   |---|---|
+   | `path.string() + ".tmp"` | **THREW** `std::system_error: No mapping for the Unicode character exists in the target multi-byte code page.` |
+   | `path += L".tmp"` | 정상, 같은 디렉터리, `.tmp`로 끝남 |
+
+   **한글로는 재현되지 않는다** — CP949에 한글은 있다. 이모지처럼 코드
+   페이지 밖의 문자라야 터진다. "한글 경로 주의"라고 적어둔 것만으로는
+   부족했던 셈이다.
+
+   같은 부류를 다섯 곳 더 고쳤다: ObjLoader 3곳, Image 1곳,
+   ResourceManager 2곳이 전부 `path.string()`으로 **에러 메시지를 만들고**
+   있었다 — 원래 에러를 인코딩 에러로 바꿔치기하는 자리다. 그중 셰이더
+   캐시 키는 에러 경로가 아니라 **시작할 때마다 지나가는 길**이라, 프로젝트
+   경로에 그런 문자가 하나만 있어도 기동 즉시 종료였다. `ToUtf8`/`ToWide`를
+   `Core/TextEncoding`으로 빼서(로더가 d3d12.h까지 끌어올 이유는 없다)
+   전부 그것을 쓰게 했다. `SaveScene`에도 `LoadScene`과 같은 백스톱을 뒀다.
 4. 디버그 레이어 메시지 0건, Debug/Release 종료 코드 0
 
 **테스트가 잡은 결함**: 위 실패 테스트를 처음 돌렸을 때 두 파일 **모두**

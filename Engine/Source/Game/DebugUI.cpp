@@ -8,6 +8,7 @@
 #include "Game/Systems.h"
 
 #include "Core/Common.h"
+#include "Core/TextEncoding.h"
 
 #include "imgui.h"
 
