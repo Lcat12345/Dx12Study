@@ -197,3 +197,117 @@ MeshData MakeFloorMeshData(float halfExtent, float uvTiling)
     return MeshData{ std::vector<Vertex>(std::begin(vertices), std::end(vertices)),
                      std::vector<uint32_t>(std::begin(indices), std::end(indices)) };
 }
+
+MeshData MakeSphereMeshData(float radius, UINT slices, UINT stacks)
+{
+    slices = std::max(slices, 3u);
+    stacks = std::max(stacks, 2u);
+
+    MeshData mesh;
+    mesh.vertices.reserve(size_t(slices + 1) * (stacks + 1));
+
+    // A grid in (stack, slice). Both edges are duplicated - slice 0 and
+    // slice `slices` are the same place with u = 0 and u = 1 - because a
+    // vertex carries one uv and the seam needs both.
+    for (UINT stack = 0; stack <= stacks; ++stack)
+    {
+        const float phi    = XM_PI * float(stack) / float(stacks); // 0 = north
+        const float sinPhi = std::sin(phi);
+        const float cosPhi = std::cos(phi);
+
+        for (UINT slice = 0; slice <= slices; ++slice)
+        {
+            const float theta = XM_2PI * float(slice) / float(slices);
+
+            Vertex vertex;
+            vertex.normal   = { sinPhi * std::cos(theta), cosPhi, sinPhi * std::sin(theta) };
+            vertex.position = { vertex.normal.x * radius,
+                                vertex.normal.y * radius,
+                                vertex.normal.z * radius };
+            // v = 0 at the north pole, matching D3D's top-left uv origin.
+            vertex.uv = { float(slice) / float(slices), float(stack) / float(stacks) };
+            mesh.vertices.push_back(vertex);
+        }
+    }
+
+    // Same corner order as the cube: top-left, top-right, bottom-right,
+    // bottom-left AS SEEN FROM OUTSIDE. Increasing theta moves right and
+    // increasing phi moves down from that viewpoint, so the grid indices map
+    // straight onto it.
+    //
+    // The two rows touching the poles collapse to a point, making those
+    // triangles degenerate. The rasterizer discards them; keeping them costs
+    // nothing and keeps the loop free of pole special cases.
+    const UINT rowStride = slices + 1;
+    for (UINT stack = 0; stack < stacks; ++stack)
+    {
+        for (UINT slice = 0; slice < slices; ++slice)
+        {
+            const uint32_t topLeft     = stack * rowStride + slice;
+            const uint32_t topRight    = topLeft + 1;
+            const uint32_t bottomLeft  = topLeft + rowStride;
+            const uint32_t bottomRight = bottomLeft + 1;
+
+            mesh.indices.insert(mesh.indices.end(),
+                                { topLeft, topRight, bottomRight,
+                                  topLeft, bottomRight, bottomLeft });
+        }
+    }
+    return mesh;
+}
+
+MeshData MakeTorusMeshData(float majorRadius, float minorRadius,
+                           UINT majorSegments, UINT minorSegments)
+{
+    majorSegments = std::max(majorSegments, 3u);
+    minorSegments = std::max(minorSegments, 3u);
+
+    MeshData mesh;
+    mesh.vertices.reserve(size_t(majorSegments + 1) * (minorSegments + 1));
+
+    // alpha runs around the RING (in the XY plane), beta around the TUBE.
+    for (UINT major = 0; major <= majorSegments; ++major)
+    {
+        const float alpha = XM_2PI * float(major) / float(majorSegments);
+        const float cosA  = std::cos(alpha);
+        const float sinA  = std::sin(alpha);
+
+        for (UINT minor = 0; minor <= minorSegments; ++minor)
+        {
+            const float beta = XM_2PI * float(minor) / float(minorSegments);
+            const float cosB = std::cos(beta);
+            const float sinB = std::sin(beta);
+
+            Vertex vertex;
+            // Outward from the tube's centre line: cosB along the ring's own
+            // radial direction, sinB along the ring's axis (Z here).
+            vertex.normal   = { cosB * cosA, cosB * sinA, sinB };
+            vertex.position = { (majorRadius + minorRadius * cosB) * cosA,
+                                (majorRadius + minorRadius * cosB) * sinA,
+                                minorRadius * sinB };
+            vertex.uv = { float(major) / float(majorSegments),
+                          float(minor) / float(minorSegments) };
+            mesh.vertices.push_back(vertex);
+        }
+    }
+
+    // Seen from outside, increasing BETA moves right and increasing ALPHA
+    // moves UP - the opposite of the sphere, where the second parameter went
+    // down. So the row that plays "top" is major + 1, not major.
+    const UINT rowStride = minorSegments + 1;
+    for (UINT major = 0; major < majorSegments; ++major)
+    {
+        for (UINT minor = 0; minor < minorSegments; ++minor)
+        {
+            const uint32_t bottomLeft  = major * rowStride + minor;
+            const uint32_t bottomRight = bottomLeft + 1;
+            const uint32_t topLeft     = bottomLeft + rowStride;
+            const uint32_t topRight    = topLeft + 1;
+
+            mesh.indices.insert(mesh.indices.end(),
+                                { topLeft, topRight, bottomRight,
+                                  topLeft, bottomRight, bottomLeft });
+        }
+    }
+    return mesh;
+}

@@ -134,3 +134,21 @@ MeshData MakePyramidMeshData();
 
 // One big quad. uvTiling > 1 repeats the texture (sampler is set to WRAP).
 MeshData MakeFloorMeshData(float halfExtent, float uvTiling);
+
+// A UV sphere: rings of quads from pole to pole.
+//
+// The default scene needs at least one CURVED surface. Cube, pyramid and
+// floor are all flat, and a flat surface cannot show what smooth normals do
+// - the specular highlight just lights a whole facet at once. This is also
+// the shape normal mapping and shadows are worth looking at.
+//
+// Normals are the normalised position, which is what makes a sphere the
+// cheapest possible smooth-shading test.
+MeshData MakeSphereMeshData(float radius, UINT slices, UINT stacks);
+
+// A torus standing UPRIGHT - its ring lies in the XY plane.
+//
+// Deliberately not flat in XZ: spinning a flat torus about Y is
+// rotationally symmetric and looks frozen. Upright, the rotation shows.
+MeshData MakeTorusMeshData(float majorRadius, float minorRadius,
+                           UINT majorSegments, UINT minorSegments);

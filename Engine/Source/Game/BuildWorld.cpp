@@ -69,15 +69,20 @@ void BuildWorld(ResourceManager& resources, World& world)
     // ResolveMesh, not AddMesh: the recipe behind "#floor" now lives in the
     // ResourceManager so that a saved scene naming it rebuilds the SAME
     // geometry. Two definitions of "#floor" would round-trip to two shapes.
+    // EVERY mesh here is procedural, and that is the point: the scene the
+    // engine builds by default must not depend on a file.
+    //
+    // The .obj models used to live here, but .gitignore excludes *.obj (a
+    // compiler-output rule that catches 3D models too), so they exist only
+    // on the machine that downloaded them. A default scene that dies when an
+    // untracked file is missing is a default scene that does not work - and
+    // it did exactly that today, exiting with code -1 before showing a
+    // window. Loading a model is now the asset browser's job.
     const MeshHandle floorMesh   = resources.ResolveMesh(L"#floor");
     const MeshHandle cubeMesh    = resources.ResolveMesh(L"#cube");
     const MeshHandle pyramidMesh = resources.ResolveMesh(L"#pyramid");
-    const MeshHandle sphereMesh  = resources.LoadMesh(L"Sphere.obj");
-    const MeshHandle torusMesh   = resources.LoadMesh(L"Torus.obj");
-    // Spelled exactly as the files are on disk. Windows would open
-    // "Sphere.OBJ" just as happily, but the resource cache keys on the
-    // STRING - and the asset browser asks for the on-disk spelling, so a
-    // mismatch would load the same geometry twice into two GPU buffers.
+    const MeshHandle sphereMesh  = resources.ResolveMesh(L"#sphere");
+    const MeshHandle torusMesh   = resources.ResolveMesh(L"#torus");
 
     // --- floor: rough and wide, barely any highlight ---
     Material floorMaterial;
@@ -140,8 +145,10 @@ void BuildWorld(ResourceManager& resources, World& world)
     SpawnMesh(world, "Pyramid_squashed", pyramidMesh, pyramidMaterial,
               { { 6.0f, 0.9f, -13.0f }, { 0, 0, 0 }, { 4.0f, 0.8f, 4.0f } });
 
-    // --- loaded models: normals come from the file, so the same shader
-    //     that flat-shades the cube produces a continuous gradient ---
+    // --- curved surfaces: their normals vary across each triangle, so the
+    //     same shader that flat-shades the cube produces a continuous
+    //     gradient here. Without one of these the scene has no smooth
+    //     shading to look at at all ---
     Material sphereMaterial;
     sphereMaterial.texture       = resources.LoadTexture(L"Crate.png");
     sphereMaterial.specularColor = { 0.7f, 0.7f, 0.7f };
