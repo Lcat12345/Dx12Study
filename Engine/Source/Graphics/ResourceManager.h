@@ -35,6 +35,16 @@ struct TextureHandle
     bool IsValid() const { return index != kInvalid; }
 };
 
+// A separate type from TextureHandle on purpose. A cube SRV and a 2D SRV are
+// different view dimensions, and binding one where the shader declares the
+// other is a class of bug the compiler can catch here instead.
+struct CubeTextureHandle
+{
+    static constexpr uint32_t kInvalid = uint32_t(-1);
+    uint32_t index = kInvalid;
+    bool IsValid() const { return index != kInvalid; }
+};
+
 // Owns every loaded asset for the lifetime of the app. Loading the same path
 // twice returns the same handle and does no work the second time.
 class ResourceManager
@@ -84,6 +94,22 @@ public:
     // A 1x1 white texel, so a material that names no image still has
     // something to sample. Multiplying the albedo by white leaves it alone.
     TextureHandle DefaultTexture() const { return m_defaultTexture; }
+
+    // --- cube textures ---
+    // 'name' is a LOGICAL name, not a path: "Test" resolves to the six faces
+    // under Assets/Skyboxes/Test/. The scene file stores that one name, so a
+    // skybox is one asset rather than six coincidentally related files.
+    //
+    // Throws when a face is missing, or when the six are not all square and
+    // the same size - a cube map with mismatched faces has no meaning.
+    CubeTextureHandle LoadCubeTexture(const std::wstring& name);
+    CubeTextureHandle FindCubeTexture(const std::wstring& name) const;
+
+    DescriptorHandle     CubeTextureSRV(CubeTextureHandle handle) const;
+    const std::wstring&  CubeTextureName(CubeTextureHandle handle) const;
+
+    // The face order D3D12 expects, as subresource indices 0..5.
+    static const wchar_t* const kCubeFaceSuffixes[6];
 
     DescriptorHandle TextureSRV(TextureHandle handle) const;
 
@@ -142,6 +168,11 @@ private:
 
     std::vector<Mesh>    m_meshes;
     std::vector<Texture> m_textures;
+    // Same shape as a 2D texture, different view. Kept in its own list so a
+    // handle of one kind can never index the other.
+    std::vector<Texture> m_cubeTextures;
+    std::vector<std::wstring> m_cubeTextureNames;
+    std::unordered_map<std::wstring, CubeTextureHandle> m_cubeTextureCache;
 
     // Parallel to the two vectors above: the canonical name each was
     // registered under, so serialization can go from handle back to name.

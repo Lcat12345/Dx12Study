@@ -29,6 +29,10 @@ struct ObjectConstants // b0 - written once per object per frame
 struct PassConstants // b1 - written once per frame
 {
     DirectX::XMFLOAT4X4 viewProj;
+    // View-projection with the camera's translation stripped out. The skybox
+    // uses it so the background rotates with the camera but never gets
+    // nearer - which is what "infinitely far away" looks like.
+    DirectX::XMFLOAT4X4 skyViewProj;
     DirectX::XMFLOAT3   eyePosW;           float pad0 = 0.0f;
     DirectX::XMFLOAT3   ambientLight;      float pad1 = 0.0f;
     DirectX::XMFLOAT3   dirLightDirection; float pad2 = 0.0f;

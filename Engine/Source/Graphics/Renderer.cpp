@@ -268,6 +268,31 @@ void Renderer::CreatePipelineStates()
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                       &opaque, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Opaque)])),
                   "CreateGraphicsPipelineState(Opaque)");
+
+    // --- skybox: same template, three deliberate differences ---
+    const std::filesystem::path skyFile = GetShaderDir() / L"Skybox.hlsl";
+    ComPtr<ID3DBlob> skyVs = m_resources.LoadShader(skyFile, "VSMain", "vs_5_0");
+    ComPtr<ID3DBlob> skyPs = m_resources.LoadShader(skyFile, "PSMain", "ps_5_0");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC skybox = SceneShadedPsoTemplate();
+    skybox.VS = { skyVs->GetBufferPointer(), skyVs->GetBufferSize() };
+    skybox.PS = { skyPs->GetBufferPointer(), skyPs->GetBufferSize() };
+
+    // 1. The camera is INSIDE the box, so what faces it are the back faces
+    //    of a cube wound for outside viewing. Cull the front ones instead.
+    skybox.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+    // 2. The vertex shader forces depth to exactly 1.0. With LESS that never
+    //    passes against a cleared depth buffer, which is also 1.0.
+    skybox.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    // 3. Writing that depth would stamp the far plane over the background
+    //    and stop anything drawn later from appearing there.
+    skybox.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                      &skybox, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Skybox)])),
+                  "CreateGraphicsPipelineState(Skybox)");
+
+    m_skyboxMesh = m_resources.ResolveMesh(L"#cube");
 }
 
 // The only safe order:
@@ -321,8 +346,15 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     const XMMATRIX proj = XMMatrixPerspectiveFovLH(
         camera.fovY, m_sceneColor->AspectRatio(), camera.nearZ, camera.farZ);
 
+    // The same view with the camera sitting at the origin. Dropping the
+    // translation row is what pins the background to the camera: rotating
+    // still changes what you see, walking does not.
+    XMMATRIX skyView = view;
+    skyView.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
+
     PassConstants constants;
     XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
+    XMStoreFloat4x4(&constants.skyViewProj, XMMatrixTranspose(skyView * proj));
     constants.eyePosW = camera.position;
 
     constants.ambientLight     = lighting.ambient;
@@ -443,14 +475,6 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 // exists.
 void Renderer::DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items)
 {
-    // The texture spends most of its life being sampled by ImGui; borrow it
-    // back to write into.
-    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
-        m_sceneColor->ColorResource(),
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-        D3D12_RESOURCE_STATE_RENDER_TARGET);
-    m_commandList->ResourceBarrier(1, &toRenderTarget);
-
     // Two separate objects, bound together as one attachment set.
     const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneColor->RTV();
     const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneDepth->DSV();
@@ -465,14 +489,31 @@ void Renderer::DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>&
 
     BindScenePass(frame, PsoRole::Opaque);
     DrawItems(frame, items);
+}
 
-    // Hand it back to the pixel shader - the UI pass is about to sample it.
-    // Miss this barrier and the picture is undefined, not merely stale.
-    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
-        m_sceneColor->ColorResource(),
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    m_commandList->ResourceBarrier(1, &toShaderResource);
+// Fills whatever the opaque pass left untouched. Runs AFTER it rather than
+// before so the sky is only shaded where it is actually visible - drawing it
+// first would shade every pixel and then paint over most of them.
+void Renderer::DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox)
+{
+    if (!skybox.IsValid() || !m_skyboxMesh.IsValid())
+    {
+        return; // no sky in this scene - the clear colour stands
+    }
+
+    BindScenePass(frame, PsoRole::Skybox);
+
+    // b0 is unused by the sky shaders but the root signature declares it, so
+    // point it at a real address rather than leaving it dangling.
+    m_commandList->SetGraphicsRootConstantBufferView(
+        0, frame.objectCB->GetGPUVirtualAddress());
+    m_commandList->SetGraphicsRootDescriptorTable(
+        2, m_resources.CubeTextureSRV(skybox).gpu);
+
+    const Mesh& mesh = m_resources.GetMesh(m_skyboxMesh);
+    m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
+    m_commandList->IASetIndexBuffer(&mesh.ibv);
+    m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
 }
 
 // Pass: the editor, into the back buffer. The scene appears here only as a
@@ -560,11 +601,31 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     //
     //   Directional Shadow Depth  (11.4)
     //   Opaque Scene
-    //   Skybox                    (11.2)
+    //   Skybox
     //   Transparent Scene         (11.6)
     //   MSAA Resolve              (11.7)
     //   ImGui Overlay
+    //
+    // The scene target's two state changes bracket the passes that share it
+    // rather than living inside any one of them - which one "owns" the
+    // transition stops being answerable once more than one pass draws there.
+    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
+        m_sceneColor->ColorResource(),
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    m_commandList->ResourceBarrier(1, &toRenderTarget);
+
     DrawOpaquePass(frame, items);
+    DrawSkyboxPass(frame, lighting.skybox);
+
+    // Hand it back to the pixel shader - the UI pass is about to sample it.
+    // Miss this barrier and the picture is undefined, not merely stale.
+    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+        m_sceneColor->ColorResource(),
+        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    m_commandList->ResourceBarrier(1, &toShaderResource);
+
     DrawOverlayPass();
 
     ThrowIfFailed(m_commandList->Close(), "CommandList Close");

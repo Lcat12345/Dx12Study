@@ -49,6 +49,12 @@ struct LightingData
 {
     DirectX::XMFLOAT3 ambient = { 0.18f, 0.19f, 0.22f };
 
+    // The background. It travels with the lighting because both come from
+    // the scene's Environment - a skybox is a property of the world, not an
+    // object sitting in it, so there is no entity and no Transform.
+    // Invalid means "no skybox": the viewport keeps its clear colour.
+    CubeTextureHandle skybox;
+
     DirectX::XMFLOAT3 directionalDirection = { 0.0f, -1.0f, 0.0f };
     DirectX::XMFLOAT3 directionalColor     = { 0.0f, 0.0f, 0.0f };
 

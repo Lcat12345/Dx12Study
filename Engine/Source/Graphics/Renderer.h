@@ -113,6 +113,9 @@ private:
     // passes the order IS the documentation, and each one owns its own
     // barriers.
     void DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items);
+    // After opaque so it only fills pixels nothing has claimed, and before
+    // transparent (11.6) so alpha has a background to blend against.
+    void DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox);
     void DrawOverlayPass();
 
     // Shared setup every geometry pass needs, so adding a pass does not mean
@@ -162,6 +165,10 @@ private:
     // Declared after the allocators it borrows a slot from, so it is
     // destroyed before them.
     ResourceManager m_resources;
+
+    // The box the skybox is drawn on - the same procedural cube any entity
+    // could use. Resolved once because every frame with a sky needs it.
+    MeshHandle m_skyboxMesh;
 
     // Declared last: it is torn down before the device and heaps it uses.
     std::unique_ptr<ImGuiLayer> m_overlay;

@@ -176,6 +176,14 @@ static bool SaveSceneImpl(World& world, const ResourceManager& resources,
         {
             file << "  environment";
             WriteFloat3(file, environment->ambient);
+            // Appended, not a new line: a reader that stops after three
+            // numbers still gets a valid Environment, which is exactly what
+            // makes this an additive change.
+            if (environment->skybox.IsValid())
+            {
+                file << " skybox ";
+                WriteQuoted(file, ToUtf8(resources.CubeTextureName(environment->skybox)));
+            }
             file << "\n";
         }
     });
@@ -273,13 +281,21 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
                 outError = Where(lineNumber, "expected 'scene <version>' first");
                 return false;
             }
-            if (version != kSceneVersion)
+            // Only a FUTURE version is refused. An older file is missing
+            // lines this build knows about, and the components it does not
+            // mention keep their defaults - which is exactly right.
+            if (version > kSceneVersion)
             {
                 char buffer[128];
                 std::snprintf(buffer, sizeof(buffer),
-                              "scene version %d, but this build reads %d",
+                              "scene version %d is newer than this build reads (%d)",
                               version, kSceneVersion);
                 outError = Where(lineNumber, buffer);
+                return false;
+            }
+            if (version < 1)
+            {
+                outError = Where(lineNumber, "scene version must be at least 1");
                 return false;
             }
             sawVersion = true;
@@ -420,6 +436,34 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
             {
                 outError = Where(lineNumber, "environment expects 3 numbers");
                 return false;
+            }
+
+            // Optional tail, added in scene version 2. A v1 line simply ends
+            // here and the skybox stays invalid - the right default.
+            std::string tag;
+            if (in >> tag)
+            {
+                if (tag != "skybox")
+                {
+                    outError = Where(lineNumber, "unexpected '" + tag + "' after environment");
+                    return false;
+                }
+                std::string skyName;
+                if (!ReadQuoted(in, skyName))
+                {
+                    outError = Where(lineNumber, "skybox expects a quoted name");
+                    return false;
+                }
+                try
+                {
+                    environment.skybox = resources.LoadCubeTexture(ToWide(skyName));
+                }
+                catch (const std::exception& e)
+                {
+                    outError = Where(lineNumber,
+                                     "could not load skybox: " + std::string(e.what()));
+                    return false;
+                }
             }
             loaded.Add<Environment>(current, environment);
         }

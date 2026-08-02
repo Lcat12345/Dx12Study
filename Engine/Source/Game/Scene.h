@@ -28,7 +28,15 @@
 
 // Bumped whenever the format changes. Old files stay readable only if
 // something can tell them apart, and this is that something.
-constexpr int kSceneVersion = 1;
+//
+//   1 - Phase 10.5. The original component set.
+//   2 - Phase 11.2. Environment gained an optional skybox name.
+//
+// A reader accepts ANY version up to its own: additive changes mean an older
+// file simply lacks the newer lines, and leaving those fields at their
+// defaults is the correct interpretation. Only a file from the FUTURE is
+// refused, because there is no way to guess what it contains.
+constexpr int kSceneVersion = 2;
 
 // Writes every live entity, in index order so that saving the same scene
 // twice produces the same bytes.

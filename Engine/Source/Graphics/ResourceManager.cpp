@@ -332,6 +332,170 @@ void ResourceManager::TextureSize(TextureHandle handle, UINT& outWidth, UINT& ou
     outHeight = desc.Height;
 }
 
+// ------------------------------------------------------------ cube textures
+
+// The order is fixed by D3D12: subresource 0 is +X, 1 is -X, and so on.
+// Naming the files after the axes rather than "left/right" keeps the mapping
+// mechanical - a face called "left" invites an argument about whose left.
+const wchar_t* const ResourceManager::kCubeFaceSuffixes[6] = {
+    L"px", L"nx", L"py", L"ny", L"pz", L"nz"
+};
+
+CubeTextureHandle ResourceManager::LoadCubeTexture(const std::wstring& name)
+{
+    const std::wstring key = NormalizeKey(name);
+
+    auto it = m_cubeTextureCache.find(key);
+    if (it != m_cubeTextureCache.end())
+    {
+        return it->second;
+    }
+
+    // Decode all six BEFORE creating anything on the GPU, so a missing or
+    // mismatched face fails without leaving a half-built resource behind.
+    ImageData faces[6];
+    const std::filesystem::path directory = GetSkyboxDir() / key;
+    for (int face = 0; face < 6; ++face)
+    {
+        const std::filesystem::path facePath =
+            directory / (std::wstring(kCubeFaceSuffixes[face]) + L".png");
+        faces[face] = LoadImageRGBA(facePath);
+
+        if (faces[face].width != faces[face].height)
+        {
+            throw std::runtime_error("Cube map face is not square:\n" +
+                                     ToUtf8(facePath.wstring()));
+        }
+        if (faces[face].width != faces[0].width)
+        {
+            throw std::runtime_error("Cube map faces differ in size:\n" +
+                                     ToUtf8(facePath.wstring()));
+        }
+    }
+
+    const UINT edge = faces[0].width;
+
+    D3D12_HEAP_PROPERTIES defaultHeap = {};
+    defaultHeap.Type = D3D12_HEAP_TYPE_DEFAULT;
+
+    // A cube map is an array of six 2D slices. Nothing about the RESOURCE
+    // says "cube" - that is entirely the view's doing, below.
+    D3D12_RESOURCE_DESC texDesc = {};
+    texDesc.Dimension        = D3D12_RESOURCE_DIMENSION_TEXTURE2D;
+    texDesc.Width            = edge;
+    texDesc.Height           = edge;
+    texDesc.DepthOrArraySize = 6;
+    texDesc.MipLevels        = 1;
+    texDesc.Format           = SwapChain::kFormat;
+    texDesc.SampleDesc.Count = 1;
+
+    Texture texture;
+    ThrowIfFailed(m_device.Device()->CreateCommittedResource(
+                      &defaultHeap, D3D12_HEAP_FLAG_NONE, &texDesc,
+                      D3D12_RESOURCE_STATE_COPY_DEST,
+                      nullptr, IID_PPV_ARGS(&texture.resource)),
+                  "CreateCommittedResource(CubeTexture)");
+
+    // Six subresources in one upload buffer. GetCopyableFootprints lays them
+    // out with the alignment the copy engine wants, which is why the offsets
+    // come from it rather than from edge * edge * 4.
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprints[6] = {};
+    UINT   rowCounts[6]     = {};
+    UINT64 rowSizes[6]      = {};
+    UINT64 uploadSize       = 0;
+    m_device.Device()->GetCopyableFootprints(&texDesc, 0, 6, 0,
+                                             footprints, rowCounts, rowSizes,
+                                             &uploadSize);
+
+    ComPtr<ID3D12Resource> uploadBuffer =
+        CreateUploadBuffer(m_device.Device(), nullptr, uploadSize,
+                           "CreateCommittedResource(CubeUpload)");
+
+    uint8_t* mapped = nullptr;
+    D3D12_RANGE readRange = {};
+    ThrowIfFailed(uploadBuffer->Map(0, &readRange, reinterpret_cast<void**>(&mapped)),
+                  "CubeUpload Map");
+    for (int face = 0; face < 6; ++face)
+    {
+        for (UINT y = 0; y < rowCounts[face]; ++y)
+        {
+            memcpy(mapped + footprints[face].Offset
+                          + SIZE_T(y) * footprints[face].Footprint.RowPitch,
+                   faces[face].pixels.data() + SIZE_T(y) * edge * 4,
+                   static_cast<size_t>(rowSizes[face]));
+        }
+    }
+    uploadBuffer->Unmap(0, nullptr);
+
+    BeginUpload();
+    for (int face = 0; face < 6; ++face)
+    {
+        D3D12_TEXTURE_COPY_LOCATION dst = {};
+        dst.pResource        = texture.resource.Get();
+        dst.Type             = D3D12_TEXTURE_COPY_TYPE_SUBRESOURCE_INDEX;
+        dst.SubresourceIndex = UINT(face);
+
+        D3D12_TEXTURE_COPY_LOCATION src = {};
+        src.pResource       = uploadBuffer.Get();
+        src.Type            = D3D12_TEXTURE_COPY_TYPE_PLACED_FOOTPRINT;
+        src.PlacedFootprint = footprints[face];
+
+        m_uploadCommandList->CopyTextureRegion(&dst, 0, 0, 0, &src, nullptr);
+    }
+
+    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+        texture.resource.Get(),
+        D3D12_RESOURCE_STATE_COPY_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    m_uploadCommandList->ResourceBarrier(1, &toShaderResource);
+
+    EndUpload(); // submits and waits, so uploadBuffer may die below
+
+    texture.srv = m_srvAllocator.Allocate();
+
+    // THIS is what makes it a cube map. The same six slices viewed as
+    // TEXTURE2DARRAY would be sampled by index; as TEXTURECUBE they are
+    // sampled by direction.
+    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+    srvDesc.Shader4ComponentMapping   = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+    srvDesc.Format                    = SwapChain::kFormat;
+    srvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURECUBE;
+    srvDesc.TextureCube.MipLevels     = 1;
+    m_device.Device()->CreateShaderResourceView(texture.resource.Get(), &srvDesc,
+                                                texture.srv.cpu);
+
+    const CubeTextureHandle handle{ uint32_t(m_cubeTextures.size()) };
+    m_cubeTextures.push_back(std::move(texture));
+    m_cubeTextureNames.push_back(key);
+    m_cubeTextureCache.emplace(key, handle);
+    return handle;
+}
+
+CubeTextureHandle ResourceManager::FindCubeTexture(const std::wstring& name) const
+{
+    auto it = m_cubeTextureCache.find(NormalizeKey(name));
+    return it == m_cubeTextureCache.end() ? CubeTextureHandle{} : it->second;
+}
+
+DescriptorHandle ResourceManager::CubeTextureSRV(CubeTextureHandle handle) const
+{
+    if (!handle.IsValid() || handle.index >= m_cubeTextures.size())
+    {
+        throw std::runtime_error("CubeTextureSRV called with an invalid handle");
+    }
+    return m_cubeTextures[handle.index].srv;
+}
+
+const std::wstring& ResourceManager::CubeTextureName(CubeTextureHandle handle) const
+{
+    static const std::wstring kNone;
+    if (!handle.IsValid() || handle.index >= m_cubeTextureNames.size())
+    {
+        return kNone;
+    }
+    return m_cubeTextureNames[handle.index];
+}
+
 DescriptorHandle ResourceManager::TextureSRV(TextureHandle handle) const
 {
     if (!handle.IsValid() || handle.index >= m_textures.size())

@@ -17,6 +17,9 @@ cbuffer ObjectConstants : register(b0)
 cbuffer PassConstants : register(b1)
 {
     float4x4 gViewProj;
+    // The same projection with the camera's TRANSLATION removed, for the
+    // skybox: the background must turn with the camera but never approach it.
+    float4x4 gSkyViewProj;
     float3   gEyePosW;          float _pad0;
     float3   gAmbientLight;     float _pad1;
     float3   gDirLightDirection; float _pad2; // direction the light TRAVELS

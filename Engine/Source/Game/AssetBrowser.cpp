@@ -130,15 +130,105 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
               [](const Entry& a, const Entry& b) { return a.fileName < b.fileName; });
 }
 
+// A skybox is a folder, not a file. It counts only when all six faces are
+// present - showing a half-populated one as selectable would only produce a
+// load error on click.
+void AssetBrowser::ScanSkyboxes()
+{
+    std::vector<Entry> previous = std::move(m_skyboxes);
+    m_skyboxes.clear();
+
+    std::error_code openError;
+    std::filesystem::directory_iterator directory(GetSkyboxDir(), openError);
+    if (openError)
+    {
+        return; // no Skyboxes folder yet
+    }
+
+    for (const auto& item : directory)
+    {
+        std::error_code itemError;
+        if (!item.is_directory(itemError) || itemError)
+        {
+            continue;
+        }
+
+        bool           complete = true;
+        std::uintmax_t bytes    = 0;
+        for (const wchar_t* const face : ResourceManager::kCubeFaceSuffixes)
+        {
+            const std::filesystem::path facePath =
+                item.path() / (std::wstring(face) + L".png");
+            std::error_code faceError;
+            if (!std::filesystem::is_regular_file(facePath, faceError) || faceError)
+            {
+                complete = false;
+                break;
+            }
+            bytes += std::filesystem::file_size(facePath, faceError);
+        }
+        if (!complete)
+        {
+            continue;
+        }
+
+        Entry entry;
+        entry.fileName = item.path().filename().wstring();
+        entry.label    = ToUtf8(entry.fileName);
+        entry.byteSize = bytes;
+
+        auto it = std::find_if(previous.begin(), previous.end(),
+                               [&](const Entry& old) { return old.fileName == entry.fileName; });
+        if (it != previous.end())
+        {
+            const std::uintmax_t size = entry.byteSize;
+            entry = *it;
+            entry.byteSize = size;
+        }
+        else
+        {
+            entry.skybox = m_resources.FindCubeTexture(entry.fileName);
+        }
+        m_skyboxes.push_back(std::move(entry));
+    }
+
+    std::sort(m_skyboxes.begin(), m_skyboxes.end(),
+              [](const Entry& a, const Entry& b) { return a.fileName < b.fileName; });
+}
+
+void AssetBrowser::LoadSkyboxEntry(Entry& entry)
+{
+    if (entry.skybox.IsValid())
+    {
+        return;
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    try
+    {
+        entry.skybox = m_resources.LoadCubeTexture(entry.fileName);
+    }
+    catch (const std::exception&)
+    {
+        return; // mismatched or unreadable faces - the entry stays unloaded
+    }
+    const auto finish = std::chrono::steady_clock::now();
+
+    entry.loadMilliseconds =
+        std::chrono::duration<double, std::milli>(finish - start).count();
+}
+
 void AssetBrowser::Refresh()
 {
     Scan(m_meshes,   L".obj");
     Scan(m_textures, L".png");
+    ScanSkyboxes();
 
     // Indices point into lists that were just rebuilt. The handles they had
     // resolved to survive inside Scan, so nothing is reloaded.
     m_selectedMesh    = -1;
     m_selectedTexture = -1;
+    m_selectedSkybox  = -1;
     m_focus           = Focus::None;
 }
 
@@ -199,7 +289,7 @@ void AssetBrowser::LoadTextureEntry(Entry& entry)
 
 // Returns true when something was clicked this frame.
 bool AssetBrowser::DrawList(const char* id, std::vector<Entry>& entries,
-                            int& selected, bool meshes)
+                            int& selected, ListKind kind)
 {
     if (entries.empty())
     {
@@ -216,14 +306,21 @@ bool AssetBrowser::DrawList(const char* id, std::vector<Entry>& entries,
 
         // A dot marks what is already on the GPU, so the cost of a click is
         // predictable before making it.
-        const bool loaded = meshes ? entry.mesh.IsValid() : entry.texture.IsValid();
+        const bool loaded = kind == ListKind::Mesh    ? entry.mesh.IsValid()
+                          : kind == ListKind::Texture ? entry.texture.IsValid()
+                                                      : entry.skybox.IsValid();
         if (ImGui::Selectable(entry.label.c_str(), selected == i))
         {
             selected = i;
             clicked  = true;
             // Load on SELECTION, not on scan. Listing a folder must stay
             // instant however many models are in it.
-            if (meshes) { LoadMeshEntry(entry); } else { LoadTextureEntry(entry); }
+            switch (kind)
+            {
+            case ListKind::Mesh:    LoadMeshEntry(entry);    break;
+            case ListKind::Texture: LoadTextureEntry(entry); break;
+            case ListKind::Skybox:  LoadSkyboxEntry(entry);  break;
+            }
         }
         if (loaded)
         {
@@ -253,6 +350,10 @@ void AssetBrowser::DrawDetails()
     {
         entry = &m_textures[size_t(m_selectedTexture)];
     }
+    else if (m_focus == Focus::Skybox && m_selectedSkybox >= 0)
+    {
+        entry = &m_skyboxes[size_t(m_selectedSkybox)];
+    }
 
     if (!entry)
     {
@@ -265,7 +366,9 @@ void AssetBrowser::DrawDetails()
     ImGui::Text("%s", entry->label.c_str());
     ImGui::TextDisabled("%s", size);
 
-    const bool loaded = isMesh ? entry->mesh.IsValid() : entry->texture.IsValid();
+    const bool loaded = m_focus == Focus::Mesh    ? entry->mesh.IsValid()
+                      : m_focus == Focus::Texture ? entry->texture.IsValid()
+                                                  : entry->skybox.IsValid();
     if (!loaded)
     {
         ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f), "failed to load");
@@ -290,6 +393,15 @@ void AssetBrowser::DrawDetails()
                     entry->vertexCount, entry->indexCount / 3);
         ImGui::TextDisabled("No 3D thumbnail - that needs a render target per\n"
                             "asset, which waits for a reason to exist.");
+        return;
+    }
+
+    if (m_focus == Focus::Skybox)
+    {
+        // No preview: showing a cube map flat means picking a projection,
+        // and the six faces are already the answer to "what is in it".
+        ImGui::Text("6 faces (px nx py ny pz nz)");
+        ImGui::TextDisabled("Assign in the Inspector's Environment section.");
         return;
     }
 
@@ -328,7 +440,8 @@ void AssetBrowser::Draw()
         Refresh();
     }
     ImGui::SameLine();
-    ImGui::TextDisabled("%zu obj, %zu png", m_meshes.size(), m_textures.size());
+    ImGui::TextDisabled("%zu obj, %zu png, %zu sky",
+                        m_meshes.size(), m_textures.size(), m_skyboxes.size());
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("%s", m_assetDirLabel.c_str());
@@ -347,7 +460,7 @@ void AssetBrowser::Draw()
 
     if (ImGui::CollapsingHeader("Meshes", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        if (DrawList("mesh", m_meshes, m_selectedMesh, /*meshes*/ true))
+        if (DrawList("mesh", m_meshes, m_selectedMesh, ListKind::Mesh))
         {
             m_focus = Focus::Mesh;
         }
@@ -355,9 +468,17 @@ void AssetBrowser::Draw()
 
     if (ImGui::CollapsingHeader("Textures", ImGuiTreeNodeFlags_DefaultOpen))
     {
-        if (DrawList("tex", m_textures, m_selectedTexture, /*meshes*/ false))
+        if (DrawList("tex", m_textures, m_selectedTexture, ListKind::Texture))
         {
             m_focus = Focus::Texture;
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Skyboxes", ImGuiTreeNodeFlags_DefaultOpen))
+    {
+        if (DrawList("sky", m_skyboxes, m_selectedSkybox, ListKind::Skybox))
+        {
+            m_focus = Focus::Skybox;
         }
     }
 
@@ -387,4 +508,16 @@ const char* AssetBrowser::SelectedTextureLabel() const
 {
     return m_selectedTexture >= 0 ? m_textures[size_t(m_selectedTexture)].label.c_str()
                                   : "none";
+}
+
+CubeTextureHandle AssetBrowser::SelectedSkybox() const
+{
+    return m_selectedSkybox >= 0 ? m_skyboxes[size_t(m_selectedSkybox)].skybox
+                                 : CubeTextureHandle{};
+}
+
+const char* AssetBrowser::SelectedSkyboxLabel() const
+{
+    return m_selectedSkybox >= 0 ? m_skyboxes[size_t(m_selectedSkybox)].label.c_str()
+                                 : "none";
 }

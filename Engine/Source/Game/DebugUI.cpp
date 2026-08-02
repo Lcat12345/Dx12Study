@@ -550,6 +550,23 @@ namespace
             if (ComponentHeader("Environment", Comp::Environment, g_selected))
             {
                 ImGui::ColorEdit3("Ambient", &environment->ambient.x);
+
+                const CubeTextureHandle browserSkybox = assets.SelectedSkybox();
+                ImGui::BeginDisabled(!browserSkybox.IsValid());
+                if (ImGui::Button("Assign skybox"))
+                {
+                    environment->skybox = browserSkybox;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s", assets.SelectedSkyboxLabel());
+
+                ImGui::BeginDisabled(!environment->skybox.IsValid());
+                if (ImGui::Button("Clear skybox"))
+                {
+                    environment->skybox = CubeTextureHandle{};
+                }
+                ImGui::EndDisabled();
             }
         }
 

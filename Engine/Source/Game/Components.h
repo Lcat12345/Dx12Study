@@ -74,4 +74,9 @@ struct ActiveCamera
 struct Environment
 {
     DirectX::XMFLOAT3 ambient = { 0.18f, 0.19f, 0.22f };
+    // The background. Not an entity with a Transform: it has no position,
+    // cannot be collided with, and there is exactly one. Invalid means the
+    // viewport keeps its flat clear colour, which is what every v1 scene
+    // gets on load.
+    CubeTextureHandle skybox;
 };

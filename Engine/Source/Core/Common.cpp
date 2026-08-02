@@ -66,6 +66,11 @@ std::filesystem::path GetSceneDir()
     return GetAssetDir() / L"Scenes";
 }
 
+std::filesystem::path GetSkyboxDir()
+{
+    return GetAssetDir() / L"Skyboxes";
+}
+
 ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* device, const void* initData,
                                           UINT64 byteSize, const char* debugWhat)
 {

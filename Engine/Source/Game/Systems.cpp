@@ -195,6 +195,7 @@ void BuildRenderData(World& world,
     outLighting = LightingData{};
     world.ForEach<Environment>([&](Entity, Environment& environment) {
         outLighting.ambient = environment.ambient;
+        outLighting.skybox  = environment.skybox;
     });
 
     world.ForEach<Light>([&](Entity entity, Light& light) {

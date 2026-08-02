@@ -32,6 +32,9 @@ std::filesystem::path GetAssetDir();
 // Saved scenes. Created on demand - the folder need not exist until the
 // first save.
 std::filesystem::path GetSceneDir();
+// One directory per cube map, six faces inside. A skybox is one logical
+// asset, so it gets a folder rather than six loose files.
+std::filesystem::path GetSkyboxDir();
 
 // Upload-heap buffer: CPU-writable, GPU-readable. Pass initData to fill it
 // on creation, or nullptr to leave it empty (for buffers written per frame).

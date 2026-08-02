@@ -27,10 +27,12 @@ public:
 
     // What the inspector may assign. Invalid until the entry has been
     // clicked at least once, because loading is deferred to selection.
-    MeshHandle    SelectedMesh() const;
-    TextureHandle SelectedTexture() const;
-    const char*   SelectedMeshLabel() const;
-    const char*   SelectedTextureLabel() const;
+    MeshHandle        SelectedMesh() const;
+    TextureHandle     SelectedTexture() const;
+    CubeTextureHandle SelectedSkybox() const;
+    const char*       SelectedMeshLabel() const;
+    const char*       SelectedTextureLabel() const;
+    const char*       SelectedSkyboxLabel() const;
 
     // Armed placement: while this is on, a click on the scene viewport drops
     // the selected mesh there. A mode rather than "always place when a mesh
@@ -46,8 +48,9 @@ private:
         std::uintmax_t byteSize = 0;
 
         // Filled in on first selection; invalid means "not loaded yet".
-        MeshHandle    mesh;
-        TextureHandle texture;
+        MeshHandle        mesh;
+        TextureHandle     texture;
+        CubeTextureHandle skybox;
 
         // Only meaningful once loaded.
         UINT   vertexCount = 0;
@@ -58,24 +61,32 @@ private:
     };
 
     void Scan(std::vector<Entry>& out, const wchar_t* extension);
+    // A skybox is a DIRECTORY of six faces, so this walks folders rather
+    // than files and reports each valid one as a single logical asset.
+    void ScanSkyboxes();
     void LoadMeshEntry(Entry& entry);
     void LoadTextureEntry(Entry& entry);
+    void LoadSkyboxEntry(Entry& entry);
+
+    enum class ListKind { Mesh, Texture, Skybox };
 
     bool DrawList(const char* id, std::vector<Entry>& entries, int& selected,
-                  bool meshes);
+                  ListKind kind);
     void DrawDetails();
 
     ResourceManager& m_resources;
 
     std::vector<Entry> m_meshes;
     std::vector<Entry> m_textures;
+    std::vector<Entry> m_skyboxes;
 
     // Both stay live: the inspector assigns a mesh and a texture in either
     // order. Focus only decides which one the details pane describes.
     int m_selectedMesh    = -1;
     int m_selectedTexture = -1;
+    int m_selectedSkybox  = -1;
 
-    enum class Focus { None, Mesh, Texture };
+    enum class Focus { None, Mesh, Texture, Skybox };
     Focus m_focus = Focus::None;
 
     bool m_placeOnClick = false;
