@@ -3,9 +3,16 @@
 #pragma once
 
 #include "Core/World.h"
+#include "Game/Components.h"
 #include "Graphics/RenderData.h"
 
+#include <DirectXMath.h>
 #include <vector>
+
+// Scale, then rotate, then translate - the order every other piece of code
+// has to agree on. Shared rather than reimplemented because picking has to
+// invert exactly the matrix the renderer drew with.
+DirectX::XMMATRIX WorldMatrixOf(const Transform& transform);
 
 // Advances every entity that has both a Spin and a Transform.
 void SpinSystem(World& world, float dt);

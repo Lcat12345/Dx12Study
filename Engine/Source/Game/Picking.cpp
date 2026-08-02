@@ -1,6 +1,12 @@
 #include "Game/Picking.h"
 
+#include "Game/Components.h"
+#include "Game/Systems.h"
+
+#include <algorithm>
+#include <cfloat>
 #include <cmath>
+#include <utility>
 
 using namespace DirectX;
 
@@ -38,6 +44,131 @@ Ray RayFromNdc(const CameraView& camera, float aspect, float ndcX, float ndcY)
     XMStoreFloat3(&ray.origin, nearPoint);
     XMStoreFloat3(&ray.direction, XMVectorSubtract(farPoint, nearPoint));
     return ray;
+}
+
+bool RayToLocalSpace(const Ray& worldRay, const XMFLOAT4X4& world, Ray& outLocalRay)
+{
+    const XMMATRIX worldMatrix = XMLoadFloat4x4(&world);
+
+    // A zero scale on any axis collapses the matrix and there is no inverse.
+    // XMMatrixInverse hands back a determinant precisely so this is
+    // detectable instead of producing quiet NaNs downstream.
+    XMVECTOR determinant = XMVectorZero();
+    const XMMATRIX inverse = XMMatrixInverse(&determinant, worldMatrix);
+    if (XMVector4Equal(determinant, XMVectorZero()))
+    {
+        return false;
+    }
+
+    const XMVECTOR origin    = XMLoadFloat3(&worldRay.origin);
+    const XMVECTOR direction = XMLoadFloat3(&worldRay.direction);
+
+    // Coord for the origin (translation applies), Normal for the direction
+    // (it must not). Getting these the wrong way round moves the ray by the
+    // object's position twice.
+    XMStoreFloat3(&outLocalRay.origin, XMVector3TransformCoord(origin, inverse));
+    XMStoreFloat3(&outLocalRay.direction, XMVector3TransformNormal(direction, inverse));
+    return true;
+}
+
+bool RayAabb(const Ray& ray, const Aabb& bounds, float& outDistance)
+{
+    if (bounds.IsEmpty())
+    {
+        return false;
+    }
+
+    // The slab method: the box is three pairs of parallel planes, and the
+    // ray is inside the box exactly where all three intervals overlap.
+    float tEnter = -FLT_MAX;
+    float tExit  =  FLT_MAX;
+
+    const float origin[3]    = { ray.origin.x,    ray.origin.y,    ray.origin.z };
+    const float direction[3] = { ray.direction.x, ray.direction.y, ray.direction.z };
+    const float minimum[3]   = { bounds.min.x,    bounds.min.y,    bounds.min.z };
+    const float maximum[3]   = { bounds.max.x,    bounds.max.y,    bounds.max.z };
+
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        constexpr float kParallelEpsilon = 1e-8f;
+        if (std::fabs(direction[axis]) < kParallelEpsilon)
+        {
+            // Parallel to this pair of planes: a miss unless it already
+            // lies between them.
+            if (origin[axis] < minimum[axis] || origin[axis] > maximum[axis])
+            {
+                return false;
+            }
+            continue;
+        }
+
+        const float inverseDirection = 1.0f / direction[axis];
+        float tNear = (minimum[axis] - origin[axis]) * inverseDirection;
+        float tFar  = (maximum[axis] - origin[axis]) * inverseDirection;
+        if (tNear > tFar)
+        {
+            std::swap(tNear, tFar); // pointing down this axis
+        }
+
+        tEnter = std::max(tEnter, tNear);
+        tExit  = std::min(tExit,  tFar);
+        if (tEnter > tExit)
+        {
+            return false; // the intervals stopped overlapping
+        }
+    }
+
+    if (tExit < 0.0f)
+    {
+        return false; // the whole box is behind the ray
+    }
+
+    // A negative entry with a positive exit means the ray STARTED inside.
+    // Reporting 0 rather than the negative value keeps "nearest hit wins"
+    // working when the camera is inside a large mesh.
+    outDistance = tEnter < 0.0f ? 0.0f : tEnter;
+    return true;
+}
+
+bool PickEntity(World& world, const ResourceManager& resources, const Ray& ray,
+                Entity& outEntity)
+{
+    Entity nearest;
+    float  nearestDistance = FLT_MAX;
+
+    world.ForEach<MeshRenderer>([&](Entity entity, MeshRenderer& renderer) {
+        const Transform* transform = world.Get<Transform>(entity);
+        if (!transform || !renderer.mesh.IsValid())
+        {
+            return; // nothing drawn means nothing to click
+        }
+
+        XMFLOAT4X4 world4x4;
+        XMStoreFloat4x4(&world4x4, WorldMatrixOf(*transform));
+
+        Ray localRay;
+        if (!RayToLocalSpace(ray, world4x4, localRay))
+        {
+            return; // degenerate transform - skip rather than guess
+        }
+
+        float distance = 0.0f;
+        if (!RayAabb(localRay, resources.GetMesh(renderer.mesh).bounds, distance))
+        {
+            return;
+        }
+
+        // Comparable across objects because RayToLocalSpace leaves the
+        // direction unnormalized: t stays in world-ray units.
+        if (distance < nearestDistance)
+        {
+            nearestDistance = distance;
+            nearest         = entity;
+        }
+    });
+
+    outEntity = nearest;
+    return nearest.IsValid();
 }
 
 bool RayPlaneY(const Ray& ray, float planeY, XMFLOAT3& outPoint)

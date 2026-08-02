@@ -210,12 +210,23 @@ namespace
 
                 Transform transform;
                 transform.position = command.position;
+                // Lift the mesh so its LOWEST point rests on the plane the
+                // click landed on. Its origin is usually the centre, so
+                // without this everything sits half-buried.
+                //
+                // -min.y is enough only because a freshly placed entity has
+                // no rotation and unit scale. Re-seating an already rotated
+                // object is a different problem and not this one.
+                if (command.mesh.IsValid())
+                {
+                    const Aabb& bounds = resources.GetMesh(command.mesh).bounds;
+                    if (!bounds.IsEmpty())
+                    {
+                        transform.position.y -= bounds.min.y;
+                    }
+                }
                 world.Add<Transform>(placed, transform);
 
-                // Sits ON the plane, which means half-buried for any mesh
-                // whose origin is at its centre. Lifting it correctly needs
-                // the mesh's bounds, which nothing computes yet - the same
-                // trigger that ray-AABB picking waits for.
                 MeshRenderer renderer;
                 renderer.mesh             = command.mesh;
                 renderer.material.texture = command.texture;
@@ -709,15 +720,14 @@ namespace
     //
     // imageMin is the image's top-left in SCREEN coordinates and imageSize
     // its size - the panel's, not the window's and not the render target's.
-    void HandleViewportClick(World& world, AssetBrowser& assets, const DebugUIContext& ui,
+    void HandleViewportClick(World& world, ResourceManager& resources,
+                             AssetBrowser& assets, const DebugUIContext& ui,
                              const ImVec2& imageMin, const ImVec2& imageSize)
     {
         // IsItemHovered, not IsWindowHovered: the title bar and the resize
         // grip belong to the window too, and a click on those is not a click
         // in the scene.
-        if (!assets.PlaceOnClick() ||
-            !ImGui::IsItemHovered() ||
-            !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+        if (!ImGui::IsItemHovered() || !ImGui::IsMouseClicked(ImGuiMouseButton_Left))
         {
             return;
         }
@@ -736,9 +746,23 @@ namespace
         {
             return;
         }
+        const Ray ray = RayFromNdc(camera, ui.sceneAspect, ndcX, ndcY);
+
+        // Two jobs on one button, split by the arming toggle. Without the
+        // mode, placing would make the viewport unclickable for anything
+        // else - which is exactly why 10.4 introduced it.
+        if (!assets.PlaceOnClick())
+        {
+            // Selection is NOT a structural edit - it changes no array's
+            // shape - so unlike Create/Destroy it can be applied right here.
+            // The panels drawn after this one pick it up the same frame.
+            Entity picked;
+            g_selected = PickEntity(world, resources, ray, picked) ? picked : Entity{};
+            return;
+        }
 
         XMFLOAT3 hit;
-        if (!RayPlaneY(RayFromNdc(camera, ui.sceneAspect, ndcX, ndcY), 0.0f, hit))
+        if (!RayPlaneY(ray, 0.0f, hit))
         {
             return; // clicked the sky
         }
@@ -757,7 +781,8 @@ namespace
     // The scene, as a texture inside a window. Everything about this panel is
     // driven by the size ImGui gives it - the renderer follows the panel, not
     // the other way round.
-    void DrawSceneViewport(World& world, AssetBrowser& assets, DebugUIContext& ui)
+    void DrawSceneViewport(World& world, ResourceManager& resources,
+                           AssetBrowser& assets, DebugUIContext& ui)
     {
         // No padding: the image should reach the window border, the way every
         // editor's viewport does.
@@ -791,7 +816,7 @@ namespace
             // stretched for that one frame, then matches again.
             ImGui::Image(ImTextureID(ui.sceneTexture), size);
 
-            HandleViewportClick(world, assets, ui, imageMin, size);
+            HandleViewportClick(world, resources, assets, ui, imageMin, size);
         }
 
         ui.viewportHovered = ImGui::IsWindowHovered();
@@ -857,7 +882,7 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
     world.ForEachEntity([&](Entity) { ++entityCount; });
 
     // Before DrawStats, which reports the size this panel just asked for.
-    DrawSceneViewport(world, assets, ui);
+    DrawSceneViewport(world, resources, assets, ui);
     DrawStats(ui, entityCount);
     DrawEntityList(world);
     DrawInspector(world, assets);

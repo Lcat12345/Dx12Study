@@ -15,6 +15,34 @@ struct Vertex
     DirectX::XMFLOAT2 uv;
 };
 
+// The mesh's extent in its OWN space, before any Transform.
+//
+// Local rather than world on purpose: a world box would have to be rebuilt
+// every time something moves, and for a rotated mesh it is a loose box
+// around a rotated box. Testing against the local one instead means moving
+// the RAY into local space - one matrix inverse, and the box stays tight.
+struct Aabb
+{
+    DirectX::XMFLOAT3 min = {  0.0f,  0.0f,  0.0f };
+    DirectX::XMFLOAT3 max = {  0.0f,  0.0f,  0.0f };
+
+    DirectX::XMFLOAT3 Center() const
+    {
+        return { (min.x + max.x) * 0.5f,
+                 (min.y + max.y) * 0.5f,
+                 (min.z + max.z) * 0.5f };
+    }
+    DirectX::XMFLOAT3 Extents() const
+    {
+        return { (max.x - min.x) * 0.5f,
+                 (max.y - min.y) * 0.5f,
+                 (max.z - min.z) * 0.5f };
+    }
+    // An empty mesh leaves min == max, which is a degenerate box rather than
+    // a wrong one - every ray misses it.
+    bool IsEmpty() const { return min.x > max.x || min.y > max.y || min.z > max.z; }
+};
+
 struct Mesh
 {
     Microsoft::WRL::ComPtr<ID3D12Resource> vertexBuffer;
@@ -25,7 +53,14 @@ struct Mesh
     // Not needed to draw - kept so the asset browser can report what a file
     // actually contained after the loader deduplicated its vertices.
     UINT                                   vertexCount = 0;
+    // Computed at upload time, which is the last moment the CPU-side
+    // vertices exist. Nothing else keeps them.
+    Aabb                                   bounds;
 };
+
+// The extent of a vertex span. Returns an inverted (empty) box for no
+// vertices, so IsEmpty() reports it rather than a box at the origin.
+Aabb ComputeBounds(const Vertex* vertices, UINT vertexCount);
 
 // Geometry still on the CPU: what a loader produces before upload.
 struct MeshData

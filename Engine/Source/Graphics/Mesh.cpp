@@ -1,6 +1,7 @@
 #include "Graphics/Mesh.h"
 #include "Core/Common.h"
 
+#include <algorithm>
 #include <vector>
 
 using namespace DirectX;
@@ -16,6 +17,36 @@ namespace
     constexpr XMFLOAT3 kDown  = {  0, -1,  0 };
 }
 
+Aabb ComputeBounds(const Vertex* vertices, UINT vertexCount)
+{
+    Aabb bounds;
+    if (vertexCount == 0)
+    {
+        // Deliberately INVERTED, not zeroed: a zero box sits at the origin
+        // and would swallow rays aimed there. This one reports IsEmpty().
+        bounds.min = {  1.0f,  1.0f,  1.0f };
+        bounds.max = { -1.0f, -1.0f, -1.0f };
+        return bounds;
+    }
+
+    bounds.min = bounds.max = vertices[0].position;
+    for (UINT i = 1; i < vertexCount; ++i)
+    {
+        const XMFLOAT3& p = vertices[i].position;
+        bounds.min.x = std::min(bounds.min.x, p.x);
+        bounds.min.y = std::min(bounds.min.y, p.y);
+        bounds.min.z = std::min(bounds.min.z, p.z);
+        bounds.max.x = std::max(bounds.max.x, p.x);
+        bounds.max.y = std::max(bounds.max.y, p.y);
+        bounds.max.z = std::max(bounds.max.z, p.z);
+    }
+    return bounds;
+}
+
+// Every mesh reaches the GPU through here - AddMesh for procedural geometry
+// and LoadMesh for files both end up at this call. That makes it the one
+// place where bounds can be computed once and cover both; doing it in
+// AddMesh would silently leave every loaded .obj with an empty box.
 Mesh CreateMesh(ID3D12Device* device,
                 const Vertex* vertices, UINT vertexCount,
                 const uint32_t* indices, UINT indexCount)
@@ -36,6 +67,8 @@ Mesh CreateMesh(ID3D12Device* device,
 
     mesh.indexCount  = indexCount;
     mesh.vertexCount = vertexCount;
+    // Last chance: the caller's MeshData goes out of scope after this.
+    mesh.bounds      = ComputeBounds(vertices, vertexCount);
     return mesh;
 }
 

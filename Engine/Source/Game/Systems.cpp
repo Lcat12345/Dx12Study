@@ -26,13 +26,6 @@ namespace
                                               0.0f));
     }
 
-    XMMATRIX WorldMatrixOf(const Transform& t)
-    {
-        return XMMatrixScaling(t.scale.x, t.scale.y, t.scale.z) *
-               XMMatrixRotationRollPitchYaw(t.rotation.x, t.rotation.y, t.rotation.z) *
-               XMMatrixTranslation(t.position.x, t.position.y, t.position.z);
-    }
-
     // "Iterate one component, look up the other" - the whole query story.
     // Finding the single tagged camera is the same pattern.
     Entity FindActiveCamera(World& world)
@@ -46,6 +39,13 @@ namespace
         });
         return found;
     }
+}
+
+XMMATRIX WorldMatrixOf(const Transform& t)
+{
+    return XMMatrixScaling(t.scale.x, t.scale.y, t.scale.z) *
+           XMMatrixRotationRollPitchYaw(t.rotation.x, t.rotation.y, t.rotation.z) *
+           XMMatrixTranslation(t.position.x, t.position.y, t.position.z);
 }
 
 void SpinSystem(World& world, float dt)
