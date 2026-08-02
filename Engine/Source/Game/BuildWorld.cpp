@@ -74,15 +74,10 @@ void BuildWorld(ResourceManager& resources, World& world)
     const MeshHandle pyramidMesh = resources.ResolveMesh(L"#pyramid");
     const MeshHandle sphereMesh  = resources.LoadMesh(L"Sphere.obj");
     const MeshHandle torusMesh   = resources.LoadMesh(L"Torus.obj");
-	// The model now ships as its whole download: the .obj, its .mtl, and the
-	// textures both reference, in one folder. A path under Assets/ rather
-	// than a bare filename, because the pieces only make sense together.
-	//
-	// Spelled exactly as it is on disk. Windows would open "Laevat" just as
-	// happily, but the resource cache keys on the STRING - and the asset
-	// browser asks for the on-disk spelling, so a mismatch would load 24 MB
-	// of geometry a second time into a second GPU buffer.
-	const MeshHandle laevatMesh  = resources.LoadMesh( L"laevat/laevat.obj", 8.0f );
+    // Spelled exactly as the files are on disk. Windows would open
+    // "Sphere.OBJ" just as happily, but the resource cache keys on the
+    // STRING - and the asset browser asks for the on-disk spelling, so a
+    // mismatch would load the same geometry twice into two GPU buffers.
 
     // --- floor: rough and wide, barely any highlight ---
     Material floorMaterial;
@@ -167,14 +162,11 @@ void BuildWorld(ResourceManager& resources, World& world)
                                    { { 7.0f, 3.0f, -4.0f }, { 0, 0, 0 }, { 2.6f, 2.6f, 2.6f } });
     world.Add<Spin>(torus, { 0.6f });
 
-	Material laevatMaterial;
-	laevatMaterial.texture = resources.LoadTexture( L"Crate.png" );
-	laevatMaterial.diffuseAlbedo = { 0.9f, 0.95f, 1.0f, 1.0f };
-	laevatMaterial.specularColor = { 0.5f, 0.5f, 0.5f };
-	laevatMaterial.shininess = 32.0f;
-	SpawnMesh( world, "Laevat", laevatMesh, laevatMaterial,
-		{ { 0.0f, 3.0f, -4.0f }, { 0, 0, 0 }, { 2.6f, 2.6f, 2.6f } } );
-
+    // A downloaded character model used to stand here. It is gone on
+    // purpose: 43 MB of third-party art that cannot be redistributed does
+    // not belong in the scene the engine builds by default, and parsing its
+    // 24 MB .obj cost SIX SECONDS of every startup. Load it from the asset
+    // browser when you want it - that path is what the browser is for.
 
     // --- the camera is an entity too ---
     const Entity camera = world.Create();
