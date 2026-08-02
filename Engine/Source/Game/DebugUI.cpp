@@ -42,6 +42,27 @@ namespace
     constexpr float kMaxPlacedExtent = 20.0f;
     constexpr float kMinPlacedExtent = 0.25f;
 
+    // The uniform scale that brings a mesh's longest axis into that range.
+    //
+    // Exactly 1.0 when it is already there, which is the property that keeps
+    // procedural meshes and sanely authored files placing as they always did.
+    // Both call sites - click placement and the inspector's Fit button - go
+    // through here so there is one rule, not two that drift apart.
+    float FitScaleFor(const Aabb& bounds)
+    {
+        if (bounds.IsEmpty())
+        {
+            return 1.0f;
+        }
+        const XMFLOAT3 extents = bounds.Extents();
+        const float    longest = 2.0f * (std::max)({ extents.x, extents.y, extents.z });
+
+        if (longest <= 0.0f)            { return 1.0f; } // a single point
+        if (longest > kMaxPlacedExtent) { return kMaxPlacedExtent / longest; }
+        if (longest < kMinPlacedExtent) { return kMinPlacedExtent / longest; }
+        return 1.0f;
+    }
+
     // ---------------------------------------------------------------------
     // The component registry
     //
@@ -229,10 +250,7 @@ namespace
                     const Aabb& bounds = resources.GetMesh(command.mesh).bounds;
                     if (!bounds.IsEmpty())
                     {
-                        const XMFLOAT3 extents = bounds.Extents();
-                        const XMFLOAT3 center  = bounds.Center();
-                        const float    longest =
-                            2.0f * (std::max)({ extents.x, extents.y, extents.z });
+                        const XMFLOAT3 center = bounds.Center();
 
                         // A model authored elsewhere is rarely in our units.
                         // laevat.obj is 64,453 units on its longest axis and
@@ -246,14 +264,7 @@ namespace
                         // way back to the original, and would hide the number
                         // from the inspector. As a Transform field it is one
                         // value the user can see and overwrite.
-                        //
-                        // Only clamps - a model already within range keeps
-                        // scale 1, so procedural meshes and sanely authored
-                        // files place exactly as they did before.
-                        float scale = 1.0f;
-                        if (longest > kMaxPlacedExtent)      { scale = kMaxPlacedExtent / longest; }
-                        else if (longest > 0.0f && longest < kMinPlacedExtent)
-                                                             { scale = kMinPlacedExtent / longest; }
+                        const float scale = FitScaleFor(bounds);
                         transform.scale = { scale, scale, scale };
 
                         // Put the mesh where the click landed rather than
@@ -454,7 +465,7 @@ namespace
         ImGui::EndPopup();
     }
 
-    void DrawInspector(World& world, AssetBrowser& assets)
+    void DrawInspector(World& world, const ResourceManager& resources, AssetBrowser& assets)
     {
         ImGui::SetNextWindowPos(ImVec2(1000, 20), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(280, 500), ImGuiCond_FirstUseEver);
@@ -536,6 +547,41 @@ namespace
                 ImGui::EndDisabled();
                 ImGui::SameLine();
                 ImGui::TextDisabled("%s", assets.SelectedMeshLabel());
+
+                // Assigning a mesh deliberately does NOT touch the Transform:
+                // overwriting a scale the user set - Backdrop's (6, 3, 0.5),
+                // say - to fit new geometry would throw away their work.
+                //
+                // But that leaves the swap able to make an entity vanish, the
+                // same way placement used to, since a 64,453-unit model at
+                // scale 1 is nowhere near the camera. So the fit is offered
+                // as its own button instead of happening behind the user's
+                // back: placement means "make me a sane new object", this
+                // means "I am asking for it, now".
+                ImGui::BeginDisabled(!renderer->mesh.IsValid());
+                if (ImGui::Button("Fit"))
+                {
+                    if (Transform* transform = world.Get<Transform>(g_selected))
+                    {
+                        const Aabb& bounds = resources.GetMesh(renderer->mesh).bounds;
+                        if (!bounds.IsEmpty())
+                        {
+                            const float scale = FitScaleFor(bounds);
+                            transform->scale = { scale, scale, scale };
+                            // Rest it on y = 0 too. Scale alone would leave
+                            // laevat's feet 3.9 units under the floor, which
+                            // is not what anyone means by "fit".
+                            //
+                            // Horizontal position is left alone - that is
+                            // where the user put it, and nothing about a size
+                            // change implies it should move.
+                            transform->position.y = -bounds.min.y * scale;
+                        }
+                    }
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("size to view, rest on the floor");
 
                 ImGui::BeginDisabled(!browserTexture.IsValid());
                 if (ImGui::Button("Assign texture"))
@@ -957,7 +1003,7 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
     DrawSceneViewport(world, resources, assets, ui);
     DrawStats(ui, entityCount);
     DrawEntityList(world);
-    DrawInspector(world, assets);
+    DrawInspector(world, resources, assets);
     assets.Draw();
 
     // Every panel has finished iterating, so it is finally safe to change
