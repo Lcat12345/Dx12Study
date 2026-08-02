@@ -746,28 +746,29 @@ normal map이 픽셀 단위 표면 방향을 바꾸도록 한다.
 
 **작업 항목**
 
-- [ ] `Vertex`에 `XMFLOAT4 tangent` 추가 (`xyz` 방향, `w` handedness)
-- [ ] position/uv 차이로 삼각형 tangent와 bitangent 계산
-- [ ] 공유 정점에 기여도를 누적한 뒤 normal에 대해 Gram-Schmidt 직교화
-- [ ] bitangent 방향과 `cross(normal, tangent)`를 비교해 `w` 결정
-- [ ] UV 면적이 0에 가까운 삼각형의 fallback tangent 처리
-- [ ] **기하 면적이 0인 삼각형을 누적에서 제외** — UV determinant 검사만으로는
+- [o] `Vertex`에 `XMFLOAT4 tangent` 추가 (`xyz` 방향, `w` handedness)
+- [o] position/uv 차이로 삼각형 tangent와 bitangent 계산
+- [o] 공유 정점에 기여도를 누적한 뒤 normal에 대해 Gram-Schmidt 직교화
+- [o] bitangent 방향과 `cross(normal, tangent)`를 비교해 `w` 결정
+- [o] UV 면적이 0에 가까운 삼각형의 fallback tangent 처리
+- [o] **기하 면적이 0인 삼각형을 누적에서 제외** — UV determinant 검사만으로는
       부족하다. 7314689의 `MakeSphereMeshData`는 극점에 **퇴화 삼각형 64개를
       의도적으로 남긴다**(극 두 줄 × slices 32). 래스터라이저는 이들을 버리지만
       tangent 누적 루프는 버리지 않으므로, `cross(e1, e2)`가 0인 삼각형이
       극점 정점의 tangent/bitangent를 오염시키거나 정규화 단계에서 0으로
       나누어 **NaN**을 만든다. 한 정점의 NaN은 그 정점을 쓰는 모든 삼각형으로
       번진다. UV 검사와 **기하 검사 둘 다** 필요하다
-- [ ] 극점처럼 기여 삼각형이 전부 퇴화한 정점의 tangent를 어떻게 채울지 결정
-      (인접 링에서 복사 / normal로부터 임의의 직교축 생성)
-- [ ] OBJ normal 생성 이후 tangent 생성 순서 보장
-- [ ] cube, pyramid, floor를 포함한 절차 메시도 같은 후처리 사용
-- [ ] input layout과 HLSL `VSInput`을 새 stride에 맞게 변경
-- [ ] `Material`에 normal texture와 normal strength 추가
-- [ ] 코드 생성 1×1 flat normal texture `(128, 128, 255)` 추가
-- [ ] scene root signature에 diffuse와 normal SRV를 각각 바인딩
-- [ ] VS에서 world-space TBN을 만들고 PS에서 sampled normal 변환
-- [ ] Inspector와 씬 저장/불러오기 지원
+- [o] 극점처럼 기여 삼각형이 전부 퇴화한 정점의 tangent를 어떻게 채울지 결정
+      → normal로부터 임의의 직교축 생성(`AnyPerpendicular`). 인접 링 복사는
+      "인접"을 알려면 연결 정보가 필요한데 `MeshData`에는 없다
+- [o] OBJ normal 생성 이후 tangent 생성 순서 보장
+- [o] cube, pyramid, floor를 포함한 절차 메시도 같은 후처리 사용
+- [o] input layout과 HLSL `VSInput`을 새 stride에 맞게 변경
+- [o] `Material`에 normal texture와 normal strength 추가
+- [o] 코드 생성 1×1 flat normal texture `(128, 128, 255)` 추가
+- [o] scene root signature에 diffuse와 normal SRV를 각각 바인딩
+- [o] VS에서 world-space TBN을 만들고 PS에서 sampled normal 변환
+- [o] Inspector와 씬 저장/불러오기 지원
 
 **설계 결정**
 
@@ -798,6 +799,93 @@ normal map이 픽셀 단위 표면 방향을 바꾸도록 한다.
 
 **완료 기준**: 실제 기하를 늘리지 않고도 normal map에 따라 조명 표면 방향이
 변하고, normal map이 없는 모든 기존 재질은 이전과 동일하게 보인다.
+
+#### 결과
+
+**tangent 생성은 렌더러를 거치지 않고 먼저 검증했다.** `Mesh.cpp`만 링크하는
+독립 실행 파일로 `GenerateTangents`를 직접 돌렸다 — 화면에서 디버깅하는 것보다
+훨씬 싸고, 실패가 어디서 났는지 애매하지 않다.
+
+| 도형 | 정점 | NaN | 비단위 | 비수직 | `w`≠±1 | 최대 길이오차 | 최대 `n·t` |
+|---|---|---|---|---|---|---|---|
+| cube | 24 | 0 | 0 | 0 | 0 | 0 | 0 |
+| pyramid | 16 | 0 | 0 | 0 | 0 | 0 | 0 |
+| floor | 4 | 0 | 0 | 0 | 0 | 0 | 0 |
+| sphere | 561 | **0** | 0 | 0 | 0 | 1.19e−07 | 8.94e−08 |
+| torus | 1225 | **0** | 0 | 0 | 0 | 1.19e−07 | 1.04e−07 |
+
+바닥의 tangent는 손으로 유도되는 값과 정확히 일치한다: uv의 +U가 +X를 따라
+가므로 `(1, 0, 0)`, `w = 1`.
+
+**퇴화 삼각형에 대한 앞선 서술을 정정한다.** 계획 단계에서 구의 극점 퇴화
+삼각형이 **NaN**을 만든다고 적었는데, 실제로 계산해보니 그렇지 않다.
+극점 quad는 `p0 == p1`이라 첫 변이 0인데:
+
+```
+t = (e1*dv2 - e2*dv1) * r,  dv1 = 0  ->  정확히 0    (무해)
+b = (e2*du1 - e1*du2) * r            ->  크고 무의미  (오염)
+```
+
+tangent 누적은 quad의 나머지 진짜 삼각형이 살려주고, 오염되는 것은
+**bitangent → 즉 `w` handedness**다. 잘못된 `w`는 그 텍스처 섬을 반대쪽에서
+비춘다. NaN은 **한 정점의 모든 삼각형이 기각될 때** 나오는 다른 실패이고,
+그건 fallback이 담당한다. 두 경로를 따로 만들어 확인했다:
+
+| 상황 | 결과 |
+|---|---|
+| 기하 면적 0 (한 점에 모인 세 정점, uv는 정상) | `(0, 0, −1)` 유한·단위·수직 |
+| UV 면적 0 (진짜 삼각형, uv 셋이 동일) | `(0, 0, −1)` 유한·단위·수직 |
+
+두 검사가 서로를 대신할 수 없다는 뜻이기도 하다 — 첫 줄은 UV 검사가 놓치고,
+둘째 줄은 기하 검사가 놓친다.
+
+**노멀 매핑 자체는 예측 가능한 에셋으로 쟀다.** `TestNormal.png`(256×256)는
+탄젠트 공간 `(∓0.6, 0, 0.8)`을 번갈아 담은 세로 줄무늬다. 바닥의 tangent가
+`(1,0,0)`, `B = cross(N,T)·w = (0,0,−1)`이므로 탄젠트 ±X가 월드 ±X로 그대로
+가고, 태양의 `toLight = (−0.596, 0.745, −0.298)`에서 결과가 손으로 나온다.
+
+| | 예측 (red 채널, ambient 0.18 + dir 0.85·n·L) | 실측 |
+|---|---|---|
+| 밝은 줄무늬 | `0.994 / 0.814` = **1.222×** | **1.219** (90분위) |
+| 어두운 줄무늬 | `0.383 / 0.814` = **0.471×** | **0.469** (10분위) |
+
+오차 0.3~0.4%.
+
+**측정 함정 하나.** 처음 잰 값은 전부 1.0 미만이라 예측과 어긋났다. 원인은
+셰이더가 아니라 비교 방법이었다 — before/after가 **다른 실행**이었고, 궤도를
+도는 점광원 `Lamp`가 그 사이 움직였다. 점광원도 노멀에 반응하므로 예측식에
+없는 항이 통째로 달라진 것이다. `Lamp`를 지워 바닥 조명을 정적으로 만들고
+**한 실행 안에서** 다시 재자 위 표가 나왔다. 시간에 의존하는 씬에서
+before/after를 비교하려면 움직이는 것을 먼저 없애야 한다.
+
+**검증 기준별 결과**
+
+| # | 기준 | 결과 |
+|---|---|---|
+| 1 | flat normal map은 이전과 거의 동일 | 기본 씬 육안 동일. flat 텍셀 `(128,128,255)`의 잔차는 0.2° — *pre-11.3 빌드와의 픽셀 단위 대조는 하지 않았다* |
+| 2 | known normal map으로 조명 방향이 바뀐다 | **수치 일치 0.3~0.4%** (위 표) |
+| 3 | 비균일 스케일 | `Pyramid_squashed`(scale 4, 0.8, 4)에 적용 — 두 면이 **반대 방향으로** 밝기 변화, 검은 얼룩·이음새 없음. *mirrored UV는 그런 UV를 가진 에셋을 특정하지 못해 미검증* |
+| 4 | normal texture 없는 기존 씬 | 18 엔티티 / 14 drawn 그대로, 외형 동일 |
+| 5 | 저장→불러오기 복원 | `scene 3`으로 `normal "testnormal.png" strength 1` 기록, 재로드 시 인스펙터에 복원. `scene 2` 파일도 정상 로드되어 `flat` 유지 |
+
+**남긴 것**
+
+- `Engine/Assets/TestNormal.png` — 재사용 가능한 검증 에셋
+- `Engine/Assets/Scenes/LegacyV2.scene` — 버전 2 하위호환 회귀 픽스처
+
+**설계 메모 두 가지**
+
+- root signature에 **1개짜리 테이블 두 개**를 뒀다. descriptor table은 힙의
+  **연속** 구간을 가리키는데, 한 재질의 diffuse와 normal은 각자 로드될 때
+  빈 슬롯을 받은 독립 텍스처라 이웃일 리가 없다. 2개짜리 테이블 하나면
+  diffuse 옆의 엉뚱한 텍스처가 노멀맵으로 바인딩된다. 매 드로우마다 두
+  descriptor를 연속 영역으로 복사하는 방법도 있지만 텍스처 두 장에서는
+  루트 파라미터 하나가 훨씬 싸다.
+- object CB에 `float3` 패딩 대신 **스칼라 3개**를 넣었다. HLSL은 스칼라를
+  현재 16바이트 레지스터에 채워 넣지만 `float3`는 경계를 걸치면 다음
+  레지스터로 민다. `normalStrength` 뒤에 12바이트가 남는 이 자리는 "걸치는가"
+  판정이 읽는 사람에 따라 갈리는 지점이라 애매함이 없는 쪽을 골랐다. 어긋나도
+  에러가 아니라 **엉뚱한 오프셋에서 읽은 재질 색**이 된다.
 
 ---
 

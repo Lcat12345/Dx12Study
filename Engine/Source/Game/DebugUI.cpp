@@ -592,6 +592,35 @@ namespace
                 ImGui::SameLine();
                 ImGui::TextDisabled("%s", assets.SelectedTextureLabel());
 
+                // The same browser selection, assigned to the other slot.
+                // Normal maps ship beside the colour maps and are told apart
+                // only by a naming convention (_n here), so the browser
+                // cannot know which is which - the button says it.
+                ImGui::BeginDisabled(!browserTexture.IsValid());
+                if (ImGui::Button("Assign normal"))
+                {
+                    renderer->material.normalTexture = browserTexture;
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::BeginDisabled(!renderer->material.normalTexture.IsValid());
+                if (ImGui::Button("Clear normal"))
+                {
+                    renderer->material.normalTexture = TextureHandle{};
+                }
+                ImGui::EndDisabled();
+                ImGui::SameLine();
+                ImGui::TextDisabled("%s",
+                    renderer->material.normalTexture.IsValid()
+                        ? ToUtf8(resources.TextureName(renderer->material.normalTexture)).c_str()
+                        : "flat");
+
+                // Above 1 exaggerates. Kept available on purpose: a subtle map
+                // that does nothing visible and a map that is not bound at all
+                // look identical until you can turn it up.
+                ImGui::DragFloat("Normal strength", &renderer->material.normalStrength,
+                                 0.01f, 0.0f, 4.0f);
+
                 ImGui::ColorEdit3("Albedo",   &renderer->material.diffuseAlbedo.x);
                 ImGui::ColorEdit3("Specular", &renderer->material.specularColor.x);
                 ImGui::DragFloat("Shininess", &renderer->material.shininess,

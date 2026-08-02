@@ -16,6 +16,18 @@ struct Vertex
     DirectX::XMFLOAT3 position;
     DirectX::XMFLOAT3 normal;
     DirectX::XMFLOAT2 uv;
+    // Which way the texture's +U runs across the surface, in object space.
+    //
+    // A normal map stores directions in TANGENT space - relative to the
+    // texture's own axes - so the shader cannot use one without knowing where
+    // those axes point on this particular triangle. normal alone is not
+    // enough: it fixes only one of the three axes.
+    //
+    // float4, not float3: `w` is +1 or -1 and says which way the bitangent
+    // goes. Mirrored UVs (one texture island reused flipped, which is how
+    // most character models save space) flip it, and without that sign those
+    // islands light from the wrong side.
+    DirectX::XMFLOAT4 tangent = { 1.0f, 0.0f, 0.0f, 1.0f };
 };
 
 // The mesh's extent in its OWN space, before any Transform.
@@ -109,6 +121,41 @@ struct MeshData
     // submesh, so procedural geometry needs to say nothing about this.
     std::vector<SubmeshData> submeshes;
 };
+
+// Fills in every vertex's tangent from the positions and uvs around it.
+//
+// Called by CreateMesh, so procedural geometry and loaded files get the same
+// treatment - the vertex contract is "all four fields are valid", and there
+// is no second path that could produce a half-filled vertex.
+//
+// Degenerate triangles are excluded TWICE, on two independent grounds, and
+// the two catch different failures:
+//
+//   - zero UV area - a face the exporter never unwrapped. There is no
+//     direction for "+U runs this way" to name, and the 1/det that would
+//     compute it blows up.
+//
+//   - zero geometric area - a face with no surface. MakeSphereMeshData leaves
+//     64 of these on purpose, one per pole quad, because letting the
+//     rasterizer discard them is cheaper than special-casing the poles. Their
+//     uvs are perfectly good, so the UV test does NOT catch them.
+//
+//     What they corrupt is HANDEDNESS, not the tangent. Worked through for a
+//     pole quad, where p0 == p1 makes the first edge zero:
+//         t = (e1*dv2 - e2*dv1) * r,  dv1 = 0  ->  exactly zero, harmless
+//         b = (e2*du1 - e1*du2) * r            ->  large and meaningless
+//     so the accumulated tangent survives on the quad's other, real triangle
+//     while the accumulated bitangent is polluted - and the bitangent is what
+//     decides `w`. A wrong `w` lights that texture island from the wrong side.
+//
+// NaN is a different failure: it needs EVERY triangle at a vertex to be
+// rejected, leaving a zero sum to normalize. That is what the fallback below
+// is for, not these tests.
+//
+// Both tests are relative to the triangle's own size, so they mean the same
+// thing on a 1-unit sphere and on a 64,000-unit model.
+void GenerateTangents(std::vector<Vertex>& vertices,
+                      const std::vector<uint32_t>& indices);
 
 // Indices are 32-bit. 16-bit halves the index memory but caps a mesh at
 // 65535 vertices, which loaded models pass easily.

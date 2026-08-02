@@ -43,6 +43,138 @@ Aabb ComputeBounds(const Vertex* vertices, UINT vertexCount)
     return bounds;
 }
 
+namespace
+{
+    // Any unit vector perpendicular to n. Used only where the real tangent is
+    // unknowable - every triangle touching the vertex was degenerate. The
+    // DIRECTION is arbitrary, but it must be perpendicular and finite, or the
+    // shader's TBN collapses and the pixel goes black.
+    //
+    // Crossing with the axis n leans on LEAST guarantees the two are far from
+    // parallel, so the cross product is never near zero.
+    XMVECTOR AnyPerpendicular(FXMVECTOR n)
+    {
+        XMFLOAT3 a;
+        XMStoreFloat3(&a, n);
+        const XMVECTOR axis =
+            (std::fabs(a.x) <= std::fabs(a.y) && std::fabs(a.x) <= std::fabs(a.z))
+                ? XMVectorSet(1.0f, 0.0f, 0.0f, 0.0f)
+            : (std::fabs(a.y) <= std::fabs(a.z))
+                ? XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f)
+                : XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+        return XMVector3Normalize(XMVector3Cross(n, axis));
+    }
+}
+
+void GenerateTangents(std::vector<Vertex>& vertices,
+                      const std::vector<uint32_t>& indices)
+{
+    if (vertices.empty())
+    {
+        return;
+    }
+
+    // Accumulated per vertex, because a vertex shared by several triangles
+    // should get their average - otherwise the tangent jumps at every edge
+    // and the normal map creases along the triangulation.
+    std::vector<XMFLOAT3> tangents(vertices.size(), XMFLOAT3{ 0, 0, 0 });
+    std::vector<XMFLOAT3> bitangents(vertices.size(), XMFLOAT3{ 0, 0, 0 });
+
+    for (size_t i = 0; i + 2 < indices.size(); i += 3)
+    {
+        const uint32_t i0 = indices[i + 0];
+        const uint32_t i1 = indices[i + 1];
+        const uint32_t i2 = indices[i + 2];
+        if (i0 >= vertices.size() || i1 >= vertices.size() || i2 >= vertices.size())
+        {
+            continue;
+        }
+
+        const XMVECTOR p0 = XMLoadFloat3(&vertices[i0].position);
+        const XMVECTOR e1 = XMVectorSubtract(XMLoadFloat3(&vertices[i1].position), p0);
+        const XMVECTOR e2 = XMVectorSubtract(XMLoadFloat3(&vertices[i2].position), p0);
+
+        // |e1 x e2|^2 = |e1|^2 |e2|^2 sin^2(theta), so dividing by the two
+        // squared lengths leaves sin^2 - a pure angle, independent of how big
+        // the model is. A zero-length edge makes the right-hand side 0 and
+        // fails the test too, which is exactly the sphere's pole case.
+        const float crossSq = XMVectorGetX(XMVector3LengthSq(XMVector3Cross(e1, e2)));
+        const float scaleSq = XMVectorGetX(XMVector3LengthSq(e1)) *
+                              XMVectorGetX(XMVector3LengthSq(e2));
+        if (!(crossSq > 1e-12f * scaleSq))  // NOT >, so a NaN also falls out
+        {
+            continue;
+        }
+
+        const XMFLOAT2& uv0 = vertices[i0].uv;
+        const float du1 = vertices[i1].uv.x - uv0.x, dv1 = vertices[i1].uv.y - uv0.y;
+        const float du2 = vertices[i2].uv.x - uv0.x, dv2 = vertices[i2].uv.y - uv0.y;
+
+        // The determinant of the uv edge matrix. Zero means the triangle has
+        // no area in texture space - the exporter collapsed it - so there is
+        // no direction for "+U runs this way" to name.
+        const float det = du1 * dv2 - du2 * dv1;
+        if (std::fabs(det) <= 1e-12f)
+        {
+            continue;
+        }
+        const float r = 1.0f / det;
+
+        // Solve for the two object-space directions that the uv axes map to.
+        const XMVECTOR t = XMVectorScale(
+            XMVectorSubtract(XMVectorScale(e1, dv2), XMVectorScale(e2, dv1)), r);
+        const XMVECTOR b = XMVectorScale(
+            XMVectorSubtract(XMVectorScale(e2, du1), XMVectorScale(e1, du2)), r);
+
+        for (const uint32_t index : { i0, i1, i2 })
+        {
+            XMStoreFloat3(&tangents[index],
+                          XMVectorAdd(XMLoadFloat3(&tangents[index]), t));
+            XMStoreFloat3(&bitangents[index],
+                          XMVectorAdd(XMLoadFloat3(&bitangents[index]), b));
+        }
+    }
+
+    for (size_t v = 0; v < vertices.size(); ++v)
+    {
+        const XMVECTOR n         = XMVector3Normalize(XMLoadFloat3(&vertices[v].normal));
+        const XMVECTOR summed    = XMLoadFloat3(&tangents[v]);
+        const float    summedSq  = XMVectorGetX(XMVector3LengthSq(summed));
+
+        XMVECTOR tangent;
+        if (!(summedSq > 1e-20f))
+        {
+            // Every triangle here was rejected, or they cancelled out exactly.
+            tangent = AnyPerpendicular(n);
+        }
+        else
+        {
+            // Gram-Schmidt: the accumulated direction is only approximately
+            // in the surface, so subtract off whatever part points along the
+            // normal. Interpolating between vertices tilts it again, which is
+            // why the pixel shader repeats this.
+            const XMVECTOR projected = XMVectorSubtract(
+                summed, XMVectorScale(n, XMVectorGetX(XMVector3Dot(n, summed))));
+
+            // Nothing left means the tangent was parallel to the normal -
+            // normalizing that is a divide by zero.
+            tangent = (XMVectorGetX(XMVector3LengthSq(projected)) > 1e-20f)
+                        ? XMVector3Normalize(projected)
+                        : AnyPerpendicular(n);
+        }
+
+        // Does the bitangent we computed agree with cross(n, t), or point the
+        // other way? That one bit is what mirrored UV islands need.
+        const float agreement = XMVectorGetX(
+            XMVector3Dot(XMVector3Cross(n, tangent), XMLoadFloat3(&bitangents[v])));
+
+        XMFLOAT3 stored;
+        XMStoreFloat3(&stored, tangent);
+        vertices[v].tangent = { stored.x, stored.y, stored.z,
+                                agreement < 0.0f ? -1.0f : 1.0f };
+    }
+}
+
 // Every mesh reaches the GPU through here - AddMesh for procedural geometry
 // and LoadMesh for files both end up at this call. That makes it the one
 // place where bounds can be computed once and cover both; doing it in
@@ -79,8 +211,19 @@ Mesh CreateMesh(ID3D12Device* device,
 
 Mesh CreateMesh(ID3D12Device* device, const MeshData& data)
 {
+    // Tangents are filled in HERE rather than in each producer, so a loader
+    // or a Make*MeshData that never heard of tangents still yields a complete
+    // vertex. Both ways into the ResourceManager - AddMesh and LoadMesh -
+    // come through this overload, so there is no path that skips it.
+    //
+    // The copy is the price of leaving MeshData const for its producers. It
+    // is one memcpy of the vertices; laevat's 216,912 of them cost a few
+    // milliseconds against the 5,200 ms its .obj already spent being parsed.
+    std::vector<Vertex> vertices = data.vertices;
+    GenerateTangents(vertices, data.indices);
+
     Mesh mesh = CreateMesh(device,
-                           data.vertices.data(), UINT(data.vertices.size()),
+                           vertices.data(), UINT(vertices.size()),
                            data.indices.data(), UINT(data.indices.size()));
 
     // Replace the synthesised single submesh when the loader found real

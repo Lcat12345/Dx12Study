@@ -131,17 +131,33 @@ void Renderer::CreateConstantBuffers()
 }
 
 // The "function signature" of the pipeline:
-// b0 object CB, b1 pass CB, t0 texture, s0 static sampler.
+// b0 object CB, b1 pass CB, t0 diffuse, t1 normal map, s0 static sampler.
 void Renderer::CreateRootSignature()
 {
-    D3D12_DESCRIPTOR_RANGE srvRange = {};
-    srvRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
-    srvRange.NumDescriptors     = 1;
-    srvRange.BaseShaderRegister = 0; // t0
+    // TWO tables of one descriptor each, not one table of two.
+    //
+    // A descriptor table names a CONTIGUOUS run of the heap, and a material's
+    // diffuse and normal map are two independent textures that the allocator
+    // handed whatever slots were free when each was loaded. They are almost
+    // never neighbours. One table of two would therefore bind the diffuse
+    // plus whatever unrelated texture happens to sit after it.
+    //
+    // The alternative is copying both descriptors into a contiguous scratch
+    // region every draw. That is what a bigger renderer does when the count
+    // grows; at two textures the extra root parameter is far cheaper.
+    D3D12_DESCRIPTOR_RANGE diffuseRange = {};
+    diffuseRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    diffuseRange.NumDescriptors     = 1;
+    diffuseRange.BaseShaderRegister = 0; // t0
+
+    D3D12_DESCRIPTOR_RANGE normalRange = {};
+    normalRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    normalRange.NumDescriptors     = 1;
+    normalRange.BaseShaderRegister = 1; // t1
 
     // Both CBs are visible to ALL stages: the VS needs the matrices, the PS
     // needs the material and the lights.
-    D3D12_ROOT_PARAMETER rootParams[3] = {};
+    D3D12_ROOT_PARAMETER rootParams[4] = {};
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0 - per object
     rootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -152,8 +168,13 @@ void Renderer::CreateRootSignature()
 
     rootParams[2].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
     rootParams[2].DescriptorTable.NumDescriptorRanges = 1;
-    rootParams[2].DescriptorTable.pDescriptorRanges   = &srvRange;
+    rootParams[2].DescriptorTable.pDescriptorRanges   = &diffuseRange;
     rootParams[2].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    rootParams[3].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[3].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[3].DescriptorTable.pDescriptorRanges   = &normalRange;
+    rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     // A static sampler lives in the root signature, not in a heap - the
     // common case, since most samplers never change at runtime.
@@ -208,6 +229,8 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate() const
         { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
     };
 
@@ -407,6 +430,7 @@ void Renderer::UpdateObjectConstants(FrameResource& frame,
         constants.diffuseAlbedo = item.material.diffuseAlbedo;
         constants.specularColor = item.material.specularColor;
         constants.shininess     = item.material.shininess;
+        constants.normalStrength = item.material.normalStrength;
 
         memcpy(frame.objectCBMapped + i * kObjectCBSize, &constants, sizeof(constants));
     }
@@ -464,6 +488,17 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
                                     : m_resources.DefaultTexture();
         m_commandList->SetGraphicsRootDescriptorTable(
             2, m_resources.TextureSRV(texture).gpu);
+
+        // Same idea for the normal map, and the same reason it is never left
+        // unbound: a descriptor table the shader reads but nobody filled is
+        // undefined behaviour, not a zero. The flat default decodes to
+        // "straight out of the surface", so a material without a normal map
+        // comes out byte-identical to how it looked before this step.
+        const TextureHandle normalMap = item.material.normalTexture.IsValid()
+                                      ? item.material.normalTexture
+                                      : m_resources.DefaultNormalTexture();
+        m_commandList->SetGraphicsRootDescriptorTable(
+            3, m_resources.TextureSRV(normalMap).gpu);
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);

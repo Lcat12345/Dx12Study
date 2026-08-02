@@ -41,6 +41,22 @@ ResourceManager::ResourceManager(GraphicsDevice& device, DescriptorAllocator& sr
     white.height = 1;
     white.pixels = { 255, 255, 255, 255 };
     m_defaultTexture = AddTexture(L"#white", white);
+
+    // The normal-map equivalent of that white texel.
+    //
+    // A normal map stores a direction as a colour, packed from [-1,1] into
+    // [0,1]: the shader reads it and does `value * 2 - 1`. So the texel that
+    // means "no change - the surface points exactly the way the geometry
+    // says" is (0, 0, 1) encoded, which is (128, 128, 255).
+    //
+    // 128 rather than 127.5 leaves x and y at 0.0039 instead of 0, a tilt of
+    // 0.2 degrees. Invisible, and the alternative is a texture format with
+    // room for the half.
+    ImageData flatNormal;
+    flatNormal.width  = 1;
+    flatNormal.height = 1;
+    flatNormal.pixels = { 128, 128, 255, 255 };
+    m_defaultNormalTexture = AddTexture(L"#flatnormal", flatNormal);
 }
 
 void ResourceManager::BeginUpload()

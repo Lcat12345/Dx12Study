@@ -19,6 +19,8 @@ cbuffer ObjectConstants : register(b0)
     float4   gDiffuseAlbedo;
     float3   gSpecularColor;
     float    gShininess;
+    float    gNormalStrength;
+    float    _padObj0, _padObj1, _padObj2;
 };
 
 cbuffer PassConstants : register(b1)
@@ -38,6 +40,9 @@ cbuffer PassConstants : register(b1)
 TextureCube  gSky     : register(t0);
 SamplerState gSampler : register(s0);
 
+// TANGENT is in the shared input layout but not declared here: the sky needs
+// only a direction. The input assembler simply does not feed what no shader
+// stage asks for.
 struct VSInput
 {
     float3 position : POSITION;

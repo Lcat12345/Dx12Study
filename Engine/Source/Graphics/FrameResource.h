@@ -21,6 +21,17 @@ struct ObjectConstants // b0 - written once per object per frame
     DirectX::XMFLOAT4   diffuseAlbedo;
     DirectX::XMFLOAT3   specularColor;
     float               shininess;
+    float               normalStrength;
+    // Three loose floats, NOT an XMFLOAT3.
+    //
+    // HLSL packs a scalar wherever it fits in the current 16-byte register,
+    // but moves a float3 to the next register if it would straddle one. After
+    // normalStrength the register has 12 bytes left - just enough that
+    // whether a float3 "straddles" depends on reading the rule the same way
+    // the compiler does. Scalars have no such ambiguity: they pack, and both
+    // sides are 176 bytes. A disagreement here is not an error, it is a
+    // material whose colours come from the wrong offset.
+    float               _pad0, _pad1, _pad2;
 };
 
 // Layout must match the HLSL cbuffer exactly. In HLSL a float3 followed by a

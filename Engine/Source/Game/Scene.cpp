@@ -145,7 +145,13 @@ static bool SaveSceneImpl(World& world, const ResourceManager& resources,
                  << ' ' << material.diffuseAlbedo.z << ' ' << material.diffuseAlbedo.w
                  << " specular";
             WriteFloat3(file, material.specularColor);
-            file << " shininess " << material.shininess << "\n";
+            file << " shininess " << material.shininess;
+            // Appended rather than inserted, and read back as OPTIONAL, so a
+            // version 2 file - every scene saved before 11.3 - still loads
+            // and simply keeps the flat default.
+            file << " normal ";
+            WriteQuoted(file, ToUtf8(resources.TextureName(material.normalTexture)));
+            file << " strength " << material.normalStrength << "\n";
         }
 
         if (const CameraComponent* lens = world.Get<CameraComponent>(entity))
@@ -340,7 +346,7 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
         }
         else if (keyword == "meshrenderer")
         {
-            std::string tag, meshName, textureName;
+            std::string tag, meshName, textureName, normalName;
             MeshRenderer renderer;
 
             if (!(in >> tag) || tag != "mesh" || !ReadQuoted(in, meshName) ||
@@ -357,6 +363,21 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
             {
                 outError = Where(lineNumber, "malformed meshrenderer");
                 return false;
+            }
+
+            // Everything past shininess is optional, because version 2 files
+            // end there. Present but malformed is still an error - silently
+            // ignoring a half-written line would lose the normal map without
+            // saying so.
+            if (in >> tag)
+            {
+                if (tag != "normal" || !ReadQuoted(in, normalName) ||
+                    !(in >> tag) || tag != "strength" ||
+                    !(in >> renderer.material.normalStrength))
+                {
+                    outError = Where(lineNumber, "malformed meshrenderer normal map");
+                    return false;
+                }
             }
 
             // Name -> handle. This is the whole reason names are stored:
@@ -382,6 +403,11 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
                 if (!textureName.empty())
                 {
                     renderer.material.texture = resources.LoadTexture(ToWide(textureName));
+                }
+                if (!normalName.empty())
+                {
+                    renderer.material.normalTexture =
+                        resources.LoadTexture(ToWide(normalName));
                 }
             }
             catch (const std::exception& e)

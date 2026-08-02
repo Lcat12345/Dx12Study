@@ -12,6 +12,10 @@ cbuffer ObjectConstants : register(b0)
     float4   gDiffuseAlbedo;     // material tint, multiplied with the texture
     float3   gSpecularColor;
     float    gShininess;         // specular exponent: high = small tight highlight
+    float    gNormalStrength;    // 0 = ignore the normal map, 1 = as authored
+    // Three scalars, not a float3 - see the C++ struct for why the difference
+    // matters here.
+    float    _padObj0, _padObj1, _padObj2;
 };
 
 cbuffer PassConstants : register(b1)
@@ -28,14 +32,22 @@ cbuffer PassConstants : register(b1)
     float3   gPointLightColor;  float _pad4;
 };
 
-Texture2D    gDiffuse : register(t0);
-SamplerState gSampler : register(s0);
+Texture2D    gDiffuse   : register(t0);
+// Directions in TANGENT space, packed [-1,1] -> [0,1]. Always bound: a
+// material with no map of its own gets the flat 1x1 default.
+//
+// This is LINEAR data, not colour. If diffuse textures later move to an sRGB
+// format, this one must not follow - an sRGB read would curve the numbers and
+// bend every normal.
+Texture2D    gNormalMap : register(t1);
+SamplerState gSampler   : register(s0);
 
 struct VSInput
 {
     float3 position : POSITION;
     float3 normal   : NORMAL;
     float2 uv       : TEXCOORD;
+    float4 tangent  : TANGENT;  // xyz direction, w bitangent handedness
 };
 
 struct PSInput
@@ -44,6 +56,7 @@ struct PSInput
     float3 positionW : POSITION;    // world space, for lighting math
     float3 normalW   : NORMAL;      // world space
     float2 uv        : TEXCOORD;
+    float4 tangentW  : TANGENT;     // xyz world space, w carried through
 };
 
 PSInput VSMain(VSInput input)
@@ -59,6 +72,18 @@ PSInput VSMain(VSInput input)
     // Normals use the inverse transpose, NOT the world matrix (see C++).
     // Cast to 3x3: normals are directions, translation must not apply.
     output.normalW = mul(input.normal, (float3x3)gWorldInvTranspose);
+
+    // The TANGENT uses gWorld, not the inverse transpose - the opposite of
+    // the normal, and not a typo.
+    //
+    // A normal is defined by being perpendicular to the surface, and that
+    // relationship is what the inverse transpose preserves. A tangent is
+    // defined by LYING IN the surface, along a real direction between two
+    // points on it, so it transforms like any other difference of positions:
+    // by the world matrix. Under non-uniform scale the two stop being
+    // perpendicular, which is why the pixel shader re-orthogonalizes.
+    output.tangentW = float4(mul(input.tangent.xyz, (float3x3)gWorld),
+                             input.tangent.w);
 
     output.uv = input.uv;
     return output;
@@ -88,7 +113,38 @@ float3 BlinnPhong(float3 lightColor, float3 toLight, float3 normal,
 float4 PSMain(PSInput input) : SV_Target
 {
     // Interpolation across the triangle shortens normals - renormalize.
-    const float3 normal = normalize(input.normalW);
+    const float3 geometryNormal = normalize(input.normalW);
+
+    // --- rebuild the tangent frame, per pixel ---
+    // Interpolation tilts the tangent out of the surface, and non-uniform
+    // scale skewed it in the vertex shader, so subtract off whatever part now
+    // points along the normal. Doing this per pixel rather than trusting the
+    // interpolated value is what keeps the frame square across a triangle.
+    float3 T = input.tangentW.xyz - geometryNormal * dot(geometryNormal, input.tangentW.xyz);
+    const float tangentLengthSq = dot(T, T);
+
+    float3 normal = geometryNormal;
+    if (tangentLengthSq > 1e-12)
+    {
+        T = T * rsqrt(tangentLengthSq);
+        // w carries the mirrored-UV flip decided when the mesh was built.
+        const float3 B = cross(geometryNormal, T) * input.tangentW.w;
+
+        // Unpack [0,1] back to [-1,1]. The flat default is (128,128,255),
+        // which lands on (0, 0, 1) - straight out of the surface - so a
+        // material with no map falls through this unchanged.
+        float3 sampled = gNormalMap.Sample(gSampler, input.uv).xyz * 2.0 - 1.0;
+
+        // Strength leans only on the SIDEWAYS components. Scaling z as well
+        // would just rescale the whole vector, which normalize then undoes -
+        // it would do nothing at all.
+        sampled.xy *= gNormalStrength;
+
+        // Tangent space -> world. Rows T, B, N means the result is
+        // sampled.x*T + sampled.y*B + sampled.z*N.
+        normal = normalize(mul(sampled, float3x3(T, B, geometryNormal)));
+    }
+
     const float3 toEye  = normalize(gEyePosW - input.positionW);
 
     const float3 albedo = gDiffuse.Sample(gSampler, input.uv).rgb * gDiffuseAlbedo.rgb;

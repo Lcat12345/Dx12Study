@@ -65,6 +65,11 @@ public:
     // something to sample. Multiplying the albedo by white leaves it alone.
     TextureHandle DefaultTexture() const { return m_defaultTexture; }
 
+    // A 1x1 (128, 128, 255) texel - the encoding of "straight out of the
+    // surface". Bound whenever a material names no normal map, so the shader
+    // never branches and the picture is unchanged from before normal mapping.
+    TextureHandle DefaultNormalTexture() const { return m_defaultNormalTexture; }
+
     // --- cube textures ---
     // 'name' is a LOGICAL name, not a path: "Test" resolves to the six faces
     // under Assets/Skyboxes/Test/. The scene file stores that one name, so a
@@ -150,6 +155,7 @@ private:
     std::vector<std::wstring> m_textureNames;
 
     TextureHandle m_defaultTexture;
+    TextureHandle m_defaultNormalTexture;
 
     std::unordered_map<std::wstring, MeshHandle>    m_meshCache;
     std::unordered_map<std::wstring, TextureHandle> m_textureCache;

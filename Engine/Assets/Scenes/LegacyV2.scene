@@ -1,0 +1,84 @@
+scene 2
+entity
+  name "Floor"
+  transform 0 0 0 0 0 0 1 1 1
+  meshrenderer mesh "#floor" texture "floor.png" albedo 1 1 1 1 specular 0.0500000007 0.0500000007 0.0500000007 shininess 8
+entity
+  name "Crate_00"
+  transform -8 1 -8 0 -3.53261971 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 4
+  spin -0.300000012
+entity
+  name "Crate_01"
+  transform 0 1 -8 0 -1.76630986 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 6.72717142
+  spin -0.150000006
+entity
+  name "Crate_02"
+  transform 8 1 -8 0 0 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 11.3137083
+  spin 0
+entity
+  name "Crate_03"
+  transform -8 1 0 0 1.76630986 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 19.0273132
+  spin 0.150000006
+entity
+  name "Crate_04"
+  transform 8 1 0 0 5.29893494 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 32
+  spin 0.450000018
+entity
+  name "Crate_05"
+  transform -8 1 8 0 7.06523943 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 53.8173714
+  spin 0.600000024
+entity
+  name "Crate_06"
+  transform 0 1 8 0 8.83155632 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 90.5096664
+  spin 0.75
+entity
+  name "Crate_07"
+  transform 8 1 8 0 10.5978699 0 1 1 1
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 1 1 1 specular 0.600000024 0.600000024 0.600000024 shininess 152.218506
+  spin 0.900000036
+entity
+  name "Backdrop"
+  transform 0 3 20 0 0 0 6 3 0.5
+  meshrenderer mesh "#cube" texture "crate.png" albedo 1 0.850000024 0.699999988 1 specular 0.400000006 0.400000006 0.400000006 shininess 64
+entity
+  name "Pyramid"
+  transform -6 2 -13 0 0 0 2 2 2
+  meshrenderer mesh "#pyramid" texture "crate.png" albedo 1 1 1 1 specular 0.5 0.5 0.5 shininess 48
+entity
+  name "Pyramid_squashed"
+  transform 6 0.899999976 -13 0 0 0 4 0.800000012 4
+  meshrenderer mesh "#pyramid" texture "crate.png" albedo 1 1 1 1 specular 0.5 0.5 0.5 shininess 48
+entity
+  name "Sphere"
+  transform -7 3 -4 0 4.71016359 0 3 3 3
+  meshrenderer mesh "#sphere" texture "crate.png" albedo 1 1 1 1 specular 0.699999988 0.699999988 0.699999988 shininess 96
+  spin 0.400000006
+entity
+  name "Torus"
+  transform 7 3 -4 0 7.06523943 0 2.5999999 2.5999999 2.5999999
+  meshrenderer mesh "#torus" texture "crate.png" albedo 0.899999976 0.949999988 1 1 specular 0.5 0.5 0.5 shininess 32
+  spin 0.600000024
+entity
+  name "Camera"
+  transform 0 3.5 -22 0 0 0 1 1 1
+  camera 0.785398185 0.100000001 200
+  activecamera
+entity
+  name "Sun"
+  transform 0 0 0 -0.841099977 1.10710001 0 1 1 1
+  light directional 0.850000024 0.819999993 0.75 0
+entity
+  name "Lamp"
+  transform -5.30707073 4 12.9551144 0 8.24278927 0 1 1 1
+  light point 1 0.550000012 0.200000003 30
+  spin 0.699999988
+entity
+  name "Environment"
+  environment 0.180000007 0.189999998 0.219999999

@@ -17,6 +17,14 @@ struct Material
     DirectX::XMFLOAT3 specularColor = { 0.3f, 0.3f, 0.3f };
     float             shininess     = 32.0f; // high = small tight highlight
     TextureHandle     texture;
+
+    // Per-pixel surface direction. Invalid means "use the flat default", so
+    // an untouched material looks exactly as it did before 11.3.
+    TextureHandle     normalTexture;
+    // How far to believe the map. 0 ignores it entirely (useful for an A/B
+    // without unassigning the texture), 1 is the map as authored, and above 1
+    // exaggerates - handy for seeing whether a subtle map is working at all.
+    float             normalStrength = 1.0f;
 };
 
 // One draw call's worth of input. The world matrix arrives already built -
