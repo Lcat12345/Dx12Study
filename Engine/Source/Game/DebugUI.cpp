@@ -12,6 +12,7 @@
 
 #include "imgui.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -27,6 +28,19 @@ namespace
     // editor state, NOT scene data - it deliberately does not live in a
     // component, because saving the scene should not save what was selected.
     Entity g_selected;
+
+    // The size range a click-placed mesh is clamped into, in world units.
+    //
+    // 20 is a quarter of the 80-unit floor and well inside the 200 far plane,
+    // so a model at the limit is big but framed. It is also about what the
+    // old hardcoded laevat placement worked out to (fitToSize 8 x scale 2.6
+    // = 20.8), which is the size that actually looked right on screen.
+    //
+    // The lower bound matters for the same reason as the upper one: a file
+    // authored in millimetres arrives a thousand times too small and is just
+    // as invisible as one that is too large.
+    constexpr float kMaxPlacedExtent = 20.0f;
+    constexpr float kMinPlacedExtent = 0.25f;
 
     // ---------------------------------------------------------------------
     // The component registry
@@ -210,19 +224,49 @@ namespace
 
                 Transform transform;
                 transform.position = command.position;
-                // Lift the mesh so its LOWEST point rests on the plane the
-                // click landed on. Its origin is usually the centre, so
-                // without this everything sits half-buried.
-                //
-                // -min.y is enough only because a freshly placed entity has
-                // no rotation and unit scale. Re-seating an already rotated
-                // object is a different problem and not this one.
                 if (command.mesh.IsValid())
                 {
                     const Aabb& bounds = resources.GetMesh(command.mesh).bounds;
                     if (!bounds.IsEmpty())
                     {
-                        transform.position.y -= bounds.min.y;
+                        const XMFLOAT3 extents = bounds.Extents();
+                        const XMFLOAT3 center  = bounds.Center();
+                        const float    longest =
+                            2.0f * (std::max)({ extents.x, extents.y, extents.z });
+
+                        // A model authored elsewhere is rarely in our units.
+                        // laevat.obj is 64,453 units on its longest axis and
+                        // sits 34,123 from its own origin - placed as-is it
+                        // lands entirely behind the camera, so the editor
+                        // reports a successful load and shows nothing.
+                        //
+                        // The fix is a Transform SCALE, not FitMeshToSize:
+                        // baking it into the vertices would put the shrunken
+                        // copy in the mesh cache under the same key, with no
+                        // way back to the original, and would hide the number
+                        // from the inspector. As a Transform field it is one
+                        // value the user can see and overwrite.
+                        //
+                        // Only clamps - a model already within range keeps
+                        // scale 1, so procedural meshes and sanely authored
+                        // files place exactly as they did before.
+                        float scale = 1.0f;
+                        if (longest > kMaxPlacedExtent)      { scale = kMaxPlacedExtent / longest; }
+                        else if (longest > 0.0f && longest < kMinPlacedExtent)
+                                                             { scale = kMinPlacedExtent / longest; }
+                        transform.scale = { scale, scale, scale };
+
+                        // Put the mesh where the click landed rather than
+                        // where its own origin happens to be, and rest its
+                        // LOWEST point on the plane instead of half-burying
+                        // it. Every offset goes through the same scale.
+                        //
+                        // Correct only because a freshly placed entity has no
+                        // rotation. Re-seating an already rotated object is a
+                        // different problem and not this one.
+                        transform.position.x -= center.x * scale;
+                        transform.position.z -= center.z * scale;
+                        transform.position.y -= bounds.min.y * scale;
                     }
                 }
                 world.Add<Transform>(placed, transform);
@@ -449,7 +493,18 @@ namespace
             {
                 ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
                 ImGui::DragFloat3("Rotation", &transform->rotation.x, 0.01f);
-                ImGui::DragFloat3("Scale",    &transform->scale.x,    0.05f, 0.01f, 100.0f);
+                // Scale spans four orders of magnitude now that placement
+                // fits oversized models: laevat lands at 3.1e-4. The default
+                // "%.3f" showed that as 0.000, which reads as a degenerate
+                // object, and the old 0.01 minimum SNAPPED it up 32x the
+                // moment anyone touched the field.
+                //
+                // Logarithmic makes the drag multiplicative, so one pixel is
+                // a percentage rather than a fixed step - the only way one
+                // control can edit both 3.1e-4 and 100 usefully.
+                ImGui::DragFloat3("Scale", &transform->scale.x, 0.01f,
+                                  1e-5f, 1000.0f, "%.5g",
+                                  ImGuiSliderFlags_Logarithmic);
             }
         }
 
