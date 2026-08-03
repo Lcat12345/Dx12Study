@@ -4,6 +4,7 @@
 #include "Core/TextEncoding.h"
 #include "Game/Components.h"
 
+#include <cmath>
 #include <cstdio>
 #include <fstream>
 #include <sstream>
@@ -190,6 +191,9 @@ static bool SaveSceneImpl(World& world, const ResourceManager& resources,
                 file << " skybox ";
                 WriteQuoted(file, ToUtf8(resources.CubeTextureName(environment->skybox)));
             }
+            file << " shadow " << (environment->shadowsEnabled ? 1 : 0)
+                 << ' ' << environment->shadowBias
+                 << ' ' << environment->shadowStrength;
             file << "\n";
         }
     });
@@ -464,30 +468,68 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
                 return false;
             }
 
-            // Optional tail, added in scene version 2. A v1 line simply ends
-            // here and the skybox stays invalid - the right default.
+            // Optional tagged tail. v1 has none, v2/v3 may have only skybox,
+            // and v4 adds shadow controls. Defaults above are therefore the
+            // complete backward-compatibility policy.
             std::string tag;
-            if (in >> tag)
+            bool sawSkybox = false;
+            bool sawShadow = false;
+            while (in >> tag)
             {
-                if (tag != "skybox")
+                if (tag == "skybox")
+                {
+                    if (sawSkybox)
+                    {
+                        outError = Where(lineNumber, "duplicate 'skybox' after environment");
+                        return false;
+                    }
+                    sawSkybox = true;
+
+                    std::string skyName;
+                    if (!ReadQuoted(in, skyName))
+                    {
+                        outError = Where(lineNumber, "skybox expects a quoted name");
+                        return false;
+                    }
+                    try
+                    {
+                        environment.skybox = resources.LoadCubeTexture(ToWide(skyName));
+                    }
+                    catch (const std::exception& e)
+                    {
+                        outError = Where(lineNumber,
+                                         "could not load skybox: " + std::string(e.what()));
+                        return false;
+                    }
+                }
+                else if (tag == "shadow")
+                {
+                    if (sawShadow)
+                    {
+                        outError = Where(lineNumber, "duplicate 'shadow' after environment");
+                        return false;
+                    }
+                    sawShadow = true;
+
+                    int enabled = 0;
+                    if (!(in >> enabled >> environment.shadowBias >> environment.shadowStrength) ||
+                        (enabled != 0 && enabled != 1) ||
+                        !std::isfinite(environment.shadowBias) ||
+                        environment.shadowBias < Environment::kMinShadowBias ||
+                        environment.shadowBias > Environment::kMaxShadowBias ||
+                        !std::isfinite(environment.shadowStrength) ||
+                        environment.shadowStrength < 0.0f || environment.shadowStrength > 1.0f)
+                    {
+                        outError = Where(lineNumber,
+                                         "shadow expects enabled(0/1), bias in [0,0.02], "
+                                         "and strength in [0,1]");
+                        return false;
+                    }
+                    environment.shadowsEnabled = enabled != 0;
+                }
+                else
                 {
                     outError = Where(lineNumber, "unexpected '" + tag + "' after environment");
-                    return false;
-                }
-                std::string skyName;
-                if (!ReadQuoted(in, skyName))
-                {
-                    outError = Where(lineNumber, "skybox expects a quoted name");
-                    return false;
-                }
-                try
-                {
-                    environment.skybox = resources.LoadCubeTexture(ToWide(skyName));
-                }
-                catch (const std::exception& e)
-                {
-                    outError = Where(lineNumber,
-                                     "could not load skybox: " + std::string(e.what()));
                     return false;
                 }
             }

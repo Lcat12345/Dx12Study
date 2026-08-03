@@ -26,7 +26,7 @@ cbuffer PassConstants : register(b1)
     float4x4 gViewProj;
     float4x4 gSkyViewProj;
     // The light's own view-projection. Written by the same code that writes
-    // the camera's, so the shadow pass and the lighting pass in 11.5 cannot
+    // the camera's, so the shadow pass and the lighting pass cannot
     // disagree about where the light was this frame.
     float4x4 gShadowViewProj;
     float3   gEyePosW;          float _pad0;
@@ -35,6 +35,9 @@ cbuffer PassConstants : register(b1)
     float3   gDirLightColor;    float _pad3;
     float3   gPointLightPos;    float gPointLightRange;
     float3   gPointLightColor;  float _pad4;
+    float2   gShadowTexelSize;
+    float    gShadowBias;
+    float    gShadowStrength;
 };
 
 // Only POSITION is read. The others stay declared so this shader agrees with

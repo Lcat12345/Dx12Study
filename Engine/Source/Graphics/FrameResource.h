@@ -55,7 +55,15 @@ struct PassConstants // b1 - written once per frame
     DirectX::XMFLOAT3   dirLightColor;     float pad3 = 0.0f;
     DirectX::XMFLOAT3   pointLightPos;     float pointLightRange = 0.0f;
     DirectX::XMFLOAT3   pointLightColor;   float pad4 = 0.0f;
+    // One texel in normalized shadow-map UVs, followed by the receiver bias
+    // and how strongly the directional light is shadowed. Keeping these in
+    // the pass buffer makes them scene settings rather than shader literals.
+    DirectX::XMFLOAT2   shadowTexelSize;
+    float               shadowBias = 0.0f;
+    float               shadowStrength = 0.0f;
 };
+static_assert(sizeof(PassConstants) == 304,
+              "PassConstants C++ layout must match the three scene shaders");
 
 // The object CB holds one 256-byte slot each, so 256 objects cost 64 KB per
 // frame set - not worth being clever about. Placing entities by hand blew

@@ -71,6 +71,13 @@ struct LightingData
     DirectX::XMFLOAT3 directionalDirection = { 0.0f, -1.0f, 0.0f };
     DirectX::XMFLOAT3 directionalColor     = { 0.0f, 0.0f, 0.0f };
 
+    // Directional-shadow controls flattened from the Environment. Bias is
+    // in the light projection's [0,1] depth range; strength blends between
+    // fully lit and the 3x3 comparison result.
+    bool  shadowsEnabled = true;
+    float shadowBias     = 0.001f;
+    float shadowStrength = 1.0f;
+
     DirectX::XMFLOAT3 pointPosition = { 0.0f, 0.0f, 0.0f };
     DirectX::XMFLOAT3 pointColor    = { 0.0f, 0.0f, 0.0f };
     float             pointRange    = 1.0f;

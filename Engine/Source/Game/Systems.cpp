@@ -217,8 +217,11 @@ void BuildRenderData(World& world,
     // --- how it is lit ---
     outLighting = LightingData{};
     world.ForEach<Environment>([&](Entity, Environment& environment) {
-        outLighting.ambient = environment.ambient;
-        outLighting.skybox  = environment.skybox;
+        outLighting.ambient        = environment.ambient;
+        outLighting.skybox         = environment.skybox;
+        outLighting.shadowsEnabled = environment.shadowsEnabled;
+        outLighting.shadowBias     = environment.shadowBias;
+        outLighting.shadowStrength = environment.shadowStrength;
     });
 
     world.ForEach<Light>([&](Entity entity, Light& light) {

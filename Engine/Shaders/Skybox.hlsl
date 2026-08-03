@@ -34,6 +34,9 @@ cbuffer PassConstants : register(b1)
     float3   gDirLightColor;    float _pad3;
     float3   gPointLightPos;    float gPointLightRange;
     float3   gPointLightColor;  float _pad4;
+    float2   gShadowTexelSize;
+    float    gShadowBias;
+    float    gShadowStrength;
 };
 
 // TextureCube, not Texture2D: sampled by a DIRECTION rather than by uv. The

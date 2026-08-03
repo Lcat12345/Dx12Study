@@ -4,6 +4,8 @@
 #include "Graphics/Mesh.h"
 
 #include <DirectXMath.h>
+#include <algorithm>
+#include <cmath>
 #include <stdexcept>
 #include <filesystem>
 
@@ -31,6 +33,13 @@ namespace
     // it is the resolution the light samples the world at, and tying it to a
     // panel the user drags would make shadow quality wobble as they resize.
     constexpr UINT kShadowMapSize = 2048;
+
+    // The caster-side half of shadow bias. Around depth 0.5, D32_FLOAT turns
+    // the constant 1000 into only about 6e-5 normalized depth, versus the
+    // receiver bias's 0.001 default. It is a small baseline; the slope-scaled
+    // term below is what chiefly counters self-shadowing on angled polygons.
+    constexpr INT   kShadowRasterDepthBias       = 1000;
+    constexpr float kShadowRasterSlopeScaledBias = 1.0f;
 
     // Never smaller than this, so a scene holding one tiny object (or nothing
     // but a point) still gets an orthographic volume with real width and a
@@ -150,7 +159,8 @@ void Renderer::CreateConstantBuffers()
 }
 
 // The "function signature" of the pipeline:
-// b0 object CB, b1 pass CB, t0 diffuse, t1 normal map, s0 static sampler.
+// b0 object CB, b1 pass CB, t0 diffuse, t1 normal map, t2 shadow map,
+// s0 material sampler, s1 shadow comparison sampler.
 void Renderer::CreateRootSignature()
 {
     // TWO tables of one descriptor each, not one table of two.
@@ -174,9 +184,14 @@ void Renderer::CreateRootSignature()
     normalRange.NumDescriptors     = 1;
     normalRange.BaseShaderRegister = 1; // t1
 
+    D3D12_DESCRIPTOR_RANGE shadowRange = {};
+    shadowRange.RangeType          = D3D12_DESCRIPTOR_RANGE_TYPE_SRV;
+    shadowRange.NumDescriptors     = 1;
+    shadowRange.BaseShaderRegister = 2; // t2
+
     // Both CBs are visible to ALL stages: the VS needs the matrices, the PS
     // needs the material and the lights.
-    D3D12_ROOT_PARAMETER rootParams[4] = {};
+    D3D12_ROOT_PARAMETER rootParams[5] = {};
     rootParams[0].ParameterType             = D3D12_ROOT_PARAMETER_TYPE_CBV;
     rootParams[0].Descriptor.ShaderRegister = 0; // b0 - per object
     rootParams[0].ShaderVisibility          = D3D12_SHADER_VISIBILITY_ALL;
@@ -195,23 +210,46 @@ void Renderer::CreateRootSignature()
     rootParams[3].DescriptorTable.pDescriptorRanges   = &normalRange;
     rootParams[3].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
+    // Global for the pass, unlike the two material textures above: every
+    // object asks the same light-depth texture whether it is visible.
+    rootParams[4].ParameterType = D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE;
+    rootParams[4].DescriptorTable.NumDescriptorRanges = 1;
+    rootParams[4].DescriptorTable.pDescriptorRanges   = &shadowRange;
+    rootParams[4].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
     // A static sampler lives in the root signature, not in a heap - the
     // common case, since most samplers never change at runtime.
-    D3D12_STATIC_SAMPLER_DESC sampler = {};
-    sampler.Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
-    sampler.AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP; // floor tiles
-    sampler.AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
-    sampler.ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
-    sampler.MaxLOD           = D3D12_FLOAT32_MAX;
-    sampler.ShaderRegister   = 0; // s0
-    sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+    D3D12_STATIC_SAMPLER_DESC samplers[2] = {};
+    samplers[0].Filter           = D3D12_FILTER_MIN_MAG_MIP_LINEAR;
+    samplers[0].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_WRAP; // floor tiles
+    samplers[0].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_WRAP;
+    samplers[0].ComparisonFunc   = D3D12_COMPARISON_FUNC_NEVER;
+    samplers[0].MaxLOD           = D3D12_FLOAT32_MAX;
+    samplers[0].ShaderRegister   = 0; // s0
+    samplers[0].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
+
+    // A comparison sampler returns visibility directly. Border white means
+    // a PCF tap outside the light's texture is lit rather than wrapping to
+    // unrelated depth on the opposite edge.
+    // The shader places nine taps in a 3x3 kernel; linear comparison also
+    // blends the four neighbouring comparisons at each tap, avoiding the
+    // visibly quantized edge that point comparison left on the large floor.
+    samplers[1].Filter           = D3D12_FILTER_COMPARISON_MIN_MAG_LINEAR_MIP_POINT;
+    samplers[1].AddressU         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].AddressV         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].AddressW         = D3D12_TEXTURE_ADDRESS_MODE_BORDER;
+    samplers[1].ComparisonFunc   = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+    samplers[1].BorderColor      = D3D12_STATIC_BORDER_COLOR_OPAQUE_WHITE;
+    samplers[1].MaxLOD           = D3D12_FLOAT32_MAX;
+    samplers[1].ShaderRegister   = 1; // s1
+    samplers[1].ShaderVisibility = D3D12_SHADER_VISIBILITY_PIXEL;
 
     D3D12_ROOT_SIGNATURE_DESC desc = {};
     desc.NumParameters     = _countof(rootParams);
     desc.pParameters       = rootParams;
-    desc.NumStaticSamplers = 1;
-    desc.pStaticSamplers   = &sampler;
+    desc.NumStaticSamplers = _countof(samplers);
+    desc.pStaticSamplers   = samplers;
     desc.Flags = D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT;
 
     // Root signatures are handed to the driver serialized, as a blob.
@@ -460,6 +498,13 @@ void Renderer::CreatePipelineStates()
     shadow.NumRenderTargets = 0;
     shadow.RTVFormats[0]    = DXGI_FORMAT_UNKNOWN;
 
+    // Push caster depth slightly away from the light before it reaches the
+    // map. The constant term supplies only the small baseline described
+    // above; the slope-scaled term handles angled-polygon self-shadowing.
+    // Scene tuning belongs to the larger adjustable receiver bias.
+    shadow.RasterizerState.DepthBias            = kShadowRasterDepthBias;
+    shadow.RasterizerState.SlopeScaledDepthBias = kShadowRasterSlopeScaledBias;
+
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                       &shadow, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::ShadowDepth)])),
                   "CreateGraphicsPipelineState(ShadowDepth)");
@@ -502,6 +547,16 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
                                    const LightingData& lighting,
                                    const std::vector<DrawItem>& items)
 {
+    // Scene loading and the editor already validate these values, but keep
+    // this renderer boundary defensive for programmatic LightingData callers.
+    // NaN defeats both std::max and std::clamp, so reject it explicitly.
+    const float shadowBias = std::isfinite(lighting.shadowBias)
+                           ? (std::max)(lighting.shadowBias, 0.0f)
+                           : 0.0f;
+    const float shadowStrength = std::isfinite(lighting.shadowStrength)
+                               ? (std::clamp)(lighting.shadowStrength, 0.0f, 1.0f)
+                               : 0.0f;
+
     const XMVECTOR eye     = XMLoadFloat3(&camera.position);
     const XMVECTOR forward = XMVector3Normalize(XMLoadFloat3(&camera.forward));
     const XMVECTOR up      = XMLoadFloat3(&camera.up);
@@ -541,7 +596,8 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     // one of the few things a float can hold that legitimately prints as NaN.
     XMFLOAT3 sceneCenter = { 0.0f, 0.0f, 0.0f };
     float    sceneRadius = 0.0f;
-    m_shadowCastersExist = ComputeSceneBounds(items, sceneCenter, sceneRadius);
+    m_shadowCastersExist = lighting.shadowsEnabled && shadowStrength > 0.0f &&
+                           ComputeSceneBounds(items, sceneCenter, sceneRadius);
     const XMMATRIX shadowViewProj =
         m_shadowCastersExist ? ComputeShadowViewProj(lighting, sceneCenter, sceneRadius)
                              : XMMatrixIdentity();
@@ -560,6 +616,12 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     constants.pointLightPos     = lighting.pointPosition;
     constants.pointLightRange   = lighting.pointRange;
     constants.pointLightColor   = lighting.pointColor;
+    constants.shadowTexelSize = {
+        1.0f / float(m_shadowMap->Width()),
+        1.0f / float(m_shadowMap->Height())
+    };
+    constants.shadowBias       = shadowBias;
+    constants.shadowStrength   = m_shadowCastersExist ? shadowStrength : 0.0f;
 
     memcpy(frame.passCBMapped, &constants, sizeof(constants));
 }
@@ -624,6 +686,7 @@ void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
     // buffers by update frequency.
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
+    m_commandList->SetGraphicsRootDescriptorTable(4, m_shadowMap->SRV());
 
     // Viewport and scissor come from the TARGET, not the window: this is what
     // makes the image fill the panel exactly.
@@ -688,7 +751,7 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 // Pass: the same geometry, from the light. Writes depth and nothing else.
 //
 // Runs FIRST, before anything touches the scene target, because the lighting
-// pass that will read this map (11.5) has to find it already finished.
+// pass reads this map and has to find it already finished.
 void Renderer::DrawShadowDepthPass(FrameResource& frame,
                                    const std::vector<DrawItem>& items)
 {
@@ -778,8 +841,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
             1, item.indexOffset, 0, 0);
     }
 
-    // Hand it to the shader side. In this step only the debug image samples
-    // it; from 11.5 the lighting pass does.
+    // Hand it to both readers: the scene lighting pass and the debug image.
     D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
         m_shadowMap->Resource(),
         D3D12_RESOURCE_STATE_DEPTH_WRITE,

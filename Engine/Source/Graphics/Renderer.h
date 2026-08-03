@@ -99,8 +99,8 @@ private:
     // geometry with different state; naming the role keeps "which PSO" from
     // becoming a comment.
     //
-    // Skybox, Transparent and ShadowDepth have no shaders yet - each arrives
-    // with the step that needs it, and until then its slot stays null.
+    // Opaque, Skybox and ShadowDepth are active. Transparent arrives in 11.6;
+    // until then only that slot stays null.
     enum class PsoRole
     {
         Opaque,

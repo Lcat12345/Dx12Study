@@ -24,9 +24,7 @@ cbuffer PassConstants : register(b1)
     // The same projection with the camera's TRANSLATION removed, for the
     // skybox: the background must turn with the camera but never approach it.
     float4x4 gSkyViewProj;
-    // The directional light's view-projection, for shadow mapping. Unused by
-    // this shader until 11.5 samples the map; declared now so all three
-    // shaders that share this buffer describe the same bytes.
+    // The directional light's view-projection, for shadow mapping.
     float4x4 gShadowViewProj;
     float3   gEyePosW;          float _pad0;
     float3   gAmbientLight;     float _pad1;
@@ -34,6 +32,9 @@ cbuffer PassConstants : register(b1)
     float3   gDirLightColor;    float _pad3;
     float3   gPointLightPos;    float gPointLightRange;
     float3   gPointLightColor;  float _pad4;
+    float2   gShadowTexelSize;
+    float    gShadowBias;
+    float    gShadowStrength;
 };
 
 Texture2D    gDiffuse   : register(t0);
@@ -44,7 +45,9 @@ Texture2D    gDiffuse   : register(t0);
 // format, this one must not follow - an sRGB read would curve the numbers and
 // bend every normal.
 Texture2D    gNormalMap : register(t1);
+Texture2D    gShadowMap : register(t2);
 SamplerState gSampler   : register(s0);
+SamplerComparisonState gShadowSampler : register(s1);
 
 struct VSInput
 {
@@ -61,6 +64,7 @@ struct PSInput
     float3 normalW   : NORMAL;      // world space
     float2 uv        : TEXCOORD;
     float4 tangentW  : TANGENT;     // xyz world space, w carried through
+    float4 positionLightH : TEXCOORD1; // light clip space for shadow lookup
 };
 
 PSInput VSMain(VSInput input)
@@ -72,6 +76,7 @@ PSInput VSMain(VSInput input)
     const float4 positionW = mul(float4(input.position, 1.0), gWorld);
     output.positionW = positionW.xyz;
     output.positionH = mul(positionW, gViewProj);
+    output.positionLightH = mul(positionW, gShadowViewProj);
 
     // Normals use the inverse transpose, NOT the world matrix (see C++).
     // Cast to 3x3: normals are directions, translation must not apply.
@@ -103,6 +108,43 @@ PSInput VSMain(VSInput input)
 
     output.uv = input.uv;
     return output;
+}
+
+// Percentage-closer filtering: each comparison asks whether this receiver
+// was visible to the light, then the 3x3 average softens one hard texel edge.
+float DirectionalVisibility(float4 positionLightH)
+{
+    if (gShadowStrength <= 0.0 || positionLightH.w <= 0.0)
+    {
+        return 1.0;
+    }
+
+    const float3 ndc = positionLightH.xyz / positionLightH.w;
+    const float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+
+    // D3D NDC depth is already [0,1]. Outside the light's fitted volume is
+    // not represented by this map, so it must be treated as lit.
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
+        ndc.z < 0.0 || ndc.z > 1.0)
+    {
+        return 1.0;
+    }
+
+    float visibility = 0.0;
+    [unroll]
+    for (int y = -1; y <= 1; ++y)
+    {
+        [unroll]
+        for (int x = -1; x <= 1; ++x)
+        {
+            const float2 offset = float2(float(x), float(y)) * gShadowTexelSize;
+            visibility += gShadowMap.SampleCmpLevelZero(
+                gShadowSampler, uv + offset, ndc.z - gShadowBias);
+        }
+    }
+    visibility /= 9.0;
+
+    return lerp(1.0, visibility, saturate(gShadowStrength));
 }
 
 // One light's contribution. 'toLight' points FROM the surface TOWARD the light.
@@ -170,7 +212,9 @@ float4 PSMain(PSInput input) : SV_Target
     float3 color = gAmbientLight * albedo;
 
     // --- directional light: infinitely far, so direction is constant ---
-    color += BlinnPhong(gDirLightColor, -gDirLightDirection, normal, toEye, albedo);
+    const float directionalVisibility = DirectionalVisibility(input.positionLightH);
+    color += directionalVisibility *
+             BlinnPhong(gDirLightColor, -gDirLightDirection, normal, toEye, albedo);
 
     // --- point light: has a position, so it fades with distance ---
     float3 toPointLight = gPointLightPos - input.positionW;

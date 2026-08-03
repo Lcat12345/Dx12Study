@@ -4,10 +4,10 @@ Phase 10에서 만든 오프스크린 Scene Viewport, 에셋 브라우저, ECS �
 직렬화가 이번 단계의 기반이다. 이 문서는 ROADMAP Phase 11 항목을 현재
 코드의 실제 의존성에 맞춰 **커밋 단위로 쪼갠 실행 계획**이다.
 
-ROADMAP에는 Phase 11 항목들이 서로 독립적이라고 적혀 있지만, 현재 구현에서는
-깊이 전용 타깃, 복수 PSO, 메시 공간 정보처럼 여러 기능이 공유하는 기반이 있다.
-따라서 기능 목록을 그대로 구현하지 않고, 이미 발화한 AABB 트리거와 최소한의
-렌더 패스 기반을 먼저 만든 뒤 각 기능을 수직으로 완성한다.
+Phase 11의 기능 목표는 서로 분리되어 있지만, 현재 구현에서는 깊이 전용 타깃,
+복수 PSO, 메시 공간 정보처럼 여러 기능이 공유하는 기반이 있다. 따라서 이미
+발화한 AABB 트리거와 최소한의 렌더 패스 기반을 먼저 만든 뒤 세부 계획의 순서에
+따라 각 기능을 수직으로 완성한다.
 
 ---
 
@@ -105,9 +105,9 @@ Directional Shadow Depth
 | 11.0 | 완료 | 메시 AABB + 기존 엔티티 클릭 선택 | 로컬/월드 공간, ray-AABB | 중 | - |
 | 11.1 | 완료 | 깊이 타깃 + 복수 패스/PSO 기반 | attachment 역할, PSO 전환 | 중 | - |
 | 11.2 | 완료 | 6면 PNG 큐브맵 + 스카이박스 | texture array, `TextureCube` | 대 | - |
-| 11.3 | 예정 | 탄젠트 생성 + 노멀 매핑 | 탄젠트 공간, TBN | 대 | - |
-| 11.4 | 예정 | directional shadow depth pass | depth-only 렌더링, light space | 대 | - |
-| 11.5 | 예정 | 그림자 적용 + 품질 보정 | comparison sampler, bias, PCF | 중 | - |
+| 11.3 | 완료 | 탄젠트 생성 + 노멀 매핑 | 탄젠트 공간, TBN | 대 | - |
+| 11.4 | 완료 | directional shadow depth pass | depth-only 렌더링, light space | 대 | - |
+| 11.5 | 완료 | 그림자 적용 + 품질 보정 | comparison sampler, bias, PCF | 중 | - |
 | 11.6 | 예정 | 블렌딩 + 투명 정렬 | blend state, depth write, 정렬 | 중 | - |
 | 11.7 | 예정 | 4x MSAA + resolve | multisample resource, resolve | 대 | v1.2 |
 
@@ -1160,16 +1160,17 @@ GetNumStoredMessages()`를 직접 읽어 stats 패널에 띄우게 했다.
 
 **작업 항목**
 
-- [ ] scene `PassConstants`에 light view-projection과 shadow texel size 추가
-- [ ] shadow map을 scene root signature의 별도 SRV로 바인딩
-- [ ] border가 lit(깊이 1)인 comparison sampler 추가
-- [ ] world position을 light clip/NDC/texture UV로 변환
-- [ ] shadow 범위 밖 좌표는 lit로 처리
-- [ ] directional contribution에만 visibility 곱하기
-- [ ] shadow PSO rasterizer에 constant/slope-scaled depth bias 적용
-- [ ] 3×3 percentage-closer filtering(PCF)
-- [ ] shadow enable, bias, strength를 renderer 또는 environment 설정으로 노출
-- [ ] 필요할 경우 light projection extent를 shadow texel 단위로 안정화
+- [o] scene `PassConstants`에 light view-projection과 shadow texel size 추가
+- [o] shadow map을 scene root signature의 별도 SRV로 바인딩
+- [o] border가 lit(깊이 1)인 comparison sampler 추가
+- [o] world position을 light clip/NDC/texture UV로 변환
+- [o] shadow 범위 밖 좌표는 lit로 처리
+- [o] directional contribution에만 visibility 곱하기
+- [o] shadow PSO rasterizer에 constant/slope-scaled depth bias 적용
+- [o] 3×3 percentage-closer filtering(PCF)
+- [o] shadow enable, bias, strength를 renderer 또는 environment 설정으로 노출
+- [o] 필요할 경우 light projection extent를 shadow texel 단위로 안정화
+      → 런타임 관찰 결과 카메라 이동이 light matrix를 바꾸지 않아 적용하지 않음
 
 **설계 결정**
 
@@ -1198,6 +1199,44 @@ GetNumStoredMessages()`를 직접 읽어 stats 패널에 띄우게 했다.
 
 **완료 기준**: 에디터에서 배치한 opaque 물체가 directional light 기준 그림자를
 만들고 받으며, 기본 씬에서 acne·경계 반복·심한 계단 현상이 눈에 띄지 않는다.
+
+**구현 결과 — 기존 11.4 계약을 읽기 경로까지 닫았다**
+
+11.4가 만든 `shadowViewProj`와 `DepthTarget` SRV를 그대로 재사용했다. scene root
+signature에는 전역 shadow table `t2`를 하나 추가하고, `s1`은 comparison sampler로
+분리했다. 주소 모드는 `BORDER`, border depth는 1(lit), 비교는 `LESS_EQUAL`이다.
+따라서 PCF 탭이 맵 밖으로 나가도 반대편 깊이를 wrap하지 않는다. `PassConstants`에는
+실제 shadow target의 width/height로 계산한 texel size와 receiver bias, strength를
+한 16바이트 레지스터로 덧붙였다. C++ 크기 304바이트는 `static_assert`로 고정했고
+세 scene shader의 cbuffer 선언도 같은 순서로 맞췄다.
+
+vertex shader가 world position을 light clip으로 한 번 변환해 pixel shader에 넘긴다.
+pixel shader는 perspective divide 뒤 X를 `[0,1]`, Y를 뒤집어 `[0,1]` UV로 바꾸고,
+D3D depth `[0,1]`까지 함께 범위를 검사한다. 유효한 픽셀은 texel 간격의 3×3 위치에서
+아홉 번 `SampleCmpLevelZero`를 실행한다. comparison tap 자체는 linear filtering이라
+point comparison에서 보였던 큰 바닥 그림자의 양자화된 계단도 완화된다. 최종
+visibility는 directional Blinn-Phong 항에만 곱한다. ambient와 point 항은 그 계산의
+앞뒤에 독립적으로 더해지므로 directional shadow에 가려지지 않는다.
+
+bias는 두 층이다. shadow PSO rasterizer가 caster에 constant `1000`과 slope-scaled
+`1.0`을 적용하고, Environment의 receiver bias 기본값 `0.001`은 Inspector에서 직접
+조정한다. 같은 Environment에 Enabled와 Strength(`[0,1]`)도 두었고, scene format v4의
+`shadow <0|1> <bias> <strength>` tail로 저장한다. v1~v3에는 tail이 없으므로 구조체의
+`true / 0.001 / 1.0` 기본값을 그대로 쓴다.
+
+**런타임 검증**
+
+- 기본 씬의 cube·pyramid·sphere·torus가 floor에 접한 그림자를 만들고, 회전하는
+  물체의 그림자가 따라 움직였다. 앞면 acne나 눈에 띄는 peter-panning은 없었다.
+- Environment의 Enabled를 끄자 바닥 그림자만 즉시 사라졌고 장면 조명은 유지됐다.
+  다시 말해 shadow visibility가 조명 전체를 검게 만드는 경로가 아니다.
+- point comparison의 눈에 띄는 texel 계단을 확인한 뒤 linear comparison 3×3로
+  바꿔 재검증했다. 경계 wrap이나 검은 테두리는 보이지 않았다.
+- Debug 실행에서 shader cache `5/5`, `debug layer: 0 messages`. SDK `fxc`로
+  Basic VS/PS, Skybox VS/PS, ShadowDepth VS를 각각 컴파일했고 Debug/Release x64
+  빌드는 경고·오류 없이 완료됐다.
+- 카메라는 shadow volume 계산 입력이 아니어서 이동 중 light projection이 변하지
+  않았다. 카메라 연동 떨림이 관찰되지 않았으므로 texel snapping은 추가하지 않았다.
 
 ---
 
@@ -1358,15 +1397,15 @@ ResourceManager cache의 동기화, GPU upload command 기록 시점, 완료 전
 - [o] 새 메시가 로컬 AABB 기준으로 바닥 위에 정확히 배치됨
 - [o] 6장 PNG가 cube texture로 업로드되고 스카이박스로 표시됨
 - [o] 카메라 이동에는 고정되고 회전에는 반응하는 스카이박스
-- [ ] OBJ와 절차 메시 모두 tangent basis를 가지며 normal map이 동작
-- [ ] normal map 없는 기존 재질은 이전 외형 유지
-- [ ] directional light depth-only shadow pass 동작
-- [ ] opaque 물체가 그림자를 만들고 받으며 point light는 영향받지 않음
-- [ ] bias + 3×3 PCF로 기본 씬의 acne와 계단 현상이 허용 범위
+- [o] OBJ와 절차 메시 모두 tangent basis를 가지며 normal map이 동작
+- [o] normal map 없는 기존 재질은 이전 외형 유지
+- [o] directional light depth-only shadow pass 동작
+- [o] opaque 물체가 그림자를 만들고 받으며 point light는 영향받지 않음
+- [o] bias + 3×3 PCF로 기본 씬의 acne와 계단 현상이 허용 범위
 - [ ] opaque/transparent PSO 분리, transparent 후방→전방 정렬
 - [ ] 4x MSAA 결과가 resolve texture를 통해 ImGui에 표시됨
 - [ ] 1x 폴백, viewport 리사이즈, 접기/펼치기 정상
-- [ ] v1 씬 로드 및 새 필드 기본값 적용, 최신 씬 저장/불러오기 왕복
+- [o] v1 씬 로드 및 새 필드 기본값 적용, 최신 씬 저장/불러오기 왕복
 - [ ] Renderer는 여전히 ECS를 모르고 `DrawItem` 등 평탄화 데이터만 받음
 - [ ] 새 코드가 `GetProjectRoot()`를 직접 호출하지 않고 ResourceManager 경계를 사용
 - [ ] 모든 트리거의 대기/발화 상태와 근거가 ROADMAP에 갱신됨

@@ -697,6 +697,16 @@ namespace
                     environment->skybox = CubeTextureHandle{};
                 }
                 ImGui::EndDisabled();
+
+                ImGui::SeparatorText("Directional shadows");
+                ImGui::Checkbox("Enabled", &environment->shadowsEnabled);
+                ImGui::BeginDisabled(!environment->shadowsEnabled);
+                ImGui::DragFloat("Bias", &environment->shadowBias, 0.00001f,
+                                 Environment::kMinShadowBias,
+                                 Environment::kMaxShadowBias, "%.6f");
+                ImGui::SliderFloat("Strength", &environment->shadowStrength,
+                                   0.0f, 1.0f, "%.2f");
+                ImGui::EndDisabled();
             }
         }
 
