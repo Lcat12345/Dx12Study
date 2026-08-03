@@ -245,7 +245,7 @@ Dx12Engine/                  # 저장소 루트
 - [ ] 비동기 에셋 로드 — *트리거: 큰 모델을 고를 때의 정지가 실제로 작업을 방해하는 순간.* 10.3에서 23 MB OBJ에 **5043 ms** 측정. UI 스레드가 통째로 멈춘다. 스레드가 필요해 Phase 13 Job System과 겹치는 주제
 - [ ] 메시 3D 썸네일 — *트리거: 파일 이름만으로 에셋을 구분하기 어려워지는 순간.* 에셋마다 렌더 타겟이 필요하다 (10.3에서 범위 밖으로 명시)
 - [ ] Object CB 동적화 — *트리거: 한 씬이 `kMaxObjects`(256)를 넘기는 순간.* 10.2에서 32 → 256으로 올려 시간을 벌었을 뿐이다. GPU가 읽는 중인 버퍼를 재할당하는 것이라 RT 재생성과 같은 지연 처리가 필요하다
-- [ ] 렌더 타겟 리사이즈의 프레임별 폐기 큐 — *트리거: 뷰포트 스플리터를 끄는 동안의 전체 플러시가 거슬리는 순간.* 10.1은 `WaitForGpu()` 한 방으로 처리했다
+- [ ] 렌더 타겟 리사이즈의 프레임별 폐기 큐 — *트리거: 뷰포트 스플리터를 끄는 동안의 전체 플러시가 거슬리는 순간.* 11.7에서 MSAA color/depth/resolve까지 폐기 대상이 늘어난 뒤 4x/1x 전환 4회와 Scene resize drag 4회를 반복했지만 편집을 막는 정지는 관찰되지 않아 계속 대기
 - [ ] 삼각형 단위 픽킹 (또는 겹친 후보 순환 선택) — *트리거: 큰 메시의 AABB가 그 안의 오브젝트를 가려 클릭으로 못 고르는 상황이 실제로 작업을 방해할 때.* 11.0에서 확인됨: `Laevat`의 약 21 단위 상자가 `Sphere`와 `Torus`를 통째로 삼켜, 데모 씬 어디를 클릭해도 Laevat이 선택된다. 최근접 규칙 자체는 정확하고 뾰족한 모델에 상자를 씌운 결과다. 해결은 삼각형 교차이거나, 같은 지점을 다시 클릭하면 다음 후보로 넘어가는 순환 선택 — 후자가 훨씬 싸다. *(11.2.5 이후 기본 씬에서 laevat이 빠졌고 `BuildWorld`는 절차 메시만 쓰므로, 이 증상은 에셋 브라우저로 laevat을 직접 불러왔을 때만 재현된다. 트리거는 그대로 유효하다 — 조건이 사라진 게 아니라 기본 씬에서 상시 노출되지 않게 됐을 뿐이다)*
 
 **핵심 개념**: 3D 렌더 결과를 텍스처로 만들어 ImGui에 표시하는 방법(오프스크린 렌더 타겟 → SRV → `ImGui::Image`), 에디터 UI와 게임 렌더링/월드 데이터의 책임 분리, 씬 데이터(Entity·Component)와 에디터 전용 상태(선택 Entity 등)를 구분하는 이유
@@ -264,7 +264,7 @@ Dx12Engine/                  # 저장소 루트
 - [o] 블렌딩 / 투명 오브젝트 (알파 블렌딩, 렌더 순서 문제) *(11.6: 명시적 `BlendMode`, texture×material alpha, straight-alpha PSO와 depth write OFF. world AABB center의 camera-space depth로 매 프레임 후방→전방 인덱스 정렬하며 Object CB 슬롯은 원본 인덱스로 유지. scene v5와 Inspector RGBA 편집 지원)*
 - [o] 노멀 매핑 (탄젠트 공간) *(11.3: `Vertex.tangent`는 `float4` — `w`가 mirrored UV의 bitangent 뒤집힘을 나른다. tangent 생성은 `CreateMesh` 한 곳에서 일어나 절차 메시와 파일 메시가 같은 vertex contract를 갖는다. UV 면적과 **기하 면적**을 따로 검사해 퇴화 삼각형을 배제 — 구의 극점 64개가 후자에만 걸린다. 예측 가능한 줄무늬 노멀맵으로 밝기비를 0.3% 이내로 대조)*
 - [o] 그림자 매핑 (Depth 전용 패스, 첫 멀티패스 렌더링) *(11.4: 2048² depth-only pass, 고정 경계구 light volume. 11.5: `t2` comparison sampling, lit border, caster+receiver bias, linear comparison 3×3 PCF. 11.6.1: geometric normal과 광원 각도로 receiver bias를 최소값~4배까지 조절해 평면의 삼각형 모양 acne/모아레를 억제. Environment에서 enable/base bias/strength를 편집하고 scene v4+로 저장. directional 직접광만 가리며 기본 씬 런타임에서 Debug Layer 0 확인)*
-- [ ] MSAA 또는 렌더 타겟 해상도 분리
+- [o] MSAA 또는 렌더 타겟 해상도 분리 *(11.7: color/depth 4x + 단일 샘플 resolve texture. 색상 PSO별 1x/4x variant, Frame UI Off/4x 전환, 미지원 1x 폴백. 전환·리사이즈 반복 뒤 Debug Layer 0)*
 
 **핵심 개념**: 멀티패스 렌더링 구조(그림자 맵이 사실상 "렌더 투 텍스처" 입문), 투명 오브젝트 정렬 문제
 

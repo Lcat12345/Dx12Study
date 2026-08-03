@@ -12,10 +12,14 @@ RenderTarget::RenderTarget(GraphicsDevice& device,
                            DescriptorAllocator& srvAllocator,
                            UINT width, UINT height,
                            DXGI_FORMAT colorFormat,
-                           const float clearColor[4])
+                           const float clearColor[4],
+                           UINT sampleCount,
+                           UINT sampleQuality)
     : m_device(device)
     , m_width(std::max(width, 1u))
     , m_height(std::max(height, 1u))
+    , m_sampleCount(std::max(sampleCount, 1u))
+    , m_sampleQuality(sampleCount > 1 ? sampleQuality : 0)
     , m_colorFormat(colorFormat)
 {
     for (int i = 0; i < 4; ++i)
@@ -44,7 +48,8 @@ void RenderTarget::CreateResources()
     colorDesc.DepthOrArraySize = 1;
     colorDesc.MipLevels        = 1;
     colorDesc.Format           = m_colorFormat;
-    colorDesc.SampleDesc.Count = 1;
+    colorDesc.SampleDesc.Count   = m_sampleCount;
+    colorDesc.SampleDesc.Quality = m_sampleQuality;
     colorDesc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET;
 
     D3D12_CLEAR_VALUE colorClear = {};
@@ -54,23 +59,44 @@ void RenderTarget::CreateResources()
         colorClear.Color[i] = m_clearColor[i];
     }
 
-    // Born as a shader resource because that is the state the render loop
-    // expects at the START of a frame - it transitions to RENDER_TARGET,
-    // draws, and transitions back.
+    // A 1x texture is sampled directly. An MSAA texture cannot be sampled by
+    // ImGui, so its between-frame resting state is RESOLVE_SOURCE instead.
+    const D3D12_RESOURCE_STATES initialColorState = IsMultisampled()
+        ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE
+        : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     ThrowIfFailed(m_device.Device()->CreateCommittedResource(
                       &heapProps, D3D12_HEAP_FLAG_NONE, &colorDesc,
-                      D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                      initialColorState,
                       &colorClear, IID_PPV_ARGS(&m_color)),
                   "CreateCommittedResource(RenderTarget colour)");
 
-    m_device.Device()->CreateRenderTargetView(m_color.Get(), nullptr, m_rtv.cpu);
+    D3D12_RENDER_TARGET_VIEW_DESC rtvDesc = {};
+    rtvDesc.Format        = m_colorFormat;
+    rtvDesc.ViewDimension = IsMultisampled() ? D3D12_RTV_DIMENSION_TEXTURE2DMS
+                                             : D3D12_RTV_DIMENSION_TEXTURE2D;
+    m_device.Device()->CreateRenderTargetView(m_color.Get(), &rtvDesc, m_rtv.cpu);
+
+    if (IsMultisampled())
+    {
+        // The resolve destination is deliberately a plain, single-sample
+        // texture. It is never an RTV; ResolveSubresource is its only writer.
+        D3D12_RESOURCE_DESC resolveDesc = colorDesc;
+        resolveDesc.SampleDesc.Count   = 1;
+        resolveDesc.SampleDesc.Quality = 0;
+        resolveDesc.Flags              = D3D12_RESOURCE_FLAG_NONE;
+        ThrowIfFailed(m_device.Device()->CreateCommittedResource(
+                          &heapProps, D3D12_HEAP_FLAG_NONE, &resolveDesc,
+                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                          nullptr, IID_PPV_ARGS(&m_resolve)),
+                      "CreateCommittedResource(RenderTarget resolve)");
+    }
 
     D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
     srvDesc.Format                  = m_colorFormat;
     srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels     = 1;
-    m_device.Device()->CreateShaderResourceView(m_color.Get(), &srvDesc, m_srv.cpu);
+    m_device.Device()->CreateShaderResourceView(ShaderResource(), &srvDesc, m_srv.cpu);
 }
 
 void RenderTarget::Resize(UINT width, UINT height)
@@ -91,6 +117,23 @@ void RenderTarget::Resize(UINT width, UINT height)
     // Dropping the old texture here is only safe because the caller flushed
     // the GPU first.
     m_color.Reset();
+    m_resolve.Reset();
+    CreateResources();
+}
+
+void RenderTarget::SetSampleDesc(UINT sampleCount, UINT sampleQuality)
+{
+    sampleCount = std::max(sampleCount, 1u);
+    sampleQuality = sampleCount > 1 ? sampleQuality : 0;
+    if (sampleCount == m_sampleCount && sampleQuality == m_sampleQuality)
+    {
+        return;
+    }
+
+    m_sampleCount   = sampleCount;
+    m_sampleQuality = sampleQuality;
+    m_color.Reset();
+    m_resolve.Reset();
     CreateResources();
 }
 

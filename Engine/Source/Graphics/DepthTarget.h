@@ -29,7 +29,8 @@ public:
                 DescriptorAllocator& dsvAllocator,
                 DescriptorAllocator* srvAllocator,
                 UINT width, UINT height,
-                UINT sampleCount = 1);
+                UINT sampleCount = 1,
+                UINT sampleQuality = 0);
 
     DepthTarget(const DepthTarget&)            = delete;
     DepthTarget& operator=(const DepthTarget&) = delete;
@@ -38,10 +39,13 @@ public:
     // Descriptor SLOTS are reused - only their contents change - so anything
     // holding the SRV handle stays valid.
     void Resize(UINT width, UINT height);
+    // Safe only after the caller has drained the GPU.
+    void SetSampleDesc(UINT sampleCount, UINT sampleQuality);
 
     UINT Width()       const { return m_width; }
     UINT Height()      const { return m_height; }
     UINT SampleCount() const { return m_sampleCount; }
+    UINT SampleQuality() const { return m_sampleQuality; }
 
     ID3D12Resource* Resource() const { return m_resource.Get(); }
 
@@ -66,5 +70,6 @@ private:
     UINT m_width       = 0;
     UINT m_height      = 0;
     UINT m_sampleCount = 1;
+    UINT m_sampleQuality = 0;
     bool m_readable    = false;
 };

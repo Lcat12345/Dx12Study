@@ -1061,6 +1061,22 @@ namespace
             ImGui::TextDisabled("(no tearing support)");
         }
 
+        if (!ui.msaa4xSupported)
+        {
+            ImGui::BeginDisabled();
+        }
+        bool msaaValue = ui.msaaEnabled;
+        if (ImGui::Checkbox("4x MSAA", &msaaValue))
+        {
+            ui.msaaToggled = true;
+        }
+        if (!ui.msaa4xSupported)
+        {
+            ImGui::EndDisabled();
+            ImGui::SameLine();
+            ImGui::TextDisabled("(unsupported; using 1x)");
+        }
+
         // The scene is no longer the window size, and the difference matters
         // for anything that unprojects a click (10.4).
         ImGui::Separator();

@@ -21,6 +21,8 @@ struct DebugUIContext
     int   fps              = 0;
     bool  vsync            = true;
     bool  tearingSupported = false;
+    bool  msaaEnabled      = false;
+    bool  msaa4xSupported  = false;
     // The scene, already rendered, as an ImGui texture id. Plain integer so
     // no D3D type reaches this file.
     std::uint64_t sceneTexture = 0;
@@ -49,6 +51,7 @@ struct DebugUIContext
 
     // --- out ---
     bool vsyncToggled = false;
+    bool msaaToggled  = false;
     // The size the Scene panel wants its texture to be. Zero while the panel
     // is collapsed, which the renderer reads as "leave it alone".
     unsigned viewportWidth  = 0;

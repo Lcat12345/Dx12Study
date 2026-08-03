@@ -24,11 +24,13 @@ DepthTarget::DepthTarget(GraphicsDevice& device,
                          DescriptorAllocator& dsvAllocator,
                          DescriptorAllocator* srvAllocator,
                          UINT width, UINT height,
-                         UINT sampleCount)
+                         UINT sampleCount,
+                         UINT sampleQuality)
     : m_device(device)
     , m_width(std::max(width, 1u))
     , m_height(std::max(height, 1u))
     , m_sampleCount(std::max(sampleCount, 1u))
+    , m_sampleQuality(sampleCount > 1 ? sampleQuality : 0)
     , m_readable(srvAllocator != nullptr)
 {
     // Taken once for the lifetime of the target. Resizing swaps the resource
@@ -54,7 +56,8 @@ void DepthTarget::CreateResources()
     desc.DepthOrArraySize = 1;
     desc.MipLevels        = 1;
     desc.Format           = m_readable ? kReadableResource : kDepthOnlyResource;
-    desc.SampleDesc.Count = m_sampleCount;
+    desc.SampleDesc.Count   = m_sampleCount;
+    desc.SampleDesc.Quality = m_sampleQuality;
     desc.Flags            = D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL;
     if (!m_readable)
     {
@@ -131,6 +134,21 @@ void DepthTarget::Resize(UINT width, UINT height)
     m_height = height;
 
     // Safe only because the caller flushed the GPU first.
+    m_resource.Reset();
+    CreateResources();
+}
+
+void DepthTarget::SetSampleDesc(UINT sampleCount, UINT sampleQuality)
+{
+    sampleCount = std::max(sampleCount, 1u);
+    sampleQuality = sampleCount > 1 ? sampleQuality : 0;
+    if (sampleCount == m_sampleCount && sampleQuality == m_sampleQuality)
+    {
+        return;
+    }
+
+    m_sampleCount   = sampleCount;
+    m_sampleQuality = sampleQuality;
     m_resource.Reset();
     CreateResources();
 }

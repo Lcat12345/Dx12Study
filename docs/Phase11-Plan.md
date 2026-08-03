@@ -110,7 +110,7 @@ Directional Shadow Depth
 | 11.5 | 완료 | 그림자 적용 + 품질 보정 | comparison sampler, bias, PCF | 중 | - |
 | 11.6 | 완료 | 블렌딩 + 투명 정렬 | blend state, depth write, 정렬 | 중 | - |
 | 11.6.1 | 완료 | 그림자 receiver bias 안정화 | normal/slope bias, shadow acne | 소 | - |
-| 11.7 | 예정 | 4x MSAA + resolve | multisample resource, resolve | 대 | v1.2 |
+| 11.7 | 완료 | 4x MSAA + resolve | multisample resource, resolve | 대 | v1.2 |
 
 11.0과 11.1은 기능 목록 앞의 선행 기반이다. 나머지는 가능한 한 서로의 구현에
 기대지 않는 수직 기능이지만, MSAA는 모든 색상 PSO가 확정된 뒤 적용해야 PSO를
@@ -1343,18 +1343,18 @@ sample count로 그려지게 한다.
 
 **작업 항목**
 
-- [ ] `CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS)`로 4x 지원 확인
-- [ ] scene target에 sample count와 quality 저장
-- [ ] 4x color render texture와 같은 sample count의 scene depth 생성
-- [ ] 단일 샘플 resolve texture와 SRV 생성
-- [ ] opaque/skybox/transparent PSO의 1x/4x variant 생성 또는 캐시
-- [ ] scene 색상 패스 종료 후 `ResolveSubresource`
-- [ ] resolve texture를 `PIXEL_SHADER_RESOURCE`로 전환해 ImGui에 전달
-- [ ] 1x에서는 불필요한 resolve 없이 기존 단일 샘플 경로 사용
-- [ ] Inspector 또는 설정 UI에서 Off/4x 선택
-- [ ] 지원되지 않는 장치에서는 1x로 안전하게 폴백하고 상태 표시
-- [ ] viewport 리사이즈 시 MSAA color/depth/resolve를 함께 재생성
-- [ ] shadow map은 sample count 1 유지
+- [o] `CheckFeatureSupport(D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS)`로 4x 지원 확인
+- [o] scene target에 sample count와 quality 저장
+- [o] 4x color render texture와 같은 sample count의 scene depth 생성
+- [o] 단일 샘플 resolve texture와 SRV 생성
+- [o] opaque/skybox/transparent PSO의 1x/4x variant 생성 또는 캐시
+- [o] scene 색상 패스 종료 후 `ResolveSubresource`
+- [o] resolve texture를 `PIXEL_SHADER_RESOURCE`로 전환해 ImGui에 전달
+- [o] 1x에서는 불필요한 resolve 없이 기존 단일 샘플 경로 사용
+- [o] Inspector 또는 설정 UI에서 Off/4x 선택
+- [o] 지원되지 않는 장치에서는 1x로 안전하게 폴백하고 상태 표시
+- [o] viewport 리사이즈 시 MSAA color/depth/resolve를 함께 재생성
+- [o] shadow map은 sample count 1 유지
 
 **설계 결정**
 
@@ -1411,6 +1411,27 @@ full flush spike가 반복적으로 편집을 방해하면 ROADMAP의 “렌더 
 **완료 기준**: 지원 장치에서 4x MSAA Scene Viewport를 볼 수 있고, ImGui는 resolve된
 단일 샘플 texture만 읽으며, 1x 폴백과 리사이즈도 안전하다.
 
+**결과**
+
+- `RenderTarget`은 1x에서 기존 colour resource를 RTV+SRV로 함께 쓰고, 4x에서는
+  multisample colour RTV와 단일 샘플 resolve/SRV를 따로 소유한다. `SceneTextureId`는
+  두 경로 모두 같은 단일 샘플 descriptor slot을 반환한다.
+- scene color와 `DepthTarget`이 같은 sample count/quality로 함께 생성된다. color와
+  depth 포맷의 4x quality level을 각각 조회해 공통 범위의 최상 quality index를 쓰며,
+  둘 중 하나라도 지원하지 않으면 1x로 시작하고 UI에 unsupported 상태를 표시한다.
+- opaque/skybox/transparent PSO는 1x/4x 두 행으로 캐시한다. shadow depth PSO와
+  2048² shadow map은 계속 1x라 shadow pass가 scene MSAA 설정에 끌려가지 않는다.
+- 4x 프레임은 `RENDER_TARGET → RESOLVE_SOURCE`, 단일 샘플 texture는
+  `PIXEL_SHADER_RESOURCE → RESOLVE_DEST → PIXEL_SHADER_RESOURCE`로 전환한 뒤
+  `ResolveSubresource`를 실행한다. 1x는 resolve 없이 기존 barrier만 사용한다.
+- Frame 패널의 `4x MSAA` 체크박스로 GPU를 비운 뒤 두 attachment를 안전하게
+  교체한다. descriptor slot은 재사용하므로 이미 빌드된 ImGui draw data도 유효하다.
+- 실제 지원 장치에서 4x와 Off(1x) 화면을 각각 확인했다. 1x↔4x 4회와 Scene 창
+  resize drag 4회를 렌더링 중 반복한 테스트가 종료 코드 0으로 끝났고, 4x 화면의
+  Debug Layer는 **0 messages**였다.
+- Debug/Release x64 빌드는 경고 0, 오류 0. 리사이즈 full flush는 반복 테스트에서
+  편집을 막는 정지로 관찰되지 않아 RT 프레임별 폐기 큐 트리거는 계속 대기한다.
+
 ---
 
 ## 5. 트리거 재판정 체크포인트
@@ -1446,13 +1467,13 @@ ResourceManager cache의 동기화, GPU upload command 기록 시점, 완료 전
 - [o] opaque 물체가 그림자를 만들고 받으며 point light는 영향받지 않음
 - [o] bias + 3×3 PCF로 기본 씬의 acne와 계단 현상이 허용 범위
 - [o] opaque/transparent PSO 분리, transparent 후방→전방 정렬
-- [ ] 4x MSAA 결과가 resolve texture를 통해 ImGui에 표시됨
-- [ ] 1x 폴백, viewport 리사이즈, 접기/펼치기 정상
+- [o] 4x MSAA 결과가 resolve texture를 통해 ImGui에 표시됨
+- [o] 1x 폴백, viewport 리사이즈, 접기/펼치기 정상
 - [o] v1 씬 로드 및 새 필드 기본값 적용, 최신 씬 저장/불러오기 왕복
-- [ ] Renderer는 여전히 ECS를 모르고 `DrawItem` 등 평탄화 데이터만 받음
-- [ ] 새 코드가 `GetProjectRoot()`를 직접 호출하지 않고 ResourceManager 경계를 사용
-- [ ] 모든 트리거의 대기/발화 상태와 근거가 ROADMAP에 갱신됨
-- [ ] Debug Layer 경고·에러 0, 종료 코드 0, Debug/Release 빌드
+- [o] Renderer는 여전히 ECS를 모르고 `DrawItem` 등 평탄화 데이터만 받음
+- [o] 새 코드가 `GetProjectRoot()`를 직접 호출하지 않고 ResourceManager 경계를 사용
+- [o] 모든 트리거의 대기/발화 상태와 근거가 ROADMAP에 갱신됨
+- [o] Debug Layer 경고·에러 0, 종료 코드 0, Debug/Release 빌드
 
 Phase 11의 ROADMAP 완료 기준인 **“그림자가 지는 씬을 스카이박스 아래에서
 볼 수 있다”**를 충족하면서, 목록에 포함된 normal mapping, blending, MSAA까지

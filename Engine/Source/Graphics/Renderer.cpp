@@ -60,6 +60,12 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
     , m_resources(m_device, m_srvAllocator)
 {
     CreateCommandObjects();
+    QueryMsaaSupport();
+    // Prefer the quality path this step introduces. Unsupported adapters
+    // simply keep these at 1x/quality 0 and expose that fact to the UI.
+    m_msaaEnabled = m_4xMsaaSupported;
+    const UINT sceneSampleCount   = m_msaaEnabled ? 4u : 1u;
+    const UINT sceneSampleQuality = m_msaaEnabled ? m_4xMsaaQuality : 0u;
 
     // The scene has its own surface now, so it no longer shares the window's
     // size. Starting at the client size just avoids a resize on frame one -
@@ -71,9 +77,11 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
     // 11.4.
     m_sceneColor = std::make_unique<RenderTarget>(
         m_device, m_rtvAllocator, m_srvAllocator,
-        width, height, kSceneColorFormat, kSceneClearColor);
+        width, height, kSceneColorFormat, kSceneClearColor,
+        sceneSampleCount, sceneSampleQuality);
     m_sceneDepth = std::make_unique<DepthTarget>(
-        m_device, m_dsvAllocator, /*srvAllocator*/ nullptr, width, height);
+        m_device, m_dsvAllocator, /*srvAllocator*/ nullptr, width, height,
+        sceneSampleCount, sceneSampleQuality);
 
     // The shadow map is the OTHER case DepthTarget was built for: written as
     // depth in one pass, sampled as a texture afterwards. Passing an SRV
@@ -277,7 +285,8 @@ void Renderer::CreateRootSignature()
 // SampleDesc must match the attachments the pass actually binds, and a
 // mismatch is a Debug Layer error or a silently skipped draw. With one
 // template that is one place to be right instead of one per pass.
-D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate() const
+D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate(
+    UINT sampleCount, UINT sampleQuality) const
 {
     // Offsets must match struct Vertex in Mesh.h exactly. Mismatches produce
     // no error - just a wrong picture.
@@ -323,7 +332,8 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate() const
     desc.NumRenderTargets = 1;
     desc.RTVFormats[0]    = kSceneColorFormat;
     desc.DSVFormat        = kSceneDepthViewFormat;
-    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Count   = sampleCount;
+    desc.SampleDesc.Quality = sampleQuality;
 
     return desc;
 }
@@ -447,66 +457,75 @@ XMMATRIX Renderer::ComputeShadowViewProj(const LightingData& lighting,
 // explicit lines rather than becoming a separate copy of the whole PSO.
 void Renderer::CreatePipelineStates()
 {
-    // Both entry points live in one file, so the cache key includes them.
+    // Compile once, then bake the same shader programs into immutable 1x and
+    // 4x PSOs. Sample count/quality is pipeline state in D3D12, not a dynamic
+    // setting that can be changed at draw time.
     const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
     ComPtr<ID3DBlob> vs = m_resources.LoadShader(shaderFile, "VSMain", "vs_5_0");
     ComPtr<ID3DBlob> ps = m_resources.LoadShader(shaderFile, "PSMain", "ps_5_0");
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque = SceneShadedPsoTemplate();
-    opaque.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
-    opaque.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
-
-    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
-                      &opaque, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Opaque)])),
-                  "CreateGraphicsPipelineState(Opaque)");
-
-    // --- transparent: same shaders, different output-merger rules ---
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC transparent = opaque;
-    D3D12_RENDER_TARGET_BLEND_DESC& blend = transparent.BlendState.RenderTarget[0];
-    blend.BlendEnable    = TRUE;
-    blend.SrcBlend       = D3D12_BLEND_SRC_ALPHA;
-    blend.DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
-    blend.BlendOp        = D3D12_BLEND_OP_ADD;
-    blend.SrcBlendAlpha  = D3D12_BLEND_ONE;
-    blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
-    blend.BlendOpAlpha   = D3D12_BLEND_OP_ADD;
-    // Test against opaque depth, but never hide a transparent surface drawn
-    // later in the back-to-front queue.
-    transparent.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
-
-    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
-                      &transparent,
-                      IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Transparent)])),
-                  "CreateGraphicsPipelineState(Transparent)");
-
-    // --- skybox: same template, three deliberate differences ---
     const std::filesystem::path skyFile = GetShaderDir() / L"Skybox.hlsl";
     ComPtr<ID3DBlob> skyVs = m_resources.LoadShader(skyFile, "VSMain", "vs_5_0");
     ComPtr<ID3DBlob> skyPs = m_resources.LoadShader(skyFile, "PSMain", "ps_5_0");
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC skybox = SceneShadedPsoTemplate();
-    skybox.VS = { skyVs->GetBufferPointer(), skyVs->GetBufferSize() };
-    skybox.PS = { skyPs->GetBufferPointer(), skyPs->GetBufferSize() };
+    auto createSceneVariants = [&](size_t variantIndex,
+                                   UINT sampleCount, UINT sampleQuality) {
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque =
+            SceneShadedPsoTemplate(sampleCount, sampleQuality);
+        opaque.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
+        opaque.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
 
-    // 1. The camera is INSIDE the box, so what faces it are the back faces
-    //    of a cube wound for outside viewing. Cull the front ones instead.
-    skybox.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
-    // 2. The vertex shader forces depth to exactly 1.0. With LESS that never
-    //    passes against a cleared depth buffer, which is also 1.0.
-    skybox.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
-    // 3. Writing that depth would stamp the far plane over the background
-    //    and stop anything drawn later from appearing there.
-    skybox.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+        ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                          &opaque,
+                          IID_PPV_ARGS(&m_pipelineStates[variantIndex]
+                                                       [size_t(PsoRole::Opaque)])),
+                      "CreateGraphicsPipelineState(Opaque)");
 
-    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
-                      &skybox, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Skybox)])),
-                  "CreateGraphicsPipelineState(Skybox)");
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC transparent = opaque;
+        D3D12_RENDER_TARGET_BLEND_DESC& blend = transparent.BlendState.RenderTarget[0];
+        blend.BlendEnable    = TRUE;
+        blend.SrcBlend       = D3D12_BLEND_SRC_ALPHA;
+        blend.DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOp        = D3D12_BLEND_OP_ADD;
+        blend.SrcBlendAlpha  = D3D12_BLEND_ONE;
+        blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+        blend.BlendOpAlpha   = D3D12_BLEND_OP_ADD;
+        transparent.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                          &transparent,
+                          IID_PPV_ARGS(&m_pipelineStates[variantIndex]
+                                                       [size_t(PsoRole::Transparent)])),
+                      "CreateGraphicsPipelineState(Transparent)");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC skybox =
+            SceneShadedPsoTemplate(sampleCount, sampleQuality);
+        skybox.VS = { skyVs->GetBufferPointer(), skyVs->GetBufferSize() };
+        skybox.PS = { skyPs->GetBufferPointer(), skyPs->GetBufferSize() };
+        // The camera sees the cube's back faces. Its forced far-plane depth
+        // must pass the clear value without overwriting scene depth.
+        skybox.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
+        skybox.DepthStencilState.DepthFunc = D3D12_COMPARISON_FUNC_LESS_EQUAL;
+        skybox.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+        ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                          &skybox,
+                          IID_PPV_ARGS(&m_pipelineStates[variantIndex]
+                                                       [size_t(PsoRole::Skybox)])),
+                      "CreateGraphicsPipelineState(Skybox)");
+    };
+
+    createSceneVariants(/*1x row*/ 0, 1, 0);
+    if (m_4xMsaaSupported)
+    {
+        createSceneVariants(/*4x row*/ 1, 4, m_4xMsaaQuality);
+    }
 
     // --- shadow depth: the template with the COLOUR half removed ---
     const std::filesystem::path shadowFile = GetShaderDir() / L"ShadowDepth.hlsl";
     ComPtr<ID3DBlob> shadowVs = m_resources.LoadShader(shadowFile, "VSMain", "vs_5_0");
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow = SceneShadedPsoTemplate();
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow = SceneShadedPsoTemplate(1, 0);
     shadow.VS = { shadowVs->GetBufferPointer(), shadowVs->GetBufferSize() };
 
     // NO pixel shader. Depth is written by the rasterizer whether or not one
@@ -528,7 +547,9 @@ void Renderer::CreatePipelineStates()
     shadow.RasterizerState.SlopeScaledDepthBias = kShadowRasterSlopeScaledBias;
 
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
-                      &shadow, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::ShadowDepth)])),
+                      &shadow,
+                      IID_PPV_ARGS(&m_pipelineStates[0]
+                                                   [size_t(PsoRole::ShadowDepth)])),
                   "CreateGraphicsPipelineState(ShadowDepth)");
 
     m_skyboxMesh = m_resources.ResolveMesh(L"#cube");
@@ -560,6 +581,26 @@ void Renderer::SetSceneViewportSize(UINT width, UINT height)
 {
     m_requestedViewportWidth  = width;
     m_requestedViewportHeight = height;
+}
+
+void Renderer::SetMsaaEnabled(bool enabled)
+{
+    const bool requested = enabled && m_4xMsaaSupported;
+    if (requested == m_msaaEnabled)
+    {
+        return;
+    }
+
+    // Unlike a per-frame choice, changing sample count replaces every scene
+    // attachment. It is a rare editor setting, so drain once and keep the
+    // lifetime rule obvious.
+    m_device.WaitForGpu();
+    m_msaaEnabled = requested;
+
+    const UINT sampleCount   = m_msaaEnabled ? 4u : 1u;
+    const UINT sampleQuality = m_msaaEnabled ? m_4xMsaaQuality : 0u;
+    m_sceneColor->SetSampleDesc(sampleCount, sampleQuality);
+    m_sceneDepth->SetSampleDesc(sampleCount, sampleQuality);
 }
 
 // Written ONCE per frame: camera and lights are shared by every object.
@@ -704,7 +745,9 @@ void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
     // Command lists are stateless after Reset: root signature, PSO,
     // viewport/scissor, topology and buffers are set every frame.
     m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
-    m_commandList->SetPipelineState(m_pipelineStates[size_t(role)].Get());
+    const size_t sampleVariant = m_msaaEnabled ? 1u : 0u;
+    m_commandList->SetPipelineState(
+        m_pipelineStates[sampleVariant][size_t(role)].Get());
 
     // Bound ONCE for the whole frame - the payoff of splitting the constant
     // buffers by update frequency.
@@ -719,6 +762,31 @@ void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
     m_commandList->RSSetViewports(1, &viewport);
     m_commandList->RSSetScissorRects(1, &scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+}
+
+void Renderer::QueryMsaaSupport()
+{
+    auto qualityLevels = [&](DXGI_FORMAT format) {
+        D3D12_FEATURE_DATA_MULTISAMPLE_QUALITY_LEVELS query = {};
+        query.Format      = format;
+        query.SampleCount = 4;
+        query.Flags       = D3D12_MULTISAMPLE_QUALITY_LEVELS_FLAG_NONE;
+        if (FAILED(m_device.Device()->CheckFeatureSupport(
+                D3D12_FEATURE_MULTISAMPLE_QUALITY_LEVELS,
+                &query, sizeof(query))))
+        {
+            return 0u;
+        }
+        return query.NumQualityLevels;
+    };
+
+    // An attachment set is valid only when colour, depth, and the PSO all
+    // use the same count AND quality. Take the common quality range.
+    const UINT colorLevels = qualityLevels(kSceneColorFormat);
+    const UINT depthLevels = qualityLevels(kSceneDepthViewFormat);
+    const UINT commonLevels = std::min(colorLevels, depthLevels);
+    m_4xMsaaSupported = commonLevels > 0;
+    m_4xMsaaQuality   = m_4xMsaaSupported ? commonLevels - 1 : 0;
 }
 
 // Build pass membership without moving DrawItems themselves. Their position
@@ -886,7 +954,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // is no pixel shader to sample them.
     m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
     m_commandList->SetPipelineState(
-        m_pipelineStates[size_t(PsoRole::ShadowDepth)].Get());
+        m_pipelineStates[0][size_t(PsoRole::ShadowDepth)].Get());
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
 
@@ -996,6 +1064,42 @@ void Renderer::DrawTransparentPass(FrameResource& frame,
     DrawItems(frame, items, transparentItems);
 }
 
+// Finish the scene attachment and leave the texture behind SceneTextureId()
+// shader-readable. In 1x the render texture itself is sampled; in 4x the
+// multisample surface is resolved into a separate Texture2D first.
+void Renderer::ResolveSceneColor()
+{
+    if (!m_sceneColor->IsMultisampled())
+    {
+        D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+            m_sceneColor->ColorResource(),
+            D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_commandList->ResourceBarrier(1, &toShaderResource);
+        return;
+    }
+
+    D3D12_RESOURCE_BARRIER barriers[] = {
+        TransitionBarrier(m_sceneColor->ColorResource(),
+                          D3D12_RESOURCE_STATE_RENDER_TARGET,
+                          D3D12_RESOURCE_STATE_RESOLVE_SOURCE),
+        TransitionBarrier(m_sceneColor->ShaderResource(),
+                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                          D3D12_RESOURCE_STATE_RESOLVE_DEST),
+    };
+    m_commandList->ResourceBarrier(_countof(barriers), barriers);
+    m_commandList->ResolveSubresource(
+        m_sceneColor->ShaderResource(), 0,
+        m_sceneColor->ColorResource(), 0,
+        m_sceneColor->ColorFormat());
+
+    D3D12_RESOURCE_BARRIER resolveToShader = TransitionBarrier(
+        m_sceneColor->ShaderResource(),
+        D3D12_RESOURCE_STATE_RESOLVE_DEST,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    m_commandList->ResourceBarrier(1, &resolveToShader);
+}
+
 // Pass: the editor, into the back buffer. The scene appears here only as a
 // texture inside an ImGui window - the back buffer no longer needs a depth
 // buffer at all.
@@ -1099,9 +1203,13 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     // resource entirely and has to be finished before anything samples it.
     DrawShadowDepthPass(frame, items, opaqueItems);
 
+    const D3D12_RESOURCE_STATES sceneColorRestingState =
+        m_sceneColor->IsMultisampled()
+        ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE
+        : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
         m_sceneColor->ColorResource(),
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+        sceneColorRestingState,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
@@ -1109,13 +1217,7 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     DrawSkyboxPass(frame, lighting.skybox);
     DrawTransparentPass(frame, items, transparentItems);
 
-    // Hand it back to the pixel shader - the UI pass is about to sample it.
-    // Miss this barrier and the picture is undefined, not merely stale.
-    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
-        m_sceneColor->ColorResource(),
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    m_commandList->ResourceBarrier(1, &toShaderResource);
+    ResolveSceneColor();
 
     DrawOverlayPass();
 

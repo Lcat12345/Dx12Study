@@ -90,6 +90,12 @@ public:
     bool IsVSync() const         { return m_vsync; }
     bool IsTearingSupported() const { return m_device.IsTearingSupported(); }
 
+    // 4x is enabled by default when both scene colour and depth formats
+    // support it. A request on unsupported hardware remains safely at 1x.
+    void SetMsaaEnabled(bool enabled);
+    bool IsMsaaEnabled() const    { return m_msaaEnabled; }
+    bool Is4xMsaaSupported() const { return m_4xMsaaSupported; }
+
     // Debug layer message count, for the stats panel. See GraphicsDevice.
     uint64_t DebugMessageCount() const { return m_device.DebugMessageCount(); }
     bool     HasDebugLayer()     const { return m_device.HasDebugLayer(); }
@@ -115,12 +121,14 @@ private:
     void CreateConstantBuffers();
     void CreateRootSignature();
     void CreatePipelineStates();
+    void QueryMsaaSupport();
 
     // The settings every scene PSO shares: input layout, root signature,
     // topology, and the scene target's formats. Each role starts from this
     // and changes only what makes it that role - so a format mismatch is one
     // fix rather than four.
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC SceneShadedPsoTemplate() const;
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC SceneShadedPsoTemplate(
+        UINT sampleCount, UINT sampleQuality) const;
 
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                              const LightingData& lighting,
@@ -160,6 +168,7 @@ private:
     void DrawTransparentPass(FrameResource& frame,
                              const std::vector<DrawItem>& items,
                              const DrawQueue& transparentItems);
+    void ResolveSceneColor();
     void DrawOverlayPass();
 
     // Shared setup every geometry pass needs, so adding a pass does not mean
@@ -217,8 +226,16 @@ private:
     // wants no textures at all - may bring its own rather than pad this one.
     Microsoft::WRL::ComPtr<ID3D12RootSignature> m_sceneRootSignature;
 
-    // Indexed by PsoRole. Null until the step that introduces that pass.
-    Microsoft::WRL::ComPtr<ID3D12PipelineState> m_pipelineStates[size_t(PsoRole::Count)];
+    // Scene roles have immutable 1x and 4x variants because SampleDesc is
+    // baked into a PSO. ShadowDepth lives only in the 1x row: the shadow map
+    // deliberately remains single-sample.
+    static constexpr size_t kSceneSampleVariantCount = 2;
+    Microsoft::WRL::ComPtr<ID3D12PipelineState>
+        m_pipelineStates[kSceneSampleVariantCount][size_t(PsoRole::Count)];
+
+    bool m_4xMsaaSupported = false;
+    bool m_msaaEnabled      = false;
+    UINT m_4xMsaaQuality    = 0;
 
     // Declared after the allocators it borrows a slot from, so it is
     // destroyed before them.

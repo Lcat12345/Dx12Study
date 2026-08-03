@@ -63,6 +63,8 @@ void DemoGame::OnUpdate(float dt)
     ui.fps              = CurrentFps();
     ui.vsync            = GetRenderer().IsVSync();
     ui.tearingSupported = GetRenderer().IsTearingSupported();
+    ui.msaaEnabled      = GetRenderer().IsMsaaEnabled();
+    ui.msaa4xSupported  = GetRenderer().Is4xMsaaSupported();
     ui.sceneTexture     = GetRenderer().SceneTextureId();
     ui.shadowTexture    = GetRenderer().ShadowTextureId();
     ui.shadowMapSize    = GetRenderer().ShadowMapSize();
@@ -92,6 +94,10 @@ void DemoGame::OnUpdate(float dt)
     if (ui.vsyncToggled || GetWindow().ConsumeKeyPress('V'))
     {
         GetRenderer().SetVSync(!GetRenderer().IsVSync());
+    }
+    if (ui.msaaToggled)
+    {
+        GetRenderer().SetMsaaEnabled(!GetRenderer().IsMsaaEnabled());
     }
 }
 
