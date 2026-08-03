@@ -263,7 +263,7 @@ Dx12Engine/                  # 저장소 루트
 - [o] 스카이박스 (큐브맵, TextureCube 샘플링)
 - [o] 블렌딩 / 투명 오브젝트 (알파 블렌딩, 렌더 순서 문제) *(11.6: 명시적 `BlendMode`, texture×material alpha, straight-alpha PSO와 depth write OFF. world AABB center의 camera-space depth로 매 프레임 후방→전방 인덱스 정렬하며 Object CB 슬롯은 원본 인덱스로 유지. scene v5와 Inspector RGBA 편집 지원)*
 - [o] 노멀 매핑 (탄젠트 공간) *(11.3: `Vertex.tangent`는 `float4` — `w`가 mirrored UV의 bitangent 뒤집힘을 나른다. tangent 생성은 `CreateMesh` 한 곳에서 일어나 절차 메시와 파일 메시가 같은 vertex contract를 갖는다. UV 면적과 **기하 면적**을 따로 검사해 퇴화 삼각형을 배제 — 구의 극점 64개가 후자에만 걸린다. 예측 가능한 줄무늬 노멀맵으로 밝기비를 0.3% 이내로 대조)*
-- [o] 그림자 매핑 (Depth 전용 패스, 첫 멀티패스 렌더링) *(11.4: 2048² depth-only pass, 고정 경계구 light volume. 11.5: `t2` comparison sampling, lit border, caster+receiver bias, linear comparison 3×3 PCF. Environment에서 enable/bias/strength를 편집하고 scene v4로 저장. directional 직접광만 가리며 기본 씬 런타임에서 Debug Layer 0 확인)*
+- [o] 그림자 매핑 (Depth 전용 패스, 첫 멀티패스 렌더링) *(11.4: 2048² depth-only pass, 고정 경계구 light volume. 11.5: `t2` comparison sampling, lit border, caster+receiver bias, linear comparison 3×3 PCF. 11.6.1: geometric normal과 광원 각도로 receiver bias를 최소값~4배까지 조절해 평면의 삼각형 모양 acne/모아레를 억제. Environment에서 enable/base bias/strength를 편집하고 scene v4+로 저장. directional 직접광만 가리며 기본 씬 런타임에서 Debug Layer 0 확인)*
 - [ ] MSAA 또는 렌더 타겟 해상도 분리
 
 **핵심 개념**: 멀티패스 렌더링 구조(그림자 맵이 사실상 "렌더 투 텍스처" 입문), 투명 오브젝트 정렬 문제

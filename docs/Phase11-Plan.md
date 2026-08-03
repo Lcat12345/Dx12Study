@@ -109,6 +109,7 @@ Directional Shadow Depth
 | 11.4 | 완료 | directional shadow depth pass | depth-only 렌더링, light space | 대 | - |
 | 11.5 | 완료 | 그림자 적용 + 품질 보정 | comparison sampler, bias, PCF | 중 | - |
 | 11.6 | 완료 | 블렌딩 + 투명 정렬 | blend state, depth write, 정렬 | 중 | - |
+| 11.6.1 | 완료 | 그림자 receiver bias 안정화 | normal/slope bias, shadow acne | 소 | - |
 | 11.7 | 예정 | 4x MSAA + resolve | multisample resource, resolve | 대 | v1.2 |
 
 11.0과 11.1은 기능 목록 앞의 선행 기반이다. 나머지는 가능한 한 서로의 구현에
@@ -1309,6 +1310,28 @@ bias는 두 층이다. shadow PSO rasterizer가 caster에 constant `1000`과 slo
   카메라를 지나갈 때 역전되므로 엔티티 생성 순서가 아닌 매 프레임 정렬을 확인할 수 있다.
 - Debug/Release x64 빌드는 경고 0, 오류 0. Debug 실행 파일을 8초간 기동해 런타임
   HLSL 컴파일과 네 PSO 생성 경로가 예외 없이 유지되는 것을 확인했다.
+
+---
+
+### 11.6.1 그림자 receiver bias 안정화
+
+**문제**: 평평한 면에 실제 메시 삼각형 수보다 훨씬 많은 대각선 무늬가 보였다.
+Directional shadow를 끄면 즉시 사라졌으므로 메시 topology가 아니라, 기울어진
+receiver depth와 shadow-map texel depth가 반복해서 교차하며 생기는 shadow acne와
+PCF 모아레였다.
+
+**해결**
+
+- Environment의 기존 Bias를 고정값이 아닌 **최소 receiver bias**로 정의했다.
+- shader는 `1 - saturate(dot(geometricNormal, toLight))`를 표면 기울기 근사로 사용해
+  정면에서는 1배, grazing angle에서는 최대 4배까지 bias를 연속적으로 늘린다.
+- normal map으로 교란된 픽셀 노멀이 아니라 geometric normal을 사용한다. normal map은
+  조명 방향만 바꿀 뿐 shadow depth에 기록된 실제 표면을 바꾸지 않기 때문이다.
+- Inspector 라벨을 `Base bias`로 바꾸고 최대 4배 적용된다는 설명을 표시했다.
+- PCF/MSAA로 무늬를 덮지 않고 깊이 비교의 원인 자체를 보정한다. 지나친 bias에서
+  생기는 peter-panning은 Base bias를 낮춰 조절한다.
+- Release 빌드와 런타임 shader 컴파일을 통과했고, 같은 장면에서 반복되던 삼각형
+  모양의 표면 무늬가 눈에 띄게 개선된 것을 실제 실행 화면에서 확인했다.
 
 ---
 

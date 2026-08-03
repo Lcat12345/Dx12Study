@@ -112,7 +112,7 @@ PSInput VSMain(VSInput input)
 
 // Percentage-closer filtering: each comparison asks whether this receiver
 // was visible to the light, then the 3x3 average softens one hard texel edge.
-float DirectionalVisibility(float4 positionLightH)
+float DirectionalVisibility(float4 positionLightH, float3 geometryNormal)
 {
     if (gShadowStrength <= 0.0 || positionLightH.w <= 0.0)
     {
@@ -121,6 +121,19 @@ float DirectionalVisibility(float4 positionLightH)
 
     const float3 ndc = positionLightH.xyz / positionLightH.w;
     const float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+
+    // A fixed receiver bias is sufficient only when the surface faces the
+    // light. At a grazing angle, one shadow texel spans a much larger depth
+    // interval and the stored caster depth repeatedly crosses the receiver
+    // depth, exposing the shadow texel grid as acne/triangular moire.
+    //
+    // Use the GEOMETRIC normal, not the sampled normal map: normal maps bend
+    // lighting but do not change the surface written into the shadow map.
+    // Letting texture detail alter bias would imprint that texture into the
+    // shadow test. gShadowBias remains the editable minimum and grows smoothly
+    // to 4x at grazing angles.
+    const float nDotL = saturate(dot(geometryNormal, -gDirLightDirection));
+    const float receiverBias = gShadowBias * (1.0 + 3.0 * (1.0 - nDotL));
 
     // D3D NDC depth is already [0,1]. Outside the light's fitted volume is
     // not represented by this map, so it must be treated as lit.
@@ -139,7 +152,7 @@ float DirectionalVisibility(float4 positionLightH)
         {
             const float2 offset = float2(float(x), float(y)) * gShadowTexelSize;
             visibility += gShadowMap.SampleCmpLevelZero(
-                gShadowSampler, uv + offset, ndc.z - gShadowBias);
+                gShadowSampler, uv + offset, ndc.z - receiverBias);
         }
     }
     visibility /= 9.0;
@@ -213,7 +226,8 @@ float4 PSMain(PSInput input) : SV_Target
     float3 color = gAmbientLight * albedo;
 
     // --- directional light: infinitely far, so direction is constant ---
-    const float directionalVisibility = DirectionalVisibility(input.positionLightH);
+    const float directionalVisibility =
+        DirectionalVisibility(input.positionLightH, geometryNormal);
     color += directionalVisibility *
              BlinnPhong(gDirLightColor, -gDirLightDirection, normal, toEye, albedo);
 

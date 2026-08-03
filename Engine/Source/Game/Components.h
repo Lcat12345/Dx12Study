@@ -83,10 +83,10 @@ struct Environment
     // gets on load.
     CubeTextureHandle skybox;
 
-    // Directional-shadow quality controls. Bias is expressed in the
-    // shadow map's normalized depth range, not world units, so it remains
-    // meaningful when the scene bounds change. Old scenes inherit these
-    // defaults when their environment line has no shadow tail.
+    // Directional-shadow quality controls. Bias is the minimum receiver
+    // offset in normalized shadow depth; the shader increases it smoothly
+    // on surfaces that meet the light at a grazing angle. Old scenes inherit
+    // these defaults when their environment line has no shadow tail.
     bool  shadowsEnabled = true;
     float shadowBias     = 0.001f;
     float shadowStrength = 1.0f;

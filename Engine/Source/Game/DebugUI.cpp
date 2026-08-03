@@ -711,9 +711,10 @@ namespace
                 ImGui::SeparatorText("Directional shadows");
                 ImGui::Checkbox("Enabled", &environment->shadowsEnabled);
                 ImGui::BeginDisabled(!environment->shadowsEnabled);
-                ImGui::DragFloat("Bias", &environment->shadowBias, 0.00001f,
+                ImGui::DragFloat("Base bias", &environment->shadowBias, 0.00001f,
                                  Environment::kMinShadowBias,
                                  Environment::kMaxShadowBias, "%.6f");
+                ImGui::TextDisabled("Grows with surface slope, up to 4x.");
                 ImGui::SliderFloat("Strength", &environment->shadowStrength,
                                    0.0f, 1.0f, "%.2f");
                 ImGui::EndDisabled();
