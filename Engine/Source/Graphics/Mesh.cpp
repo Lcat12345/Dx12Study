@@ -2,6 +2,7 @@
 #include "Core/Common.h"
 
 #include <algorithm>
+#include <unordered_map>
 #include <vector>
 
 using namespace DirectX;
@@ -67,16 +68,107 @@ namespace
 }
 
 void GenerateTangents(std::vector<Vertex>& vertices,
-                      const std::vector<uint32_t>& indices)
+                      std::vector<uint32_t>& indices)
 {
     if (vertices.empty())
     {
         return;
     }
 
+    // --- pass 0: split vertices that sit on a mirrored-uv seam ---
+    //
+    // Must run BEFORE accumulation, since it can grow `vertices` and
+    // redirects some `indices` entries to the new copies. Recomputes the
+    // same two degeneracy tests as the accumulation loop below (cheap next
+    // to the parse that already produced this data) so a degenerate
+    // triangle contributes no handedness opinion and never forces a split.
+    {
+        // 0 = not yet touched by any real triangle, otherwise the uv-winding
+        // sign (+1/-1) of the first one that did.
+        std::vector<int8_t> firstSign(vertices.size(), 0);
+        // original vertex index -> the one duplicate created for "the other"
+        // handedness, so every triangle of that second sign redirects to the
+        // SAME copy instead of fragmenting into one duplicate per triangle.
+        std::unordered_map<uint32_t, uint32_t> duplicateOf;
+
+        const size_t triangleCount = indices.size() / 3;
+        for (size_t tri = 0; tri < triangleCount; ++tri)
+        {
+            const size_t   base  = tri * 3;
+            const uint32_t idx[3] = { indices[base], indices[base + 1], indices[base + 2] };
+            if (idx[0] >= vertices.size() || idx[1] >= vertices.size() ||
+                idx[2] >= vertices.size())
+            {
+                continue;
+            }
+
+            const XMVECTOR p0 = XMLoadFloat3(&vertices[idx[0]].position);
+            const XMVECTOR e1 = XMVectorSubtract(XMLoadFloat3(&vertices[idx[1]].position), p0);
+            const XMVECTOR e2 = XMVectorSubtract(XMLoadFloat3(&vertices[idx[2]].position), p0);
+            const float crossSq = XMVectorGetX(XMVector3LengthSq(XMVector3Cross(e1, e2)));
+            const float scaleSq = XMVectorGetX(XMVector3LengthSq(e1)) *
+                                  XMVectorGetX(XMVector3LengthSq(e2));
+            if (!(crossSq > 1e-12f * scaleSq))
+            {
+                continue;
+            }
+
+            const XMFLOAT2& uv0 = vertices[idx[0]].uv;
+            const float du1 = vertices[idx[1]].uv.x - uv0.x, dv1 = vertices[idx[1]].uv.y - uv0.y;
+            const float du2 = vertices[idx[2]].uv.x - uv0.x, dv2 = vertices[idx[2]].uv.y - uv0.y;
+            const float det = du1 * dv2 - du2 * dv1;
+            // Relative to the uv edges' OWN lengths, matching the geometric
+            // test above - not a fixed epsilon. A fixed one would reject a
+            // legitimately tiny (but not degenerate) uv footprint, which is
+            // ordinary in a densely packed texture atlas.
+            const float uvScaleSq = (du1 * du1 + dv1 * dv1) * (du2 * du2 + dv2 * dv2);
+            if (!(det * det > 1e-12f * uvScaleSq))
+            {
+                continue;
+            }
+
+            const int8_t sign = (det < 0.0f) ? -1 : 1;
+
+            for (int c = 0; c < 3; ++c)
+            {
+                const uint32_t v = idx[c];
+                if (firstSign[v] == 0)
+                {
+                    firstSign[v] = sign;
+                    continue;
+                }
+                if (firstSign[v] == sign)
+                {
+                    continue;
+                }
+
+                // A triangle of the opposite handedness touches a vertex
+                // that already committed to one. Averaging the two would
+                // partially or - for a clean mirror - EXACTLY cancel, which
+                // is what a naive accumulator does and why this pass exists.
+                auto it = duplicateOf.find(v);
+                uint32_t dupIndex;
+                if (it == duplicateOf.end())
+                {
+                    dupIndex = uint32_t(vertices.size());
+                    vertices.push_back(vertices[v]); // identical pos/normal/uv
+                    firstSign.push_back(sign);
+                    duplicateOf.emplace(v, dupIndex);
+                }
+                else
+                {
+                    dupIndex = it->second;
+                }
+                indices[base + c] = dupIndex;
+            }
+        }
+    }
+
     // Accumulated per vertex, because a vertex shared by several triangles
     // should get their average - otherwise the tangent jumps at every edge
-    // and the normal map creases along the triangulation.
+    // and the normal map creases along the triangulation. The seam split
+    // above is what keeps this averaging from mixing two triangles that
+    // disagree about which way is "forward".
     std::vector<XMFLOAT3> tangents(vertices.size(), XMFLOAT3{ 0, 0, 0 });
     std::vector<XMFLOAT3> bitangents(vertices.size(), XMFLOAT3{ 0, 0, 0 });
 
@@ -114,7 +206,15 @@ void GenerateTangents(std::vector<Vertex>& vertices,
         // no area in texture space - the exporter collapsed it - so there is
         // no direction for "+U runs this way" to name.
         const float det = du1 * dv2 - du2 * dv1;
-        if (std::fabs(det) <= 1e-12f)
+        // Relative to the uv edges' own lengths, matching the geometric test
+        // above - NOT a fixed epsilon against raw uv units. A fixed one would
+        // reject a legitimately tiny uv footprint, which is ordinary for a
+        // triangle packed into a small corner of a shared texture atlas; the
+        // same physical triangle, unwrapped at a different atlas scale,
+        // would then pass or fail this test for a reason that has nothing to
+        // do with whether it is actually degenerate.
+        const float uvScaleSq = (du1 * du1 + dv1 * dv1) * (du2 * du2 + dv2 * dv2);
+        if (!(det * det > 1e-12f * uvScaleSq))
         {
             continue;
         }
@@ -217,14 +317,22 @@ Mesh CreateMesh(ID3D12Device* device, const MeshData& data)
     // come through this overload, so there is no path that skips it.
     //
     // The copy is the price of leaving MeshData const for its producers. It
-    // is one memcpy of the vertices; laevat's 216,912 of them cost a few
-    // milliseconds against the 5,200 ms its .obj already spent being parsed.
-    std::vector<Vertex> vertices = data.vertices;
-    GenerateTangents(vertices, data.indices);
+    // is one memcpy of the vertices and indices; laevat's 216,912 of them
+    // cost a few milliseconds against the 5,200 ms its .obj already spent
+    // being parsed.
+    //
+    // `indices` is copied too, not just `vertices` - GenerateTangents may
+    // redirect some entries to a duplicate vertex it appends when a
+    // mirrored-uv seam needs splitting. The array's SIZE never changes, only
+    // some of its values, so `data.submeshes`' offset/count ranges (computed
+    // against the original array) still land on the same triangles.
+    std::vector<Vertex>   vertices = data.vertices;
+    std::vector<uint32_t> indices  = data.indices;
+    GenerateTangents(vertices, indices);
 
     Mesh mesh = CreateMesh(device,
                            vertices.data(), UINT(vertices.size()),
-                           data.indices.data(), UINT(data.indices.size()));
+                           indices.data(), UINT(indices.size()));
 
     // Replace the synthesised single submesh when the loader found real
     // material groups. Textures stay invalid here - only the ResourceManager

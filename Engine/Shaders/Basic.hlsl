@@ -82,8 +82,20 @@ PSInput VSMain(VSInput input)
     // points on it, so it transforms like any other difference of positions:
     // by the world matrix. Under non-uniform scale the two stop being
     // perpendicular, which is why the pixel shader re-orthogonalizes.
+    //
+    // input.tangent.w was decided once, in LOCAL space, by comparing the
+    // mesh's own bitangent to cross(localNormal, localTangent) - a
+    // comparison that assumes an orientation-PRESERVING transform out to
+    // world space. A transform with a negative determinant (a mirror - e.g.
+    // one negative Transform.scale component) reverses that orientation, so
+    // the stored w now names the WRONG side unless corrected here.
+    //
+    // determinant() is unaffected by the row/col-major transpose already
+    // baked into gWorld - det(A) == det(A^T) - so this reads the transform's
+    // true handedness regardless of that storage detail.
+    const float handedness = determinant((float3x3)gWorld) < 0.0 ? -1.0 : 1.0;
     output.tangentW = float4(mul(input.tangent.xyz, (float3x3)gWorld),
-                             input.tangent.w);
+                             input.tangent.w * handedness);
 
     output.uv = input.uv;
     return output;

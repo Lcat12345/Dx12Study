@@ -152,10 +152,29 @@ struct MeshData
 // rejected, leaving a zero sum to normalize. That is what the fallback below
 // is for, not these tests.
 //
-// Both tests are relative to the triangle's own size, so they mean the same
-// thing on a 1-unit sphere and on a 64,000-unit model.
+// Both tests are relative to the triangle's own size (the uv one against the
+// uv edges' own lengths, not a fixed epsilon), so they mean the same thing on
+// a 1-unit sphere, a 64,000-unit model, and a tightly packed texture atlas
+// where a triangle's uv footprint is a tiny fraction of the [0,1] square.
+//
+// A THIRD case needs handling that is not a degenerate triangle at all: a
+// vertex sitting on a MIRRORED-UV SEAM, shared by one triangle whose uv winds
+// the same way as its geometry and one whose uv winds the opposite way - the
+// standard way a symmetric character texture reuses one arm's pixels for the
+// other, flipped. Both triangles are perfectly valid; their tangents point in
+// genuinely different directions (roughly opposite in one axis), and summing
+// them at the shared vertex does not average two similar answers - it
+// SUBTRACTS them, which for a clean mirror cancels EXACTLY to zero and falls
+// through to the arbitrary fallback, discarding both real directions in
+// favour of a direction that matches neither. This function detects that
+// case by each triangle's uv-handedness sign and duplicates the vertex - one
+// copy per handedness - the same fix a content pipeline makes by not
+// deduplicating vertices across a uv seam in the first place. `indices` is
+// therefore mutable: values may be redirected to a newly appended vertex, but
+// the array never changes SIZE, so index ranges a submesh already recorded
+// (offset and count into this same array) stay valid without adjustment.
 void GenerateTangents(std::vector<Vertex>& vertices,
-                      const std::vector<uint32_t>& indices);
+                      std::vector<uint32_t>& indices);
 
 // Indices are 32-bit. 16-bit halves the index memory but caps a mesh at
 // 65535 vertices, which loaded models pass easily.
