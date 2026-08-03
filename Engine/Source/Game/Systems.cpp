@@ -181,14 +181,24 @@ void BuildRenderData(World& world,
             return; // a mesh with no place to be is not an error, just nothing
         }
 
+        const XMMATRIX worldMatrix = WorldMatrixOf(*transform);
         XMFLOAT4X4 world;
-        XMStoreFloat4x4(&world, WorldMatrixOf(*transform));
+        XMStoreFloat4x4(&world, worldMatrix);
+
+        const Mesh& mesh = resources.GetMesh(renderer.mesh);
+        XMFLOAT3 worldBoundsCenter = transform->position;
+        if (!mesh.bounds.IsEmpty())
+        {
+            const XMFLOAT3 localCenter = mesh.bounds.Center();
+            XMStoreFloat3(&worldBoundsCenter,
+                          XMVector3TransformCoord(XMLoadFloat3(&localCenter), worldMatrix));
+        }
 
         // ONE DRAW ITEM PER SUBMESH. A model that switches material partway
         // through its faces needs a draw per run, because a texture is bound
         // per draw. Every mesh has at least one submesh, so single-material
         // geometry falls out of the same loop with no special case.
-        for (const Submesh& submesh : resources.GetMesh(renderer.mesh).submeshes)
+        for (const Submesh& submesh : mesh.submeshes)
         {
             DrawItem item;
             item.mesh        = renderer.mesh;
@@ -196,6 +206,10 @@ void BuildRenderData(World& world,
             item.indexCount  = submesh.indexCount;
             item.world       = world;
             item.material    = renderer.material;
+            item.worldBoundsCenter = worldBoundsCenter;
+            item.layer = renderer.material.blendMode == Material::BlendMode::AlphaBlend
+                       ? RenderLayer::Transparent
+                       : RenderLayer::Opaque;
 
             // The submesh's own texture wins when the .mtl named one;
             // otherwise whatever the MeshRenderer carries applies. Colour,

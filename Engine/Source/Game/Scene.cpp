@@ -152,7 +152,11 @@ static bool SaveSceneImpl(World& world, const ResourceManager& resources,
             // and simply keeps the flat default.
             file << " normal ";
             WriteQuoted(file, ToUtf8(resources.TextureName(material.normalTexture)));
-            file << " strength " << material.normalStrength << "\n";
+            file << " strength " << material.normalStrength
+                 << " blend "
+                 << (material.blendMode == Material::BlendMode::AlphaBlend
+                         ? "alpha" : "opaque")
+                 << "\n";
         }
 
         if (const CameraComponent* lens = world.Get<CameraComponent>(entity))
@@ -369,17 +373,53 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
                 return false;
             }
 
-            // Everything past shininess is optional, because version 2 files
-            // end there. Present but malformed is still an error - silently
-            // ignoring a half-written line would lose the normal map without
-            // saying so.
-            if (in >> tag)
+            // Tagged optional tail: v2 ends at shininess, v3/v4 may add the
+            // normal map, and v5 adds blend mode. Order is deliberately not
+            // significant for hand-edited files, but duplicates are errors.
+            bool sawNormal = false;
+            bool sawBlend  = false;
+            while (in >> tag)
             {
-                if (tag != "normal" || !ReadQuoted(in, normalName) ||
-                    !(in >> tag) || tag != "strength" ||
-                    !(in >> renderer.material.normalStrength))
+                if (tag == "normal")
                 {
-                    outError = Where(lineNumber, "malformed meshrenderer normal map");
+                    if (sawNormal)
+                    {
+                        outError = Where(lineNumber, "duplicate meshrenderer normal map");
+                        return false;
+                    }
+                    sawNormal = true;
+                    if (!ReadQuoted(in, normalName) ||
+                        !(in >> tag) || tag != "strength" ||
+                        !(in >> renderer.material.normalStrength))
+                    {
+                        outError = Where(lineNumber, "malformed meshrenderer normal map");
+                        return false;
+                    }
+                }
+                else if (tag == "blend")
+                {
+                    if (sawBlend)
+                    {
+                        outError = Where(lineNumber, "duplicate meshrenderer blend mode");
+                        return false;
+                    }
+                    sawBlend = true;
+
+                    std::string blendMode;
+                    if (!(in >> blendMode) || (blendMode != "opaque" && blendMode != "alpha"))
+                    {
+                        outError = Where(lineNumber,
+                                         "meshrenderer blend expects opaque or alpha");
+                        return false;
+                    }
+                    renderer.material.blendMode = blendMode == "alpha"
+                                                ? Material::BlendMode::AlphaBlend
+                                                : Material::BlendMode::Opaque;
+                }
+                else
+                {
+                    outError = Where(lineNumber,
+                                     "unexpected '" + tag + "' after meshrenderer");
                     return false;
                 }
             }

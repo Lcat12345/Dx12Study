@@ -621,7 +621,17 @@ namespace
                 ImGui::DragFloat("Normal strength", &renderer->material.normalStrength,
                                  0.01f, 0.0f, 4.0f);
 
-                ImGui::ColorEdit3("Albedo",   &renderer->material.diffuseAlbedo.x);
+                int blendMode = renderer->material.blendMode == Material::BlendMode::AlphaBlend
+                              ? 1 : 0;
+                const char* blendModes[] = { "Opaque", "Alpha blend" };
+                if (ImGui::Combo("Blend mode", &blendMode, blendModes,
+                                 int(std::size(blendModes))))
+                {
+                    renderer->material.blendMode = blendMode == 1
+                                                 ? Material::BlendMode::AlphaBlend
+                                                 : Material::BlendMode::Opaque;
+                }
+                ImGui::ColorEdit4("Albedo",   &renderer->material.diffuseAlbedo.x);
                 ImGui::ColorEdit3("Specular", &renderer->material.specularColor.x);
                 ImGui::DragFloat("Shininess", &renderer->material.shininess,
                                  1.0f, 1.0f, 512.0f);

@@ -99,8 +99,7 @@ private:
     // geometry with different state; naming the role keeps "which PSO" from
     // becoming a comment.
     //
-    // Opaque, Skybox and ShadowDepth are active. Transparent arrives in 11.6;
-    // until then only that slot stays null.
+    // Each role is an immutable bundle of the state its pass needs.
     enum class PsoRole
     {
         Opaque,
@@ -109,6 +108,8 @@ private:
         ShadowDepth,
         Count
     };
+
+    using DrawQueue = std::vector<size_t>;
 
     void CreateCommandObjects();
     void CreateConstantBuffers();
@@ -123,16 +124,17 @@ private:
 
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                              const LightingData& lighting,
-                             const std::vector<DrawItem>& items);
+                             const std::vector<DrawItem>& items,
+                             const DrawQueue& shadowCasters);
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
 
     // The world-space extent of everything that casts a shadow, as a sphere.
     // False when there is nothing to bound. Uses the ResourceManager the
-    // renderer already holds rather than a new DrawItem field - see the plan
-    // doc; a bounds centre only earns its place in DrawItem when 11.6 needs
-    // it as a sort key.
+    // renderer already holds. The DrawItem centre added in 11.6 is the
+    // transparent sort key, not a replacement for all eight corners here.
     bool ComputeSceneBounds(const std::vector<DrawItem>& items,
+                            const DrawQueue& itemIndices,
                             DirectX::XMFLOAT3& outCenter, float& outRadius) const;
     DirectX::XMMATRIX ComputeShadowViewProj(const LightingData& lighting,
                                             const DirectX::XMFLOAT3& center,
@@ -144,17 +146,27 @@ private:
     // barriers.
     // First: the light's own depth-only view of the casters, into a target
     // that has nothing to do with the scene viewport.
-    void DrawShadowDepthPass(FrameResource& frame, const std::vector<DrawItem>& items);
-    void DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items);
+    void BuildDrawQueues(const CameraView& camera,
+                         const std::vector<DrawItem>& items,
+                         DrawQueue& outOpaque, DrawQueue& outTransparent) const;
+    void DrawShadowDepthPass(FrameResource& frame,
+                             const std::vector<DrawItem>& items,
+                             const DrawQueue& opaqueItems);
+    void DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items,
+                        const DrawQueue& opaqueItems);
     // After opaque so it only fills pixels nothing has claimed, and before
     // transparent (11.6) so alpha has a background to blend against.
     void DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox);
+    void DrawTransparentPass(FrameResource& frame,
+                             const std::vector<DrawItem>& items,
+                             const DrawQueue& transparentItems);
     void DrawOverlayPass();
 
     // Shared setup every geometry pass needs, so adding a pass does not mean
     // copying six bind calls.
     void BindScenePass(FrameResource& frame, PsoRole role);
-    void DrawItems(FrameResource& frame, const std::vector<DrawItem>& items);
+    void DrawItems(FrameResource& frame, const std::vector<DrawItem>& items,
+                   const DrawQueue& drawQueue);
 
     // Declaration order IS destruction order, reversed: the device is first
     // so everything created from it dies before it does.

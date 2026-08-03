@@ -108,7 +108,7 @@ Directional Shadow Depth
 | 11.3 | 완료 | 탄젠트 생성 + 노멀 매핑 | 탄젠트 공간, TBN | 대 | - |
 | 11.4 | 완료 | directional shadow depth pass | depth-only 렌더링, light space | 대 | - |
 | 11.5 | 완료 | 그림자 적용 + 품질 보정 | comparison sampler, bias, PCF | 중 | - |
-| 11.6 | 예정 | 블렌딩 + 투명 정렬 | blend state, depth write, 정렬 | 중 | - |
+| 11.6 | 완료 | 블렌딩 + 투명 정렬 | blend state, depth write, 정렬 | 중 | - |
 | 11.7 | 예정 | 4x MSAA + resolve | multisample resource, resolve | 대 | v1.2 |
 
 11.0과 11.1은 기능 목록 앞의 선행 기반이다. 나머지는 가능한 한 서로의 구현에
@@ -1247,19 +1247,19 @@ bias는 두 층이다. shadow PSO rasterizer가 caster에 constant `1000`과 slo
 
 **작업 항목**
 
-- [ ] `Material::BlendMode { Opaque, AlphaBlend }`
-- [ ] `DrawItem`에 render layer와 정렬 키 또는 계산에 필요한 bounds center 추가
+- [o] `Material::BlendMode { Opaque, AlphaBlend }`
+- [o] `DrawItem`에 render layer와 정렬 키 또는 계산에 필요한 bounds center 추가
       (11.0에서 미리 넣지 않고 **쓰는 데가 생기는 여기서** 추가한다.
       11.4의 scene bounds는 ResourceManager 조회로 해결된다)
-- [ ] `BuildRenderData`에서 opaque/transparent 분류
-- [ ] 카메라 공간 깊이 기준 transparent sort key 계산
-- [ ] opaque는 기존 PSO로 먼저 draw
-- [ ] skybox 뒤에 transparent pass 실행
-- [ ] transparent PSO: `SRC_ALPHA`, `INV_SRC_ALPHA`, `ADD`
-- [ ] transparent PSO: depth test ON, depth write OFF
-- [ ] HLSL 출력 alpha에 texture alpha × material alpha 반영
-- [ ] Inspector blend mode와 alpha 편집
-- [ ] 씬 저장/불러오기 지원, 구버전 기본값은 Opaque
+- [o] `BuildRenderData`에서 opaque/transparent 분류
+- [o] 카메라 공간 깊이 기준 transparent sort key 계산
+- [o] opaque는 기존 PSO로 먼저 draw
+- [o] skybox 뒤에 transparent pass 실행
+- [o] transparent PSO: `SRC_ALPHA`, `INV_SRC_ALPHA`, `ADD`
+- [o] transparent PSO: depth test ON, depth write OFF
+- [o] HLSL 출력 alpha에 texture alpha × material alpha 반영
+- [o] Inspector blend mode와 alpha 편집
+- [o] 씬 저장/불러오기 지원, 구버전 기본값은 Opaque
 
 **설계 결정**
 
@@ -1289,6 +1289,26 @@ bias는 두 층이다. shadow PSO rasterizer가 caster에 constant `1000`과 slo
 
 **완료 기준**: 불투명 draw 뒤에 정렬된 반투명 draw가 실행되고, 카메라를
 이동해 순서가 바뀌어도 일반적인 겹침 장면이 올바르게 합성된다.
+
+**결과**
+
+- `Material::BlendMode`와 별도 `RenderLayer`를 두었다. alpha 값만 낮춘 opaque
+  재질은 계속 depth를 기록하고, `AlphaBlend`를 명시한 재질만 투명 큐로 간다.
+- `BuildRenderData`가 메시 AABB 중심을 world space로 한 번 변환한다. Renderer는
+  매 프레임 `dot(center - eye, cameraForward)`를 계산해 transparent 인덱스만
+  `stable_sort`로 후방→전방 정렬한다.
+- 정렬 대상은 `DrawItem` 자체가 아니라 원본 인덱스다. 인덱스는 Object CB 슬롯을
+  그대로 가리키므로 정렬 뒤에도 다른 물체의 transform/material이 바인딩되지 않는다.
+- transparent PSO는 straight-alpha 색상 블렌딩, depth test ON, depth write OFF다.
+  패스 순서는 opaque → skybox → transparent이며, transparent는 불완전한 solid
+  silhouette를 만들지 않도록 directional shadow caster 큐에서 제외했다.
+- `Basic.hlsl` 출력 alpha는 diffuse texture alpha × material alpha다. Inspector는
+  blend mode와 RGBA albedo를 편집하며, scene v5가 `blend opaque|alpha`를 저장한다.
+  v1~v4 파일은 `Material` 기본값인 Opaque로 읽힌다.
+- 기본 씬에 `Glass_far`와 `Glass_near`를 추가했다. 두 큐브의 world center 깊이가
+  카메라를 지나갈 때 역전되므로 엔티티 생성 순서가 아닌 매 프레임 정렬을 확인할 수 있다.
+- Debug/Release x64 빌드는 경고 0, 오류 0. Debug 실행 파일을 8초간 기동해 런타임
+  HLSL 컴파일과 네 PSO 생성 경로가 예외 없이 유지되는 것을 확인했다.
 
 ---
 
@@ -1402,7 +1422,7 @@ ResourceManager cache의 동기화, GPU upload command 기록 시점, 완료 전
 - [o] directional light depth-only shadow pass 동작
 - [o] opaque 물체가 그림자를 만들고 받으며 point light는 영향받지 않음
 - [o] bias + 3×3 PCF로 기본 씬의 acne와 계단 현상이 허용 범위
-- [ ] opaque/transparent PSO 분리, transparent 후방→전방 정렬
+- [o] opaque/transparent PSO 분리, transparent 후방→전방 정렬
 - [ ] 4x MSAA 결과가 resolve texture를 통해 ImGui에 표시됨
 - [ ] 1x 폴백, viewport 리사이즈, 접기/펼치기 정상
 - [o] v1 씬 로드 및 새 필드 기본값 적용, 최신 씬 저장/불러오기 왕복

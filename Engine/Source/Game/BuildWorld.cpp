@@ -169,6 +169,25 @@ void BuildWorld(ResourceManager& resources, World& world)
                                    { { 7.0f, 3.0f, -4.0f }, { 0, 0, 0 }, { 2.6f, 2.6f, 2.6f } });
     world.Add<Spin>(torus, { 0.6f });
 
+    // --- overlapping transparent objects: deliberately offset just enough
+    // to see both colours. Walk past them and their camera-space order flips,
+    // exercising the per-frame back-to-front queue rather than entity order.
+    Material farGlass;
+    farGlass.diffuseAlbedo = { 0.25f, 0.75f, 1.0f, 0.35f };
+    farGlass.specularColor = { 0.8f, 0.9f, 1.0f };
+    farGlass.shininess     = 96.0f;
+    farGlass.blendMode     = Material::BlendMode::AlphaBlend;
+    SpawnMesh(world, "Glass_far", cubeMesh, farGlass,
+              { { 0.8f, 2.6f, 1.0f }, { 0.2f, 0.35f, 0.0f }, { 2.6f, 2.6f, 2.6f } });
+
+    Material nearGlass;
+    nearGlass.diffuseAlbedo = { 1.0f, 0.45f, 0.2f, 0.4f };
+    nearGlass.specularColor = { 1.0f, 0.8f, 0.6f };
+    nearGlass.shininess     = 64.0f;
+    nearGlass.blendMode     = Material::BlendMode::AlphaBlend;
+    SpawnMesh(world, "Glass_near", cubeMesh, nearGlass,
+              { { -0.8f, 2.6f, -3.0f }, { -0.15f, -0.25f, 0.0f }, { 2.6f, 2.6f, 2.6f } });
+
     // A downloaded character model used to stand here. It is gone on
     // purpose: 43 MB of third-party art that cannot be redistributed does
     // not belong in the scene the engine builds by default, and parsing its

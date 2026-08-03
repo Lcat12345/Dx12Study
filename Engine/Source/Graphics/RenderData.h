@@ -13,6 +13,12 @@
 // uploaded in the per-object constants; the texture is bound as a descriptor.
 struct Material
 {
+    enum class BlendMode
+    {
+        Opaque,
+        AlphaBlend
+    };
+
     DirectX::XMFLOAT4 diffuseAlbedo = { 1.0f, 1.0f, 1.0f, 1.0f };
     DirectX::XMFLOAT3 specularColor = { 0.3f, 0.3f, 0.3f };
     float             shininess     = 32.0f; // high = small tight highlight
@@ -25,6 +31,15 @@ struct Material
     // without unassigning the texture), 1 is the map as authored, and above 1
     // exaggerates - handy for seeing whether a subtle map is working at all.
     float             normalStrength = 1.0f;
+    // Explicit rather than inferred from diffuseAlbedo.a: render state must
+    // not change just because an opaque material happens to store alpha.
+    BlendMode         blendMode = BlendMode::Opaque;
+};
+
+enum class RenderLayer
+{
+    Opaque,
+    Transparent
 };
 
 // One draw call's worth of input. The world matrix arrives already built -
@@ -39,6 +54,10 @@ struct DrawItem
     UINT                indexCount  = 0;
     DirectX::XMFLOAT4X4 world;
     Material            material;
+    // The mesh AABB centre transformed to world space. Transparent sorting
+    // uses this instead of entity order or Euclidean distance.
+    DirectX::XMFLOAT3   worldBoundsCenter = { 0.0f, 0.0f, 0.0f };
+    RenderLayer         layer = RenderLayer::Opaque;
 };
 
 // The camera as the renderer needs it. Note what is NOT here: the aspect

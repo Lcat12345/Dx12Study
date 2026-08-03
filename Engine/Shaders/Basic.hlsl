@@ -205,7 +205,8 @@ float4 PSMain(PSInput input) : SV_Target
 
     const float3 toEye  = normalize(gEyePosW - input.positionW);
 
-    const float3 albedo = gDiffuse.Sample(gSampler, input.uv).rgb * gDiffuseAlbedo.rgb;
+    const float4 diffuseSample = gDiffuse.Sample(gSampler, input.uv);
+    const float3 albedo = diffuseSample.rgb * gDiffuseAlbedo.rgb;
 
     // Ambient stands in for all the bounced light we do not simulate,
     // so surfaces facing away from every light are not pure black.
@@ -233,5 +234,5 @@ float4 PSMain(PSInput input) : SV_Target
                             normal, toEye, albedo);
     }
 
-    return float4(color, 1.0);
+    return float4(color, saturate(diffuseSample.a * gDiffuseAlbedo.a));
 }

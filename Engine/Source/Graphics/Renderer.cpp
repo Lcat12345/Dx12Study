@@ -5,6 +5,7 @@
 
 #include <DirectXMath.h>
 #include <algorithm>
+#include <cfloat>
 #include <cmath>
 #include <stdexcept>
 #include <filesystem>
@@ -339,14 +340,16 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate() const
 // Returns false for an empty scene: no casters means no sensible light
 // frustum, and the caller skips the pass rather than inventing one.
 bool Renderer::ComputeSceneBounds(const std::vector<DrawItem>& items,
+                                  const DrawQueue& itemIndices,
                                   XMFLOAT3& outCenter, float& outRadius) const
 {
     XMVECTOR minCorner = XMVectorReplicate( FLT_MAX);
     XMVECTOR maxCorner = XMVectorReplicate(-FLT_MAX);
     bool any = false;
 
-    for (const DrawItem& item : items)
+    for (const size_t itemIndex : itemIndices)
     {
+        const DrawItem& item = items[itemIndex];
         if (!item.mesh.IsValid())
         {
             continue;
@@ -439,9 +442,9 @@ XMMATRIX Renderer::ComputeShadowViewProj(const LightingData& lighting,
 // vertex layout, rasterizer/blend/depth state, output formats. Validated
 // once here, cheap to switch at runtime.
 //
-// Only Opaque exists so far. Skybox, Transparent and ShadowDepth get built
-// here too as their steps land - the point of the role table is that adding
-// one is a few lines rather than a new member and a new call site.
+// Opaque, transparent, skybox and shadow depth all begin from the same
+// contract; the point of the role table is that each difference stays a few
+// explicit lines rather than becoming a separate copy of the whole PSO.
 void Renderer::CreatePipelineStates()
 {
     // Both entry points live in one file, so the cache key includes them.
@@ -456,6 +459,25 @@ void Renderer::CreatePipelineStates()
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                       &opaque, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Opaque)])),
                   "CreateGraphicsPipelineState(Opaque)");
+
+    // --- transparent: same shaders, different output-merger rules ---
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC transparent = opaque;
+    D3D12_RENDER_TARGET_BLEND_DESC& blend = transparent.BlendState.RenderTarget[0];
+    blend.BlendEnable    = TRUE;
+    blend.SrcBlend       = D3D12_BLEND_SRC_ALPHA;
+    blend.DestBlend      = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOp        = D3D12_BLEND_OP_ADD;
+    blend.SrcBlendAlpha  = D3D12_BLEND_ONE;
+    blend.DestBlendAlpha = D3D12_BLEND_INV_SRC_ALPHA;
+    blend.BlendOpAlpha   = D3D12_BLEND_OP_ADD;
+    // Test against opaque depth, but never hide a transparent surface drawn
+    // later in the back-to-front queue.
+    transparent.DepthStencilState.DepthWriteMask = D3D12_DEPTH_WRITE_MASK_ZERO;
+
+    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                      &transparent,
+                      IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Transparent)])),
+                  "CreateGraphicsPipelineState(Transparent)");
 
     // --- skybox: same template, three deliberate differences ---
     const std::filesystem::path skyFile = GetShaderDir() / L"Skybox.hlsl";
@@ -545,7 +567,8 @@ void Renderer::SetSceneViewportSize(UINT width, UINT height)
 // colours used to be hardcoded in this function.
 void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                                    const LightingData& lighting,
-                                   const std::vector<DrawItem>& items)
+                                   const std::vector<DrawItem>& items,
+                                   const DrawQueue& shadowCasters)
 {
     // Scene loading and the editor already validate these values, but keep
     // this renderer boundary defensive for programmatic LightingData callers.
@@ -597,7 +620,8 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     XMFLOAT3 sceneCenter = { 0.0f, 0.0f, 0.0f };
     float    sceneRadius = 0.0f;
     m_shadowCastersExist = lighting.shadowsEnabled && shadowStrength > 0.0f &&
-                           ComputeSceneBounds(items, sceneCenter, sceneRadius);
+                           ComputeSceneBounds(items, shadowCasters,
+                                              sceneCenter, sceneRadius);
     const XMMATRIX shadowViewProj =
         m_shadowCastersExist ? ComputeShadowViewProj(lighting, sceneCenter, sceneRadius)
                              : XMMatrixIdentity();
@@ -697,24 +721,77 @@ void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
 
-// One draw per item, with its per-object constants and texture.
-//
-// The index into items IS the index into the object constant buffer, which
-// is why anything that reorders draws (11.6's transparent sorting) has to
-// reorder the constants with them.
-void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& items)
+// Build pass membership without moving DrawItems themselves. Their position
+// in the source array is also their Object CB slot, so sorting that array or
+// renumbering a queue independently would bind the wrong transform.
+void Renderer::BuildDrawQueues(const CameraView& camera,
+                               const std::vector<DrawItem>& items,
+                               DrawQueue& outOpaque,
+                               DrawQueue& outTransparent) const
 {
-    const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
+    outOpaque.clear();
+    outTransparent.clear();
+    outOpaque.reserve(items.size());
+    outTransparent.reserve(items.size());
 
     for (size_t i = 0; i < items.size(); ++i)
     {
-        const DrawItem& item = items[i];
+        if (items[i].layer == RenderLayer::Transparent)
+        {
+            outTransparent.push_back(i);
+        }
+        else
+        {
+            outOpaque.push_back(i);
+        }
+    }
+
+    XMVECTOR forward = XMLoadFloat3(&camera.forward);
+    const float forwardLengthSq = XMVectorGetX(XMVector3LengthSq(forward));
+    if (!std::isfinite(forwardLengthSq) || forwardLengthSq < 1e-12f)
+    {
+        forward = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+    }
+    else
+    {
+        forward = XMVector3Normalize(forward);
+    }
+    const XMVECTOR eye = XMLoadFloat3(&camera.position);
+
+    auto cameraDepth = [&](size_t itemIndex) {
+        const XMVECTOR center = XMLoadFloat3(&items[itemIndex].worldBoundsCenter);
+        const float depth = XMVectorGetX(
+            XMVector3Dot(XMVectorSubtract(center, eye), forward));
+        // Invalid transforms should not poison stable_sort's strict ordering.
+        return std::isfinite(depth) ? depth : -FLT_MAX;
+    };
+
+    // Largest camera-space Z first: straight-alpha blending needs every
+    // farther surface already in the target when a nearer surface arrives.
+    std::stable_sort(outTransparent.begin(), outTransparent.end(),
+                     [&](size_t left, size_t right) {
+                         return cameraDepth(left) > cameraDepth(right);
+                     });
+}
+
+// One draw per item, with its per-object constants and texture.
+//
+// A queue changes draw ORDER only. Each queue value remains the source item
+// index and therefore the matching Object CB slot.
+void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& items,
+                         const DrawQueue& drawQueue)
+{
+    const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
+
+    for (const size_t itemIndex : drawQueue)
+    {
+        const DrawItem& item = items[itemIndex];
         const Mesh&     mesh = m_resources.GetMesh(item.mesh);
 
         // Point the root CBV at this object's slot - no descriptor heap
         // juggling, just an address.
         m_commandList->SetGraphicsRootConstantBufferView(
-            0, objectCBBase + UINT64(i) * kObjectCBSize);
+            0, objectCBBase + UINT64(itemIndex) * kObjectCBSize);
 
         // Each material names its own texture; the handle resolves to a
         // slot in the heap bound above. A material placed in the editor may
@@ -753,7 +830,8 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 // Runs FIRST, before anything touches the scene target, because the lighting
 // pass reads this map and has to find it already finished.
 void Renderer::DrawShadowDepthPass(FrameResource& frame,
-                                   const std::vector<DrawItem>& items)
+                                   const std::vector<DrawItem>& items,
+                                   const DrawQueue& opaqueItems)
 {
     // Back to writable. Skipped on the very first frame because DepthTarget
     // creates its resource already in DEPTH_WRITE - transitioning FROM a
@@ -791,7 +869,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // Clearing to 1.0 (far) is the honest picture for "nothing to cast a
     // shadow": every texel reads as the far plane, same as a real pass over
     // an empty frustum would produce.
-    if (!m_shadowCastersExist || items.empty())
+    if (!m_shadowCastersExist || opaqueItems.empty())
     {
         D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
             m_shadowMap->Resource(),
@@ -818,13 +896,13 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     m_commandList->RSSetScissorRects(1, &scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // Every opaque item is a caster in this step. The skybox is not in this
-    // list at all - it is drawn by its own pass - and transparent items do
-    // not exist yet, so "opaque casters" and "items" are the same set.
+    // Every opaque item is a caster. Alpha-blended geometry is deliberately
+    // absent: the depth-only shader cannot represent partial coverage and
+    // would otherwise stamp a solid silhouette into the map.
     const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
-    for (size_t i = 0; i < items.size(); ++i)
+    for (const size_t itemIndex : opaqueItems)
     {
-        const DrawItem& item = items[i];
+        const DrawItem& item = items[itemIndex];
         const Mesh&     mesh = m_resources.GetMesh(item.mesh);
 
         // The SAME object constant buffer the main pass uses, at the same
@@ -832,7 +910,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
         // there is no second upload and no chance of the two passes drawing
         // the object in two different places.
         m_commandList->SetGraphicsRootConstantBufferView(
-            0, objectCBBase + UINT64(i) * kObjectCBSize);
+            0, objectCBBase + UINT64(itemIndex) * kObjectCBSize);
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
@@ -852,7 +930,9 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
 
 // Pass: the world, into the offscreen target. Nothing here knows a window
 // exists.
-void Renderer::DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items)
+void Renderer::DrawOpaquePass(FrameResource& frame,
+                              const std::vector<DrawItem>& items,
+                              const DrawQueue& opaqueItems)
 {
     // Two separate objects, bound together as one attachment set.
     const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneColor->RTV();
@@ -867,7 +947,7 @@ void Renderer::DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>&
                                          1.0f, 0, 0, nullptr);
 
     BindScenePass(frame, PsoRole::Opaque);
-    DrawItems(frame, items);
+    DrawItems(frame, items, opaqueItems);
 }
 
 // Fills whatever the opaque pass left untouched. Runs AFTER it rather than
@@ -893,6 +973,27 @@ void Renderer::DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox)
     m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
     m_commandList->IASetIndexBuffer(&mesh.ibv);
     m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+}
+
+// Straight-alpha compositing after the skybox supplies the background. The
+// queue is already back-to-front; depth testing still lets opaque geometry
+// reject transparent fragments behind it, while the PSO keeps depth writes
+// off so transparent surfaces do not reject one another.
+void Renderer::DrawTransparentPass(FrameResource& frame,
+                                   const std::vector<DrawItem>& items,
+                                   const DrawQueue& transparentItems)
+{
+    if (transparentItems.empty())
+    {
+        return;
+    }
+
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneColor->RTV();
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneDepth->DSV();
+    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+
+    BindScenePass(frame, PsoRole::Transparent);
+    DrawItems(frame, items, transparentItems);
 }
 
 // Pass: the editor, into the back buffer. The scene appears here only as a
@@ -961,9 +1062,15 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
         m_sceneDepth->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
     }
 
+    // Queues contain source indices, so transparent sorting never changes
+    // the item-to-Object-CB mapping established below.
+    DrawQueue opaqueItems;
+    DrawQueue transparentItems;
+    BuildDrawQueues(camera, items, opaqueItems, transparentItems);
+
     // Only now is it safe to overwrite this frame's constant buffers and
     // recycle its command memory.
-    UpdatePassConstants(frame, camera, lighting, items);
+    UpdatePassConstants(frame, camera, lighting, items, opaqueItems);
     UpdateObjectConstants(frame, items);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
@@ -990,7 +1097,7 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     // transition stops being answerable once more than one pass draws there.
     // Before the scene target's barrier, because it touches a different
     // resource entirely and has to be finished before anything samples it.
-    DrawShadowDepthPass(frame, items);
+    DrawShadowDepthPass(frame, items, opaqueItems);
 
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
         m_sceneColor->ColorResource(),
@@ -998,8 +1105,9 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
         D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
-    DrawOpaquePass(frame, items);
+    DrawOpaquePass(frame, items, opaqueItems);
     DrawSkyboxPass(frame, lighting.skybox);
+    DrawTransparentPass(frame, items, transparentItems);
 
     // Hand it back to the pixel shader - the UI pass is about to sample it.
     // Miss this barrier and the picture is undefined, not merely stale.
