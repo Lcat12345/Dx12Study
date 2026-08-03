@@ -24,6 +24,10 @@ cbuffer PassConstants : register(b1)
     // The same projection with the camera's TRANSLATION removed, for the
     // skybox: the background must turn with the camera but never approach it.
     float4x4 gSkyViewProj;
+    // The directional light's view-projection, for shadow mapping. Unused by
+    // this shader until 11.5 samples the map; declared now so all three
+    // shaders that share this buffer describe the same bytes.
+    float4x4 gShadowViewProj;
     float3   gEyePosW;          float _pad0;
     float3   gAmbientLight;     float _pad1;
     float3   gDirLightDirection; float _pad2; // direction the light TRAVELS

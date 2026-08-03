@@ -25,6 +25,17 @@ namespace
     // owns the resource format; this is the VIEW format, and the two differ
     // once a depth buffer becomes sampleable.
     constexpr DXGI_FORMAT kSceneDepthViewFormat = DXGI_FORMAT_D32_FLOAT;
+
+    // The shadow map's size is FIXED, unlike the scene target which follows
+    // the viewport panel. It has nothing to do with how big the window is -
+    // it is the resolution the light samples the world at, and tying it to a
+    // panel the user drags would make shadow quality wobble as they resize.
+    constexpr UINT kShadowMapSize = 2048;
+
+    // Never smaller than this, so a scene holding one tiny object (or nothing
+    // but a point) still gets an orthographic volume with real width and a
+    // near/far spread rather than a division by zero.
+    constexpr float kMinShadowRadius = 1.0f;
 }
 
 Renderer::Renderer(HWND hwnd, UINT width, UINT height)
@@ -53,6 +64,14 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
         width, height, kSceneColorFormat, kSceneClearColor);
     m_sceneDepth = std::make_unique<DepthTarget>(
         m_device, m_dsvAllocator, /*srvAllocator*/ nullptr, width, height);
+
+    // The shadow map is the OTHER case DepthTarget was built for: written as
+    // depth in one pass, sampled as a texture afterwards. Passing an SRV
+    // allocator is what switches its resource to typeless and adds the second
+    // view - the whole reason 11.1 made that an option instead of a second
+    // class.
+    m_shadowMap = std::make_unique<DepthTarget>(
+        m_device, m_dsvAllocator, &m_srvAllocator, kShadowMapSize, kShadowMapSize);
 
     CreateConstantBuffers();
     CreateRootSignature();
@@ -270,6 +289,114 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate() const
     return desc;
 }
 
+// The world-space box every shadow caster fits inside.
+//
+// Built from the meshes' LOCAL boxes pushed through each item's world matrix,
+// which is why this needs no new DrawItem field: the renderer already holds
+// the ResourceManager, so GetMesh(item.mesh).bounds is right there. A local
+// box transformed by a matrix is not a box, so all EIGHT corners go through
+// and the result is the box around those - loose for a rotated object, but
+// never too small, which is the direction that matters for a shadow volume.
+//
+// Returns false for an empty scene: no casters means no sensible light
+// frustum, and the caller skips the pass rather than inventing one.
+bool Renderer::ComputeSceneBounds(const std::vector<DrawItem>& items,
+                                  XMFLOAT3& outCenter, float& outRadius) const
+{
+    XMVECTOR minCorner = XMVectorReplicate( FLT_MAX);
+    XMVECTOR maxCorner = XMVectorReplicate(-FLT_MAX);
+    bool any = false;
+
+    for (const DrawItem& item : items)
+    {
+        if (!item.mesh.IsValid())
+        {
+            continue;
+        }
+        const Aabb& local = m_resources.GetMesh(item.mesh).bounds;
+        if (local.IsEmpty())
+        {
+            continue;
+        }
+
+        const XMMATRIX world = XMLoadFloat4x4(&item.world);
+        for (int corner = 0; corner < 8; ++corner)
+        {
+            // Bit 0/1/2 pick min or max on x/y/z - the eight combinations.
+            const XMVECTOR localPoint = XMVectorSet(
+                (corner & 1) ? local.max.x : local.min.x,
+                (corner & 2) ? local.max.y : local.min.y,
+                (corner & 4) ? local.max.z : local.min.z,
+                1.0f);
+            const XMVECTOR worldPoint = XMVector3TransformCoord(localPoint, world);
+            minCorner = XMVectorMin(minCorner, worldPoint);
+            maxCorner = XMVectorMax(maxCorner, worldPoint);
+            any = true;
+        }
+    }
+
+    if (!any)
+    {
+        return false;
+    }
+
+    const XMVECTOR center = XMVectorScale(XMVectorAdd(minCorner, maxCorner), 0.5f);
+    XMStoreFloat3(&outCenter, center);
+
+    // A bounding SPHERE, not the box's extents, on purpose: its size does not
+    // depend on which way the light happens to face, so the orthographic
+    // volume stays the same as the sun rotates. Sizing to the box in light
+    // space would be tighter but would breathe every frame, and a shadow map
+    // that changes scale between frames crawls visibly along every edge.
+    const float radius = 0.5f * XMVectorGetX(
+        XMVector3Length(XMVectorSubtract(maxCorner, minCorner)));
+    outRadius = (std::max)(radius, kMinShadowRadius);
+    return true;
+}
+
+// Where the directional light looks from, and through what volume.
+//
+// "Directional" means the rays are parallel and only the DIRECTION matters -
+// there is no real position to put the camera at, so one is invented far
+// enough back that the whole scene is in front of it.
+XMMATRIX Renderer::ComputeShadowViewProj(const LightingData& lighting,
+                                         const XMFLOAT3& center, float radius) const
+{
+    XMVECTOR direction = XMLoadFloat3(&lighting.directionalDirection);
+    // A zeroed direction would make LookToLH produce NaNs that then poison
+    // every vertex the shadow VS touches.
+    if (XMVectorGetX(XMVector3LengthSq(direction)) < 1e-12f)
+    {
+        direction = XMVectorSet(0.0f, -1.0f, 0.0f, 0.0f);
+    }
+    direction = XMVector3Normalize(direction);
+
+    // LookToLH needs an up vector that is not parallel to the view direction,
+    // and the sun pointing straight down - the single most likely setting -
+    // is exactly parallel to world up. Swap axes when they get close rather
+    // than when they are exactly equal, because the matrix degrades long
+    // before the cross product reaches zero.
+    const XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+    const float    alignment = std::fabs(XMVectorGetX(XMVector3Dot(direction, worldUp)));
+    const XMVECTOR up = (alignment > 0.99f)
+                      ? XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f)
+                      : worldUp;
+
+    // Back the eye off along the light's own direction until the entire
+    // bounding sphere is in front of it, plus a margin so nothing sits on the
+    // near plane.
+    const float    backoff = radius + 1.0f;
+    const XMVECTOR eye = XMVectorSubtract(XMLoadFloat3(&center),
+                                          XMVectorScale(direction, backoff));
+
+    const XMMATRIX view = XMMatrixLookToLH(eye, direction, up);
+    // Width and height cover the sphere exactly; near/far span from just in
+    // front of the eye to just past the far side of it.
+    const XMMATRIX proj = XMMatrixOrthographicLH(radius * 2.0f, radius * 2.0f,
+                                                 0.1f, backoff + radius + 0.1f);
+    return view * proj;
+}
+
 // Nearly every pipeline setting baked into ONE immutable object: shaders,
 // vertex layout, rasterizer/blend/depth state, output formats. Validated
 // once here, cheap to switch at runtime.
@@ -315,6 +442,28 @@ void Renderer::CreatePipelineStates()
                       &skybox, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::Skybox)])),
                   "CreateGraphicsPipelineState(Skybox)");
 
+    // --- shadow depth: the template with the COLOUR half removed ---
+    const std::filesystem::path shadowFile = GetShaderDir() / L"ShadowDepth.hlsl";
+    ComPtr<ID3DBlob> shadowVs = m_resources.LoadShader(shadowFile, "VSMain", "vs_5_0");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow = SceneShadedPsoTemplate();
+    shadow.VS = { shadowVs->GetBufferPointer(), shadowVs->GetBufferSize() };
+
+    // NO pixel shader. Depth is written by the rasterizer whether or not one
+    // runs, so a pass that only wants depth should not pay for one - and this
+    // one has nothing to say about colour anyway.
+    shadow.PS = {};
+
+    // NumRenderTargets alone is not enough: the template left a real format
+    // in RTVFormats[0], and a PSO declaring a format for a target it does not
+    // have is a Debug Layer error rather than a harmless leftover.
+    shadow.NumRenderTargets = 0;
+    shadow.RTVFormats[0]    = DXGI_FORMAT_UNKNOWN;
+
+    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                      &shadow, IID_PPV_ARGS(&m_pipelineStates[size_t(PsoRole::ShadowDepth)])),
+                  "CreateGraphicsPipelineState(ShadowDepth)");
+
     m_skyboxMesh = m_resources.ResolveMesh(L"#cube");
 }
 
@@ -350,7 +499,8 @@ void Renderer::SetSceneViewportSize(UINT width, UINT height)
 // Every value here now arrives from the caller - the light positions and
 // colours used to be hardcoded in this function.
 void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camera,
-                                   const LightingData& lighting)
+                                   const LightingData& lighting,
+                                   const std::vector<DrawItem>& items)
 {
     const XMVECTOR eye     = XMLoadFloat3(&camera.position);
     const XMVECTOR forward = XMVector3Normalize(XMLoadFloat3(&camera.forward));
@@ -375,9 +525,27 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     XMMATRIX skyView = view;
     skyView.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
 
+    // The light's frustum has to be rebuilt every frame because it is derived
+    // from where the casters ARE - a spinning crate changes the box. Computed
+    // here, next to the camera matrices, so one function decides everything
+    // the frame is rendered from.
+    //
+    // m_shadowCastersExist doubles as the pass's own "should I run" flag,
+    // recorded rather than recomputed so the pass and the constant buffer can
+    // never disagree about whether a light frustum was written.
+    XMFLOAT3 sceneCenter;
+    float    sceneRadius = 0.0f;
+    m_shadowCastersExist = ComputeSceneBounds(items, sceneCenter, sceneRadius);
+    const XMMATRIX shadowViewProj =
+        m_shadowCastersExist ? ComputeShadowViewProj(lighting, sceneCenter, sceneRadius)
+                             : XMMatrixIdentity();
+    m_shadowSceneCenter = sceneCenter;
+    m_shadowSceneRadius = m_shadowCastersExist ? sceneRadius : 0.0f;
+
     PassConstants constants;
     XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
     XMStoreFloat4x4(&constants.skyViewProj, XMMatrixTranspose(skyView * proj));
+    XMStoreFloat4x4(&constants.shadowViewProj, XMMatrixTranspose(shadowViewProj));
     constants.eyePosW = camera.position;
 
     constants.ambientLight     = lighting.ambient;
@@ -511,6 +679,89 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
     }
 }
 
+// Pass: the same geometry, from the light. Writes depth and nothing else.
+//
+// Runs FIRST, before anything touches the scene target, because the lighting
+// pass that will read this map (11.5) has to find it already finished.
+void Renderer::DrawShadowDepthPass(FrameResource& frame,
+                                   const std::vector<DrawItem>& items)
+{
+    // No casters means no meaningful light frustum - UpdatePassConstants
+    // already wrote identity and said so. Drawing anyway would leave the map
+    // holding last frame's depths while the matrix says something else.
+    if (!m_shadowCastersExist || items.empty())
+    {
+        return;
+    }
+
+    // Back to writable. Skipped on the very first frame because DepthTarget
+    // creates its resource already in DEPTH_WRITE - transitioning FROM a
+    // state it was never in is a Debug Layer error, not a no-op.
+    if (m_shadowMapIsShaderResource)
+    {
+        D3D12_RESOURCE_BARRIER toDepthWrite = TransitionBarrier(
+            m_shadowMap->Resource(),
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+            D3D12_RESOURCE_STATE_DEPTH_WRITE);
+        m_commandList->ResourceBarrier(1, &toDepthWrite);
+    }
+
+    // NO render target - the whole point of a depth-only pass. Passing 0 and
+    // null is what tells the output merger there is no colour to write.
+    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_shadowMap->DSV();
+    m_commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsvHandle);
+    m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
+                                         1.0f, 0, 0, nullptr);
+
+    // Deliberately NOT BindScenePass: that binds the scene viewport and the
+    // material tables, and both would be wrong here. The shadow map has its
+    // own square resolution, and there are no textures to bind because there
+    // is no pixel shader to sample them.
+    m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
+    m_commandList->SetPipelineState(
+        m_pipelineStates[size_t(PsoRole::ShadowDepth)].Get());
+    m_commandList->SetGraphicsRootConstantBufferView(
+        1, frame.passCB->GetGPUVirtualAddress());
+
+    const D3D12_VIEWPORT viewport = m_shadowMap->Viewport();
+    const D3D12_RECT     scissor  = m_shadowMap->ScissorRect();
+    m_commandList->RSSetViewports(1, &viewport);
+    m_commandList->RSSetScissorRects(1, &scissor);
+    m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+
+    // Every opaque item is a caster in this step. The skybox is not in this
+    // list at all - it is drawn by its own pass - and transparent items do
+    // not exist yet, so "opaque casters" and "items" are the same set.
+    const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const DrawItem& item = items[i];
+        const Mesh&     mesh = m_resources.GetMesh(item.mesh);
+
+        // The SAME object constant buffer the main pass uses, at the same
+        // slot - the shadow pass needs the world matrix and nothing else, so
+        // there is no second upload and no chance of the two passes drawing
+        // the object in two different places.
+        m_commandList->SetGraphicsRootConstantBufferView(
+            0, objectCBBase + UINT64(i) * kObjectCBSize);
+
+        m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
+        m_commandList->IASetIndexBuffer(&mesh.ibv);
+        m_commandList->DrawIndexedInstanced(
+            item.indexCount != 0 ? item.indexCount : mesh.indexCount,
+            1, item.indexOffset, 0, 0);
+    }
+
+    // Hand it to the shader side. In this step only the debug image samples
+    // it; from 11.5 the lighting pass does.
+    D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+        m_shadowMap->Resource(),
+        D3D12_RESOURCE_STATE_DEPTH_WRITE,
+        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    m_commandList->ResourceBarrier(1, &toShaderResource);
+    m_shadowMapIsShaderResource = true;
+}
+
 // Pass: the world, into the offscreen target. Nothing here knows a window
 // exists.
 void Renderer::DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items)
@@ -624,7 +875,7 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
 
     // Only now is it safe to overwrite this frame's constant buffers and
     // recycle its command memory.
-    UpdatePassConstants(frame, camera, lighting);
+    UpdatePassConstants(frame, camera, lighting, items);
     UpdateObjectConstants(frame, items);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
@@ -649,6 +900,10 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
     // The scene target's two state changes bracket the passes that share it
     // rather than living inside any one of them - which one "owns" the
     // transition stops being answerable once more than one pass draws there.
+    // Before the scene target's barrier, because it touches a different
+    // resource entirely and has to be finished before anything samples it.
+    DrawShadowDepthPass(frame, items);
+
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
         m_sceneColor->ColorResource(),
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,

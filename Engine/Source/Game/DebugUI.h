@@ -24,6 +24,18 @@ struct DebugUIContext
     // The scene, already rendered, as an ImGui texture id. Plain integer so
     // no D3D type reaches this file.
     std::uint64_t sceneTexture = 0;
+    // The directional light's depth map, same deal. Shown in its own panel so
+    // a pass with no on-screen output is still inspectable.
+    std::uint64_t shadowTexture = 0;
+    unsigned      shadowMapSize = 0;
+    // The sphere the light's orthographic volume was sized to. Shown because
+    // the image alone cannot say whether the volume is a sane size.
+    float         shadowCenter[3] = { 0.0f, 0.0f, 0.0f };
+    float         shadowRadius    = 0.0f;
+    // Debug layer messages so far. hasDebugLayer says whether the count means
+    // anything - 0 with no layer is "unknown", not "clean".
+    std::uint64_t debugMessages   = 0;
+    bool          hasDebugLayer   = false;
     // How many draw items the object constant buffer holds. Shown next to
     // the live count, because exceeding it throws rather than degrades.
     unsigned maxDrawItems = 0;

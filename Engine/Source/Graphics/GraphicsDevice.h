@@ -31,6 +31,22 @@ public:
     // gets paced to vblank by the desktop compositor.
     bool IsTearingSupported() const { return m_tearingSupported; }
 
+    // How many messages the debug layer has stored, all severities.
+    //
+    // Worth surfacing rather than leaving in the Output window: a D3D12
+    // validation error does not throw, does not crash, and usually does not
+    // even change the picture - it just quietly means the next driver, or the
+    // next machine, may do something else. A number on screen turns "did I
+    // break a barrier?" from an archaeology exercise into a glance.
+    //
+    // Always 0 in Release, where the debug layer is not enabled.
+    UINT64 DebugMessageCount() const;
+    // Whether there is an info queue at all. Without this, a count of 0 is
+    // ambiguous - "nothing went wrong" and "nobody was watching" look the
+    // same, and reporting the second as the first is how a clean bill of
+    // health gets claimed on no evidence.
+    bool   HasDebugLayer() const { return m_infoQueue != nullptr; }
+
     // Queues "set the fence to the next value when everything submitted so
     // far is done" and returns that value. Does not block.
     UINT64 Signal();
@@ -55,6 +71,9 @@ private:
     Microsoft::WRL::ComPtr<ID3D12Device>       m_device;
     Microsoft::WRL::ComPtr<ID3D12CommandQueue> m_commandQueue;
     Microsoft::WRL::ComPtr<ID3D12Fence>        m_fence;
+    // Null in Release, and in Debug on a machine without the graphics tools
+    // installed - the debug layer is an optional Windows feature.
+    Microsoft::WRL::ComPtr<ID3D12InfoQueue>    m_infoQueue;
 
     UINT64 m_fenceValue       = 0;
     HANDLE m_fenceEvent       = nullptr;

@@ -27,6 +27,7 @@ cbuffer PassConstants : register(b1)
 {
     float4x4 gViewProj;
     float4x4 gSkyViewProj;
+    float4x4 gShadowViewProj;
     float3   gEyePosW;          float _pad0;
     float3   gAmbientLight;     float _pad1;
     float3   gDirLightDirection; float _pad2;

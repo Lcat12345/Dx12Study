@@ -64,6 +64,15 @@ void DemoGame::OnUpdate(float dt)
     ui.vsync            = GetRenderer().IsVSync();
     ui.tearingSupported = GetRenderer().IsTearingSupported();
     ui.sceneTexture     = GetRenderer().SceneTextureId();
+    ui.shadowTexture    = GetRenderer().ShadowTextureId();
+    ui.shadowMapSize    = GetRenderer().ShadowMapSize();
+    const DirectX::XMFLOAT3 shadowCenter = GetRenderer().ShadowSceneCenter();
+    ui.shadowCenter[0]  = shadowCenter.x;
+    ui.shadowCenter[1]  = shadowCenter.y;
+    ui.shadowCenter[2]  = shadowCenter.z;
+    ui.shadowRadius     = GetRenderer().ShadowSceneRadius();
+    ui.debugMessages    = GetRenderer().DebugMessageCount();
+    ui.hasDebugLayer    = GetRenderer().HasDebugLayer();
     ui.maxDrawItems     = GetRenderer().MaxDrawItems();
     // Last frame's list: OnRender rebuilds it after this runs.
     ui.drawItemCount    = unsigned(m_drawItems.size());

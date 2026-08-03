@@ -60,6 +60,20 @@ public:
     // rather than the window's shape.
     float SceneAspectRatio() const { return m_sceneColor->AspectRatio(); }
 
+    // The shadow map, for the editor's debug view. A depth texture read as
+    // R32_FLOAT, so it displays as near-white: most of the map is the far
+    // plane (1.0) and casters only pull it down by their share of the light's
+    // depth range. Faint is CORRECT here, not a bug.
+    uint64_t ShadowTextureId() const { return m_shadowMap->SRV().ptr; }
+    UINT     ShadowMapSize()   const { return m_shadowMap->Width(); }
+
+    // The sphere the light's orthographic volume was sized to this frame.
+    // Worth showing next to the map: a radius that has jumped is the usual
+    // reason a shadow suddenly goes blocky, and it is not visible from the
+    // image alone.
+    DirectX::XMFLOAT3 ShadowSceneCenter() const { return m_shadowSceneCenter; }
+    float             ShadowSceneRadius() const { return m_shadowSceneRadius; }
+
     // How many DrawItems Render() will accept before throwing. The editor
     // shows it next to the live count so the ceiling is visible before it
     // is hit.
@@ -75,6 +89,10 @@ public:
     void SetVSync(bool enabled)  { m_vsync = enabled; }
     bool IsVSync() const         { return m_vsync; }
     bool IsTearingSupported() const { return m_device.IsTearingSupported(); }
+
+    // Debug layer message count, for the stats panel. See GraphicsDevice.
+    uint64_t DebugMessageCount() const { return m_device.DebugMessageCount(); }
+    bool     HasDebugLayer()     const { return m_device.HasDebugLayer(); }
 
 private:
     // What a pipeline state is FOR. Phase 11 adds passes that draw the same
@@ -104,14 +122,29 @@ private:
     D3D12_GRAPHICS_PIPELINE_STATE_DESC SceneShadedPsoTemplate() const;
 
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
-                             const LightingData& lighting);
+                             const LightingData& lighting,
+                             const std::vector<DrawItem>& items);
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
+
+    // The world-space extent of everything that casts a shadow, as a sphere.
+    // False when there is nothing to bound. Uses the ResourceManager the
+    // renderer already holds rather than a new DrawItem field - see the plan
+    // doc; a bounds centre only earns its place in DrawItem when 11.6 needs
+    // it as a sort key.
+    bool ComputeSceneBounds(const std::vector<DrawItem>& items,
+                            DirectX::XMFLOAT3& outCenter, float& outRadius) const;
+    DirectX::XMMATRIX ComputeShadowViewProj(const LightingData& lighting,
+                                            const DirectX::XMFLOAT3& center,
+                                            float radius) const;
 
     // --- the passes, in the order they run ---
     // Written out rather than hidden behind a render graph: at this many
     // passes the order IS the documentation, and each one owns its own
     // barriers.
+    // First: the light's own depth-only view of the casters, into a target
+    // that has nothing to do with the scene viewport.
+    void DrawShadowDepthPass(FrameResource& frame, const std::vector<DrawItem>& items);
     void DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items);
     // After opaque so it only fills pixels nothing has claimed, and before
     // transparent (11.6) so alpha has a background to blend against.
@@ -145,6 +178,19 @@ private:
     std::unique_ptr<DepthTarget>  m_sceneDepth;
     UINT m_requestedViewportWidth  = 0;
     UINT m_requestedViewportHeight = 0;
+
+    // Fixed size, unlike the scene target: this is the resolution the LIGHT
+    // samples the world at, and has nothing to do with the window.
+    std::unique_ptr<DepthTarget> m_shadowMap;
+    // Which state the shadow map was left in. Needed because it is created in
+    // DEPTH_WRITE but every frame after the first leaves it readable, and a
+    // barrier naming a state the resource is not in is an error.
+    bool m_shadowMapIsShaderResource = false;
+    // Whether this frame's pass constants hold a real light frustum. Decided
+    // while writing them, used by the pass, so the two cannot disagree.
+    bool m_shadowCastersExist = false;
+    DirectX::XMFLOAT3 m_shadowSceneCenter = { 0.0f, 0.0f, 0.0f };
+    float             m_shadowSceneRadius = 0.0f;
 
     Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> m_commandList;
 

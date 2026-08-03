@@ -970,6 +970,45 @@ namespace
         ImGui::End();
     }
 
+    // The shadow pass produces nothing on screen, so without this panel the
+    // only way to know it ran at all is a graphics debugger. Temporary in the
+    // sense that 11.5 makes the shadows themselves visible - but it stays
+    // useful the moment one looks wrong and the question is whether the map
+    // or the lookup is at fault.
+    void DrawShadowDebug(const DebugUIContext& ui)
+    {
+        ImGui::SetNextWindowSize(ImVec2(280, 320), ImGuiCond_FirstUseEver);
+        if (!ImGui::Begin("Shadow map"))
+        {
+            ImGui::End();
+            return;
+        }
+
+        if (ui.shadowTexture == 0)
+        {
+            ImGui::TextDisabled("no shadow map");
+            ImGui::End();
+            return;
+        }
+
+        ImGui::Text("%ux%u  D32_FLOAT", ui.shadowMapSize, ui.shadowMapSize);
+        ImGui::Text("centre %.2f %.2f %.2f", ui.shadowCenter[0], ui.shadowCenter[1],
+                    ui.shadowCenter[2]);
+        ImGui::Text("radius %.3f", ui.shadowRadius);
+        // Depth, not colour: 1.0 is the light's far plane and fills most of
+        // the map, so this reads as near-white with faint darker casters.
+        // Saying so here stops "it looks blank" from being mistaken for a bug.
+        ImGui::TextDisabled("near-white is correct - 1.0 is the far plane");
+
+        const float side = (std::min)(ImGui::GetContentRegionAvail().x,
+                                      ImGui::GetContentRegionAvail().y);
+        if (side > 0.0f)
+        {
+            ImGui::Image(ImTextureID(ui.shadowTexture), ImVec2(side, side));
+        }
+        ImGui::End();
+    }
+
     void DrawStats(DebugUIContext& ui, int entityCount)
     {
         ImGui::SetNextWindowPos(ImVec2(20, 20), ImGuiCond_FirstUseEver);
@@ -1010,6 +1049,24 @@ namespace
         ImGui::Text("%d entities, %u drawn / %u",
                     entityCount, ui.drawItemCount, ui.maxDrawItems);
 
+        // A D3D12 validation error neither throws nor changes the picture -
+        // it just means another driver may do something else. Shown here so
+        // it is noticed the frame it appears rather than months later.
+        if (!ui.hasDebugLayer)
+        {
+            ImGui::TextDisabled("debug layer: off");
+        }
+        else if (ui.debugMessages == 0)
+        {
+            ImGui::TextDisabled("debug layer: 0 messages");
+        }
+        else
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f),
+                               "debug layer: %llu messages",
+                               (unsigned long long)ui.debugMessages);
+        }
+
         ImGui::End();
     }
 }
@@ -1033,6 +1090,7 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
     DrawStats(ui, entityCount);
     DrawEntityList(world);
     DrawInspector(world, resources, assets);
+    DrawShadowDebug(ui);
     assets.Draw();
 
     // Every panel has finished iterating, so it is finally safe to change

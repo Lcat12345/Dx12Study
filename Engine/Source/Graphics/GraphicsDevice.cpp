@@ -77,10 +77,22 @@ void GraphicsDevice::CreateDevice()
         if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                         IID_PPV_ARGS(&m_device))))
         {
+#if defined(_DEBUG)
+            // Optional: fails when the "Graphics Tools" Windows feature is
+            // not installed, which is normal on a fresh machine. The count
+            // then stays 0 - reported honestly by DebugMessageCount as "no
+            // info queue" rather than as "no problems".
+            m_device.As(&m_infoQueue);
+#endif
             return;
         }
     }
     throw std::runtime_error("No D3D12-capable hardware GPU found");
+}
+
+UINT64 GraphicsDevice::DebugMessageCount() const
+{
+    return m_infoQueue ? m_infoQueue->GetNumStoredMessages() : 0;
 }
 
 void GraphicsDevice::CreateQueueAndFence()

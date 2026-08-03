@@ -958,16 +958,21 @@ before/after를 비교하려면 움직이는 것을 먼저 없애야 한다.
 
 **작업 항목**
 
-- [ ] 고정 기본 해상도 2048×2048 shadow `DepthTarget` 생성
-- [ ] `R32_TYPELESS` resource, `D32_FLOAT` DSV, `R32_FLOAT` SRV 조합
-- [ ] 프레임별 `ShadowPassConstants` 또는 pass CB의 별도 256바이트 슬롯
-- [ ] directional direction과 scene bounds에서 light view/projection 계산
-- [ ] position만 사용하는 shadow VS와 pixel shader 없는 depth-only PSO
-- [ ] `NumRenderTargets = 0`, shadow DSV만 `OMSetRenderTargets`에 바인딩
-- [ ] shadow viewport/scissor와 depth clear
-- [ ] opaque caster를 기존 object CB로 다시 draw
-- [ ] `DEPTH_WRITE → PIXEL_SHADER_RESOURCE` 상태 전이
-- [ ] ImGui 임시 디버그 이미지 또는 PIX/RenderDoc로 shadow map 확인
+- [o] 고정 기본 해상도 2048×2048 shadow `DepthTarget` 생성
+- [o] `R32_TYPELESS` resource, `D32_FLOAT` DSV, `R32_FLOAT` SRV 조합
+      *(11.1의 `DepthTarget`에 SRV allocator를 넘기는 것만으로 끝났다 — 그때
+      옵션으로 만들어 둔 것의 회수)*
+- [o] 프레임별 `ShadowPassConstants` 또는 pass CB의 별도 256바이트 슬롯
+      → **pass CB에 `shadowViewProj` 필드 추가**를 골랐다. 11.5의 조명 패스도
+      같은 행렬을 읽어야 하는데, 별도 버퍼면 두 곳이 어긋날 수 있다
+- [o] directional direction과 scene bounds에서 light view/projection 계산
+- [o] position만 사용하는 shadow VS와 pixel shader 없는 depth-only PSO
+- [o] `NumRenderTargets = 0`, shadow DSV만 `OMSetRenderTargets`에 바인딩
+- [o] shadow viewport/scissor와 depth clear
+- [o] opaque caster를 기존 object CB로 다시 draw
+- [o] `DEPTH_WRITE → PIXEL_SHADER_RESOURCE` 상태 전이
+- [o] ImGui 임시 디버그 이미지 또는 PIX/RenderDoc로 shadow map 확인
+      → ImGui 패널. 이미지만으로는 볼륨 크기를 알 수 없어 centre/radius도 함께
 
 **설계 결정**
 
@@ -1000,6 +1005,105 @@ before/after를 비교하려면 움직이는 것을 먼저 없애야 한다.
 
 **완료 기준**: 메인 Scene Viewport와 독립적인 directional light depth texture가
 매 프레임 생성되고 shader resource 상태로 전달된다.
+
+#### 결과
+
+**깊이 값을 눈으로 보지 않고 손으로 계산해서 맞췄다.** 그림자 맵은 화면에
+아무것도 내놓지 않는 패스라 "돌긴 하나"를 확인하기가 어렵다. 대신 디버그
+패널에 엔진이 실제로 쓴 볼륨을 띄우고, 그 숫자로 특정 픽셀의 깊이를
+예측한 뒤 스크린샷에서 그 픽셀을 읽었다.
+
+엔진이 보고한 값: `centre (0, 3, 0)`, `radius 56.686`.
+
+그로부터 손으로 따라간 계산:
+
+```
+dir     = (0.5963, -0.7454, 0.2981)        태양의 pitch/yaw에서
+backoff = radius + 1        = 57.686
+eye     = centre - dir*backoff = (-34.40, 46.00, -17.20)
+near/far= 0.1 / (backoff + radius + 0.1) = 0.1 / 114.472
+```
+
+맵 중심을 지나는 광선은 `(0,3,0)`을 통과해 바닥(y=0)의 `(2.40, 0, 1.20)`에
+닿는다. 그 지점의 view depth는 `61.71`이므로
+
+```
+z = (61.71 - 0.1) / (114.472 - 0.1) = 0.5387   ->  8비트로 137
+```
+
+| | 예측 | 중심 픽셀 실측 | 7×7 평균 |
+|---|---|---|---|
+| 기본 태양 | **137** | **137** | 137.0 |
+
+**한 줄만 다른 씬 3개로 나머지를 갈랐다.** 크레이트가 계속 회전하면
+프레임마다 맵이 달라져 비교 자체가 성립하지 않는다. `spin` 컴포넌트를 뺀
+정적 씬을 만들고, 거기서 딱 한 줄씩 바꾼 변형을 준비했다.
+
+| 씬 | A와의 차이 |
+|---|---|
+| `ShadowA` | 기준 |
+| `ShadowB` | 태양 회전만 — 정확히 수직 아래 `(-π/2, 0, 0)` |
+| `ShadowC` | **점광원 위치만** |
+
+한 실행 안에서 셋을 차례로 불러와 그림자 맵 이미지를 픽셀 단위로 비교:
+
+| 비교 | 기대 | 실측 |
+|---|---|---|
+| A vs B (태양 회전) | 달라야 함 | **52.2% 픽셀 변화, 최대 델타 201** |
+| A vs C (점광원 이동) | 같아야 함 | **0 픽셀 변화 (0.0%)** |
+
+B는 덤으로 **up 벡터 퇴화 경로**를 밟는다 — 방향이 world up과 정확히
+평행이라 `LookToLH`가 무너지는 조건이다. 보조 축 `(0,0,1)`로 넘어가고,
+결과는 쓰레기가 아니라 올바른 행렬이었다. 중심 픽셀 예측 `135.1` → 실측
+**135**. `radius`는 두 씬에서 `56.686`으로 동일했다 — 경계**구**를 쓴 이유가
+바로 이것으로, 빛이 돌아도 볼륨 크기가 숨쉬지 않는다.
+
+**검증 기준별 결과**
+
+| # | 기준 | 결과 |
+|---|---|---|
+| 1 | caster의 깊이 실루엣이 나타난다 | 픽셀의 60%가 1.0(클리어), 40%가 실제 깊이. 중심 픽셀이 예측과 일치 |
+| 2 | 광원 회전 시 맵이 함께 변한다 | **52.2% 변화** |
+| 3 | 점광원 이동은 맵을 바꾸지 않는다 | **0 픽셀 변화** |
+| 4 | skybox·transparent는 기록되지 않는다 | skybox는 `items`에 없고 자기 패스에서 그려진다. transparent는 11.6 전까지 존재하지 않으므로 "opaque caster"와 `items`가 같은 집합이다 — 코드 수준에서 참이고, 맵의 클리어 영역이 배경이 아무것도 채우지 않았음을 보여준다 |
+| 5 | Debug Layer 메시지 0건 | **`debug layer: 0 messages`** |
+
+**5번을 위해 카운터를 새로 만들었다.** 처음에는 DBWIN 캡처로 확인하려 했는데
+0바이트 파일이 나왔고, 그건 "메시지 없음"과 "이 프로세스를 못 봤음"을
+구별해주지 않는다. (11.2.5에서 이 캡처가 Discord의 메시지를 잡아 `Error: 31`
+여섯 건을 오보한 전력도 있다.) 그래서 엔진이 `ID3D12InfoQueue::
+GetNumStoredMessages()`를 직접 읽어 stats 패널에 띄우게 했다.
+
+`HasDebugLayer()`를 따로 둔 것이 핵심이다. 카운트 0은 그 자체로 애매하다 —
+"아무 문제 없음"과 "아무도 안 보고 있었음"이 똑같이 0이고, 후자를 전자로
+보고하는 것이 근거 없이 무결을 주장하는 방식이다. 레이어가 없으면
+`debug layer: off`로, 있으면 `0 messages`로 표시한다.
+
+이건 이 단계용 임시 도구가 아니다. D3D12 검증 오류는 예외를 던지지도,
+그림을 바꾸지도 않고 그저 "다른 드라이버에서는 다르게 동작할 수 있다"만
+의미한다. 화면에 숫자로 있으면 그게 생긴 프레임에 알아차린다.
+
+**설계 메모**
+
+- shadow 패스는 `BindScenePass`를 **쓰지 않는다.** 그 함수는 씬 뷰포트와
+  머티리얼 테이블을 바인딩하는데 둘 다 여기서는 틀리다 — 그림자 맵은 자기
+  정사각 해상도를 갖고, 샘플할 픽셀 셰이더가 없으니 바인딩할 텍스처도 없다.
+  공유 헬퍼를 억지로 늘리는 대신 필요한 네 줄을 직접 썼다.
+- `m_shadowMapIsShaderResource` 플래그가 필요한 이유: `DepthTarget`은
+  리소스를 `DEPTH_WRITE`로 만드는데 첫 프레임 이후로는 매번 읽기 상태로
+  끝난다. 리소스가 있지도 않은 상태에서 전이하는 배리어는 no-op이 아니라
+  Debug Layer 오류다.
+- scene bounds는 `DrawItem`에 필드를 **추가하지 않고** 구했다 — Renderer가
+  이미 `ResourceManager`를 들고 있어 `GetMesh(item.mesh).bounds`가 바로
+  손에 있다. 로컬 상자를 행렬로 밀면 상자가 아니므로 **여덟 꼭짓점** 전부를
+  통과시킨다. 회전한 물체에는 헐겁지만 절대 작지는 않고, 그림자 볼륨에서
+  중요한 방향은 그쪽이다.
+
+**남긴 것**
+
+- `Engine/Assets/Scenes/ShadowA.scene` — spin이 없는 정적 씬. 프레임 간
+  비교가 필요한 회귀 측정의 기준선이다. B/C는 이 파일에서 한 줄만 바꾸면
+  재현되므로 남기지 않았다
 
 ---
 

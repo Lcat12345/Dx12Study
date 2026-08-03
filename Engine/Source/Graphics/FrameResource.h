@@ -44,6 +44,11 @@ struct PassConstants // b1 - written once per frame
     // uses it so the background rotates with the camera but never gets
     // nearer - which is what "infinitely far away" looks like.
     DirectX::XMFLOAT4X4 skyViewProj;
+    // Where the directional light looked from this frame. The shadow pass
+    // draws with it and 11.5's lighting pass reads it back to ask "was this
+    // pixel the closest thing the light saw?" - one value written once, so
+    // the two cannot drift apart.
+    DirectX::XMFLOAT4X4 shadowViewProj;
     DirectX::XMFLOAT3   eyePosW;           float pad0 = 0.0f;
     DirectX::XMFLOAT3   ambientLight;      float pad1 = 0.0f;
     DirectX::XMFLOAT3   dirLightDirection; float pad2 = 0.0f;
