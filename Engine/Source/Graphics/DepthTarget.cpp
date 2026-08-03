@@ -89,7 +89,23 @@ void DepthTarget::CreateResources()
         // The SAME bits, read as a single red float channel. Sampling gives
         // the stored depth in x.
         D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+
+        // NOT the default mapping. R32_FLOAT has only one real channel, and
+        // the DEFAULT mapping is identity - G and B read as 0, A as 1 - so a
+        // naive RGBA sample comes back (depth, 0, 0, 1): pure red, whatever
+        // the depth actually is. A depth-sampling shader that reads only .r
+        // (11.5) would never notice; the editor's debug Image, which samples
+        // all four channels to show a picture, showed exactly this - solid
+        // red instead of a greyscale depth map.
+        //
+        // Replicating component 0 into R, G AND B (and forcing A to 1) makes
+        // .r unaffected - still the first component read - while turning a
+        // plain RGBA sample into the grey a depth map should look like.
+        srvDesc.Shader4ComponentMapping = D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
+            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+            D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+            D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1);
         srvDesc.Format                  = kShaderView;
         srvDesc.ViewDimension           = m_sampleCount > 1
                                         ? D3D12_SRV_DIMENSION_TEXTURE2DMS

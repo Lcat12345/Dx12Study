@@ -533,7 +533,13 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     // m_shadowCastersExist doubles as the pass's own "should I run" flag,
     // recorded rather than recomputed so the pass and the constant buffer can
     // never disagree about whether a light frustum was written.
-    XMFLOAT3 sceneCenter;
+    // Zero, not uninitialized: ComputeSceneBounds only WRITES outCenter when
+    // it returns true, and this gets copied into m_shadowSceneCenter and
+    // read back by the debug UI unconditionally below. An uninitialized
+    // XMFLOAT3 there is stack garbage on screen for an empty scene - not
+    // wrong maths, just never-written memory - and garbage bit patterns are
+    // one of the few things a float can hold that legitimately prints as NaN.
+    XMFLOAT3 sceneCenter = { 0.0f, 0.0f, 0.0f };
     float    sceneRadius = 0.0f;
     m_shadowCastersExist = ComputeSceneBounds(items, sceneCenter, sceneRadius);
     const XMMATRIX shadowViewProj =
@@ -686,14 +692,6 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 void Renderer::DrawShadowDepthPass(FrameResource& frame,
                                    const std::vector<DrawItem>& items)
 {
-    // No casters means no meaningful light frustum - UpdatePassConstants
-    // already wrote identity and said so. Drawing anyway would leave the map
-    // holding last frame's depths while the matrix says something else.
-    if (!m_shadowCastersExist || items.empty())
-    {
-        return;
-    }
-
     // Back to writable. Skipped on the very first frame because DepthTarget
     // creates its resource already in DEPTH_WRITE - transitioning FROM a
     // state it was never in is a Debug Layer error, not a no-op.
@@ -712,6 +710,34 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     m_commandList->OMSetRenderTargets(0, nullptr, FALSE, &dsvHandle);
     m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
                                          1.0f, 0, 0, nullptr);
+
+    // No casters means no meaningful light frustum - UpdatePassConstants
+    // already wrote identity and said so, and there is nothing to draw. But
+    // the clear and the state transition below still have to happen:
+    //
+    //   - on the FIRST frame ever, with no return here the resource is
+    //     still DEPTH_WRITE when the debug panel's ImGui::Image samples it
+    //     through the SRV a few lines later in Render() - reading a resource
+    //     through an SRV while it is in DEPTH_WRITE is a Debug Layer error
+    //     the panel would trip on the very first empty scene.
+    //   - on any LATER frame that loses its casters (File > New over a scene
+    //     that had some), returning early leaves the map holding the LAST
+    //     frame's depths - a stale picture with no caster behind it, shown
+    //     as if it were current.
+    //
+    // Clearing to 1.0 (far) is the honest picture for "nothing to cast a
+    // shadow": every texel reads as the far plane, same as a real pass over
+    // an empty frustum would produce.
+    if (!m_shadowCastersExist || items.empty())
+    {
+        D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+            m_shadowMap->Resource(),
+            D3D12_RESOURCE_STATE_DEPTH_WRITE,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_commandList->ResourceBarrier(1, &toShaderResource);
+        m_shadowMapIsShaderResource = true;
+        return;
+    }
 
     // Deliberately NOT BindScenePass: that binds the scene viewport and the
     // material tables, and both would be wrong here. The shadow map has its
