@@ -13,8 +13,8 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>18.0</VCProjectVersion>
     <Keyword>Win32Proj</Keyword>
-    <ProjectGuid>{95B865E8-498A-4C7C-B231-08BC89B31F39}</ProjectGuid>
-    <RootNamespace>EngineTests</RootNamespace>
+    <ProjectGuid>{31EA7B72-B422-4084-8C79-BBA9F2676FD1}</ProjectGuid>
+    <RootNamespace>Editor</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -32,26 +32,47 @@
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
-  <Import Project="..\BuildSettings.props" />
-  <PropertyGroup>
-    <OutDir>$([MSBuild]::NormalizeDirectory('$(ProjectDir)..\..\Output\Tests\$(Platform)\$(Configuration)'))</OutDir>
-    <IntDir>$([MSBuild]::NormalizeDirectory('$(ProjectDir)..\..\Output\Intermediate\$(ProjectName)\$(Platform)\$(Configuration)'))</IntDir>
-  </PropertyGroup>
+  <Import Project="BuildSettings.props" />
   <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(ProjectDir)..\ThirdParty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <Link>
-      <SubSystem>Console</SubSystem>
+      <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
     </Link>
+    <Manifest>
+      <EnableSegmentHeap>true</EnableSegmentHeap>
+    </Manifest>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="Phase12Tests.cpp" />
-    <ClCompile Include="..\Source\Game\EditorSession.cpp" />
+    <ClCompile Include="Source\Editor\EditorApp.cpp" />
+    <ClCompile Include="Source\Editor\Main.cpp" />
+    <ClCompile Include="Source\Game\AssetBrowser.cpp" />
+    <ClCompile Include="Source\Game\DebugUI.cpp" />
+    <ClCompile Include="Source\Game\EditorSession.cpp" />
+    <ClCompile Include="Source\Game\Picking.cpp" />
+    <ClCompile Include="Source\Graphics\ImGuiLayer.cpp" />
+    <ClCompile Include="..\ThirdParty\imgui\imgui.cpp" />
+    <ClCompile Include="..\ThirdParty\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\ThirdParty\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\ThirdParty\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\ThirdParty\imgui\backends\imgui_impl_win32.cpp" />
+    <ClCompile Include="..\ThirdParty\imgui\backends\imgui_impl_dx12.cpp" />
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Engine.vcxproj">
+    <ClInclude Include="Source\Editor\EditorApp.h" />
+    <ClInclude Include="Source\Game\AssetBrowser.h" />
+    <ClInclude Include="Source\Game\DebugUI.h" />
+    <ClInclude Include="Source\Game\EditorSession.h" />
+    <ClInclude Include="Source\Game\Picking.h" />
+    <ClInclude Include="Source\Graphics\ImGuiLayer.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="Engine.vcxproj">
       <Project>{5752BBEB-4E5A-40D7-93AC-85D168107BA5}</Project>
     </ProjectReference>
-    <ProjectReference Include="..\Game.vcxproj">
+    <ProjectReference Include="Game.vcxproj">
       <Project>{4B97D56C-5AD0-4D9F-AF18-858566940D19}</Project>
     </ProjectReference>
   </ItemGroup>

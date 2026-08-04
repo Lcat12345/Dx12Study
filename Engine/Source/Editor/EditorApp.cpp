@@ -1,4 +1,4 @@
-#include "Game/DemoGame.h"
+#include "Editor/EditorApp.h"
 
 #include "Game/BuildWorld.h"
 #include "Game/DebugUI.h"
@@ -6,12 +6,12 @@
 
 namespace
 {
-    constexpr wchar_t kWindowTitle[] = L"Dx12Engine";
+    constexpr wchar_t kWindowTitle[] = L"Dx12Engine Editor";
     constexpr UINT    kClientWidth   = 1280;
     constexpr UINT    kClientHeight  = 720;
 }
 
-DemoGame::DemoGame(HINSTANCE instance)
+EditorApp::EditorApp(HINSTANCE instance)
     : Engine(instance, kWindowTitle, kClientWidth, kClientHeight)
 {
     Renderer& renderer = GetRenderer();
@@ -20,26 +20,21 @@ DemoGame::DemoGame(HINSTANCE instance)
         renderer.ShaderVisibleDescriptors(), renderer.OutputFormat(),
         DXGI_FORMAT_UNKNOWN, renderer.FramesInFlight());
 
-    // The host, not Engine or Renderer, decides whether a window message
-    // belongs to its optional UI layer.
     GetWindow().SetMessageHook(
         [](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
             return ImGuiLayer::HandleMessage(hwnd, message, wParam, lParam);
         });
 }
 
-void DemoGame::OnInit()
+void EditorApp::OnInit()
 {
-    // The renderer already exists, so its resource manager can load assets.
     BuildWorld(GetRenderer().Resources(), m_world);
     InitializeEditorCamera(m_world, m_editorCamera);
     m_camera = GetEditorCameraView(m_editorCamera);
-
-    // Scans Assets/ once here; the panel's Refresh button does it again.
     m_assets = std::make_unique<AssetBrowser>(GetRenderer().Resources());
 }
 
-void DemoGame::OnUpdate(float dt)
+void EditorApp::OnUpdate(float dt)
 {
     m_overlay->NewFrame();
     const FrameContext hostFrame = CaptureHostFrame(dt);
@@ -57,7 +52,7 @@ void DemoGame::OnUpdate(float dt)
     RunAlways(frame);
 }
 
-FrameContext DemoGame::CaptureHostFrame(float dt)
+FrameContext EditorApp::CaptureHostFrame(float dt)
 {
     FrameContext frame;
     frame.deltaSeconds = dt;
@@ -72,27 +67,22 @@ FrameContext DemoGame::CaptureHostFrame(float dt)
     return frame;
 }
 
-void DemoGame::RunEditorOnly(const FrameContext& frame)
+void EditorApp::RunEditorOnly(const FrameContext& frame)
 {
     RunEditorSystems(m_editorCamera, frame);
     m_camera = GetEditorCameraView(m_editorCamera);
 }
 
-void DemoGame::RunPlayOnly(const FrameContext& frame)
+void EditorApp::RunPlayOnly(const FrameContext& frame)
 {
     m_play.BeginFrame(frame);
     RunPlaySystems(m_world, m_play);
     m_play.EndFrame();
-
-    // Play presentation is scene-owned. Failure leaves the last valid game
-    // camera in place instead of silently falling back to EditorCamera.
     GetActiveCameraView(m_world, m_camera);
 }
 
-void DemoGame::RunAlways(const FrameContext& frame)
+void EditorApp::RunAlways(const FrameContext& frame)
 {
-    // The panels read and WRITE components directly - editing a Transform in
-    // the inspector is the same operation a system performs.
     DebugUIContext ui;
     ui.dt               = frame.deltaSeconds;
     ui.fps              = CurrentFps();
@@ -111,7 +101,6 @@ void DemoGame::RunAlways(const FrameContext& frame)
     ui.debugMessages    = GetRenderer().DebugMessageCount();
     ui.hasDebugLayer    = GetRenderer().HasDebugLayer();
     ui.maxDrawItems     = GetRenderer().MaxDrawItems();
-    // Last frame's list: OnRender rebuilds it after this runs.
     ui.drawItemCount    = unsigned(m_drawItems.size());
     ui.sceneAspect      = frame.renderAspect;
     ui.viewportCamera   = &m_camera;
@@ -119,16 +108,12 @@ void DemoGame::RunAlways(const FrameContext& frame)
     ui.playElapsed      = m_play.ElapsedSeconds();
 
     DrawDebugUI(m_world, GetRenderer().Resources(), *m_assets, m_editor, ui);
-
     m_viewportHovered = ui.viewportHovered;
 
-    // A request, not an immediate resize - the renderer applies it once it
-    // can prove the GPU is done with the old texture.
     if (ui.viewportWidth > 0 && ui.viewportHeight > 0)
     {
         GetRenderer().SetSceneViewportSize(ui.viewportWidth, ui.viewportHeight);
     }
-
     if (ui.vsyncToggled || frame.input.WasPressed('V'))
     {
         GetRenderer().SetVSync(!GetRenderer().IsVSync());
@@ -137,14 +122,13 @@ void DemoGame::RunAlways(const FrameContext& frame)
     {
         GetRenderer().SetMsaaEnabled(!GetRenderer().IsMsaaEnabled());
     }
-
     if (ui.runModeChangeRequested)
     {
         SetRunMode(ui.requestedRunMode);
     }
 }
 
-void DemoGame::SetRunMode(RunMode mode)
+void EditorApp::SetRunMode(RunMode mode)
 {
     if (mode == m_editor.runMode)
     {
@@ -155,25 +139,17 @@ void DemoGame::SetRunMode(RunMode mode)
     {
         if (m_editor.EnterPlay(m_world, GetRenderer().Resources(), m_play))
         {
-            // The request is handled after this frame's system selection, so
-            // select the Play camera now rather than showing one Edit-camera
-            // frame under an already-Play toolbar.
             GetActiveCameraView(m_world, m_camera);
         }
     }
-    else
+    else if (m_editor.StopPlay(m_world, GetRenderer().Resources(), m_play))
     {
-        if (m_editor.StopPlay(m_world, GetRenderer().Resources(), m_play))
-        {
-            m_camera = GetEditorCameraView(m_editorCamera);
-        }
+        m_camera = GetEditorCameraView(m_editorCamera);
     }
 }
 
-void DemoGame::OnRender()
+void EditorApp::OnRender()
 {
-    // The one place the two halves meet: the world is flattened into plain
-    // arrays, and the renderer takes it from there.
     BuildRenderData(m_world, GetRenderer().Resources(), m_drawItems, m_lighting);
     GetRenderer().RenderFrame(
         m_camera, m_lighting, m_drawItems,
@@ -183,11 +159,8 @@ void DemoGame::OnRender()
         });
 }
 
-DemoGame::~DemoGame()
+EditorApp::~EditorApp()
 {
-    // The host layer owns GPU buffers that may still be referenced by the
-    // last submitted frame. Drain before derived members unwind; the base
-    // Renderer does not own or know about this layer anymore.
     GetRenderer().WaitForGpu();
     GetWindow().SetMessageHook({});
     m_overlay.reset();

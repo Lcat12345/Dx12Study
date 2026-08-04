@@ -1,8 +1,10 @@
-﻿<Solution>
+<Solution>
   <Configurations>
     <Platform Name="x64" />
-    <Platform Name="x86" />
   </Configurations>
   <Project Path="Engine/Engine.vcxproj" Id="5752bbeb-4e5a-40d7-93ac-85d168107ba5" />
+  <Project Path="Engine/Game.vcxproj" Id="4b97d56c-5ad0-4d9f-af18-858566940d19" />
+  <Project Path="Engine/Editor.vcxproj" Id="31ea7b72-b422-4084-8c79-bba9f2676fd1" />
+  <Project Path="Engine/Player.vcxproj" Id="9f54af7e-5bd0-4367-ab43-b317663527b8" />
   <Project Path="Engine/Tests/EngineTests.vcxproj" Id="95b865e8-498a-4c7c-b231-08bc89b31f39" />
 </Solution>

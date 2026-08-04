@@ -195,7 +195,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 | 12.1 | 완료 | 실행 컨텍스트 + 카메라/시스템 3분류 | 모드별 업데이트, 시간·입력 소유권 | 대 | - |
 | 12.2 | 완료 | Play/Stop 스냅샷 | transactional restore, 시뮬레이션 수명 | 중 | - |
 | 12.3 | 완료 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
-| 12.4 | 대기 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
+| 12.4 | 완료 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
 | 12.5 | 대기 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
 | 12.6 | 대기 | Player 시작 Scene + 데모 게임 | CLI, runtime bootstrap, 상호작용 | 중 | - |
 | 12.7 | 대기 | staging 패키지 + 독립 실행 검증 | 재현 가능한 배포, binary audit | 중 | v1.3 |
@@ -548,21 +548,21 @@ Dx12Engine/
 
 #### 작업 항목
 
-- [ ] 기존 `Engine.vcxproj`를 `ConfigurationType=StaticLibrary`로 전환
-- [ ] `Game.vcxproj` 정적 라이브러리 프로젝트 생성
-- [ ] `Editor.vcxproj`, `Player.vcxproj` Windows Application 프로젝트 생성
-- [ ] `Dx12Engine.slnx`에 네 프로젝트와 참조 관계 등록
-- [ ] Game source를 Engine project item에서 제거하고 Game project item으로 이동
-- [ ] Editor-only source와 ImGui source를 Editor project item으로 이동
-- [ ] 현재 `DemoGame`을 `EditorApp`과 공유 Game/runtime 코드로 분해
-- [ ] Player는 자체 `wWinMain`과 `PlayerApp`을 가짐
-- [ ] 네 프로젝트의 include directory와 preprocessor 정책 정리
-- [ ] Runtime Library(`/MDd`/`/MD` 또는 선택한 정책)를 프로젝트 간 일치
-- [ ] Debug/Release x64 output과 intermediate 디렉터리를 프로젝트별로 분리
-- [ ] x64를 Phase 12 공식 배포 target으로 고정. Win32/x86 구성은 일관되게 지원하거나
+- [x] 기존 `Engine.vcxproj`를 `ConfigurationType=StaticLibrary`로 전환
+- [x] `Game.vcxproj` 정적 라이브러리 프로젝트 생성
+- [x] `Editor.vcxproj`, `Player.vcxproj` Windows Application 프로젝트 생성
+- [x] `Dx12Engine.slnx`에 네 프로젝트와 참조 관계 등록
+- [x] Game source를 Engine project item에서 제거하고 Game project item으로 이동
+- [x] Editor-only source와 ImGui source를 Editor project item으로 이동
+- [x] 현재 `DemoGame`을 `EditorApp`과 공유 Game/runtime 코드로 분해
+- [x] Player는 자체 `wWinMain`과 `PlayerApp`을 가짐
+- [x] 네 프로젝트의 include directory와 preprocessor 정책 정리
+- [x] Runtime Library(`/MDd`/`/MD` 또는 선택한 정책)를 프로젝트 간 일치
+- [x] Debug/Release x64 output과 intermediate 디렉터리를 프로젝트별로 분리
+- [x] x64를 Phase 12 공식 배포 target으로 고정. Win32/x86 구성은 일관되게 지원하거나
       솔루션에서 제거해 유령 configuration을 남기지 않음
-- [ ] Editor만 `ThirdParty/imgui` include/source를 가짐
-- [ ] Player project reference가 Game과 Engine 두 개뿐인지 확인
+- [x] Editor만 `ThirdParty/imgui` include/source를 가짐
+- [x] Player project reference가 Game과 Engine 두 개뿐인지 확인
 
 #### 링크 경계 검증
 
@@ -895,13 +895,13 @@ Phase 12는 실행 파일과 배포 경계를 만들지만, 아래 주제를 자
 
 ### 빌드·링크 경계
 
-- [ ] `Engine.lib`, `Game.lib`, `Editor.exe`, `Player.exe` 네 산출물 생성
-- [ ] Engine은 Game/Editor/ImGui를 모름
-- [ ] Game은 Editor/ImGui를 모름
-- [ ] Player project가 Engine + Game에만 의존
-- [ ] Player link map/symbol에 Editor-only와 ImGui가 없음
-- [ ] Player 단독 rebuild가 Editor/ImGui를 컴파일하지 않음
-- [ ] Debug/Release x64 전체 빌드 경고 0, 오류 0
+- [x] `Engine.lib`, `Game.lib`, `Editor.exe`, `Player.exe` 네 산출물 생성
+- [x] Engine은 Game/Editor/ImGui를 모름
+- [x] Game은 Editor/ImGui를 모름
+- [x] Player project가 Engine + Game에만 의존
+- [x] Player link map/symbol에 Editor-only와 ImGui가 없음
+- [x] Player 단독 rebuild가 Editor/ImGui를 컴파일하지 않음
+- [x] Debug/Release x64 전체 빌드 경고 0, 오류 0
 
 ### 리소스·배포
 

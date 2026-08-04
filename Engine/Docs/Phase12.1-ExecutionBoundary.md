@@ -23,21 +23,21 @@ Scene data.
 
 ## Phase 12.4 source ownership
 
-The following implementation files are Editor-only and must move to the future
-Editor project (or an Editor static library). They must not be linked by Player:
+The following implementation files are Editor-only and are owned by
+`Editor.vcxproj`. They are not linked by Player:
 
 - `Source/Game/AssetBrowser.cpp`
 - `Source/Game/DebugUI.cpp`
 - `Source/Game/EditorSession.cpp`
 - `Source/Game/Picking.cpp`
-- `Source/Game/DemoGame.cpp` (to become the Editor host/application)
-- `Source/Game/Main.cpp` (to become the Editor entry point)
+- `Source/Editor/EditorApp.cpp`
+- `Source/Editor/Main.cpp`
 - `Source/Graphics/ImGuiLayer.cpp`
 - Dear ImGui and its Win32/DX12 backend translation units
 
 Shared Game/runtime implementation remains in `BuildWorld.cpp`, `Scene.cpp`,
 `Systems.cpp`, and `ExecutionContext.cpp`. `MakePlayerFrameContext` and
 `RunPlaySystems` are intentionally free of editor and ImGui types. Phase 12.3
-has removed the remaining Renderer/Engine ownership of `ImGuiLayer`; Phase 12.4
-can now enforce this list as a link boundary. See
+removed the remaining Renderer/Engine ownership of `ImGuiLayer`; Phase 12.4
+now enforces this list as a project and link boundary. See
 [`Phase12.3-PresentationBoundary.md`](Phase12.3-PresentationBoundary.md).
