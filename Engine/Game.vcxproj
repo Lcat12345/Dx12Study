@@ -41,6 +41,7 @@
   <ItemGroup>
     <ClCompile Include="Source\Game\BuildWorld.cpp" />
     <ClCompile Include="Source\Game\ExecutionContext.cpp" />
+    <ClCompile Include="Source\Game\Picking.cpp" />
     <ClCompile Include="Source\Game\Scene.cpp" />
     <ClCompile Include="Source\Game\Systems.cpp" />
   </ItemGroup>
@@ -48,6 +49,7 @@
     <ClInclude Include="Source\Game\BuildWorld.h" />
     <ClInclude Include="Source\Game\Components.h" />
     <ClInclude Include="Source\Game\ExecutionContext.h" />
+    <ClInclude Include="Source\Game\Picking.h" />
     <ClInclude Include="Source\Game\Scene.h" />
     <ClInclude Include="Source\Game\Systems.h" />
   </ItemGroup>

@@ -55,7 +55,16 @@ bool GetActiveCameraView(World& world, CameraView& outCamera);
 // The two explicit mode-specific groups. The host calls exactly one per
 // frame; this is intentionally smaller than a general scheduler.
 void RunEditorSystems(EditorCamera& camera, const FrameContext& frame);
-void RunPlaySystems(World& world, const PlaySession& session);
+// resources may be null only for logic-only tests with no asset-backed
+// interaction. Editor Play and Player always supply the shared manager.
+void RunPlaySystems(World& world, const PlaySession& session,
+                    const ResourceManager* resources = nullptr);
+
+// Fires a normalized ray from the ActiveCamera and toggles the nearest Spin
+// mesh within a deliberately short gameplay interaction range. The edge is
+// consumed by RunPlaySystems, so holding E cannot toggle every frame.
+bool InteractSpinSystem(World& world, const ResourceManager& resources,
+                        const InputContext& input);
 
 // --- the render boundary ---
 // Walks the world once and flattens it into what the renderer accepts.

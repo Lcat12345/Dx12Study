@@ -7,6 +7,7 @@
     <FxcToolPath>$([MSBuild]::NormalizePath('$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\fxc.exe'))</FxcToolPath>
     <RuntimeShaderFlags Condition="'$(Configuration)'=='Debug'">/Zi /Od</RuntimeShaderFlags>
     <RuntimeShaderFlags Condition="'$(Configuration)'=='Release'">/O3</RuntimeShaderFlags>
+    <DefaultPlayerScene>Assets/Scenes/Demo.scene</DefaultPlayerScene>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -18,6 +19,7 @@
       <LanguageStandard>stdcpp20</LanguageStandard>
       <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary>
       <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
+      <PreprocessorDefinitions>PLAYER_DEFAULT_SCENE=L&quot;$(DefaultPlayerScene)&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">

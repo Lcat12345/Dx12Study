@@ -8,6 +8,7 @@
 #include "Graphics/GraphicsDevice.h"
 #include "Graphics/Renderer.h"
 #include "Graphics/ResourceManager.h"
+#include "Player/PlayerStartup.h"
 
 #include <Windows.h>
 
@@ -298,6 +299,47 @@ namespace
         Check(player.input.IsDown('W'), "Player input was ImGui-masked");
     }
 
+    void PlayerStartupArguments()
+    {
+        RuntimePaths paths = RuntimePaths::FromRoot(L"C:\\PlayerPackage");
+        PlayerStartup startup;
+        std::wstring error;
+
+        const wchar_t* defaults[] = { L"Player.exe" };
+        Check(ParsePlayerStartup(1, defaults, paths, startup, error),
+              "default Player arguments failed");
+        Check(startup.scenePath ==
+                  (paths.root / L"Assets/Scenes/Demo.scene").lexically_normal(),
+              "default Player Scene was not rooted beside the executable");
+
+        const wchar_t* relative[] = {
+            L"Player.exe", L"--scene", L"Assets/Scenes/ShadowA.scene"
+        };
+        Check(ParsePlayerStartup(3, relative, paths, startup, error),
+              "relative --scene failed");
+        Check(startup.scenePath ==
+                  (paths.root / L"Assets/Scenes/ShadowA.scene").lexically_normal(),
+              "relative --scene used the working directory");
+
+        const wchar_t* absolute[] = {
+            L"Player.exe", L"--scene", L"D:\\Scenes\\Custom.scene"
+        };
+        Check(ParsePlayerStartup(3, absolute, paths, startup, error),
+              "absolute --scene failed");
+        Check(startup.scenePath == L"D:\\Scenes\\Custom.scene",
+              "absolute --scene was unexpectedly re-rooted");
+
+        const wchar_t* unknown[] = { L"Player.exe", L"--wat" };
+        Check(!ParsePlayerStartup(2, unknown, paths, startup, error) &&
+                  error.find(L"unknown Player option") != std::wstring::npos,
+              "unknown Player option lacked a clear error");
+
+        const wchar_t* missing[] = { L"Player.exe", L"--scene" };
+        Check(!ParsePlayerStartup(2, missing, paths, startup, error) &&
+                  error.find(L"requires a path") != std::wstring::npos,
+              "missing --scene value lacked a clear error");
+    }
+
     void EditorCameraDoesNotMutateSceneCamera()
     {
         World world;
@@ -447,6 +489,74 @@ namespace
               "StopPlay overwrote file status");
         Check(world.Get<MeshRenderer>(FirstEntity(world))->mesh.index == originalMesh.index,
               "StopPlay did not resolve the mesh through the shared resource cache");
+    }
+
+    void DemoSceneAndSpinInteraction(TestContext& context)
+    {
+        World world;
+        std::string error;
+        CheckSucceeded(LoadScene(context.paths.SceneDir() / L"Demo.scene",
+                                 context.resources, world, error), error);
+
+        CameraView camera;
+        Check(GetActiveCameraView(world, camera),
+              "Demo.scene has no usable ActiveCamera");
+
+        Entity interactive;
+        int alphaMeshes = 0;
+        int normalMeshes = 0;
+        bool hasSkybox = false;
+        bool hasShadows = false;
+        world.ForEach<Spin>([&](Entity entity, Spin&) {
+            const Transform* transform = world.Get<Transform>(entity);
+            if (transform && transform->position.z < 10.0f)
+                interactive = entity;
+        });
+        world.ForEach<MeshRenderer>([&](Entity, MeshRenderer& renderer) {
+            if (renderer.material.blendMode == Material::BlendMode::AlphaBlend)
+                ++alphaMeshes;
+            if (renderer.material.normalTexture.IsValid())
+                ++normalMeshes;
+        });
+        world.ForEach<Environment>([&](Entity, Environment& environment) {
+            hasSkybox |= environment.skybox.IsValid();
+            hasShadows |= environment.shadowsEnabled;
+        });
+        Check(interactive.IsValid(), "Demo.scene has no interactive Spin target");
+        Check(alphaMeshes > 0, "Demo.scene does not cover the transparent pass");
+        Check(normalMeshes > 0, "Demo.scene does not cover normal mapping");
+        Check(hasSkybox, "Demo.scene does not cover the skybox pass");
+        Check(hasShadows, "Demo.scene does not enable shadows");
+
+        const MeshRenderer targetRenderer = *world.Get<MeshRenderer>(interactive);
+        const Entity farSpinner = world.Create();
+        Transform farTransform;
+        farTransform.position = { 0.0f, 2.0f, 8.0f };
+        world.Add<Transform>(farSpinner, farTransform);
+        world.Add<MeshRenderer>(farSpinner, targetRenderer);
+        world.Add<Spin>(farSpinner, { 0.0f });
+
+        InputContext input;
+        input.keyPressed['E'] = true;
+        Check(InteractSpinSystem(world, context.resources, input),
+              "E did not hit the centered Spin target");
+        Check(world.Get<Spin>(interactive)->speed > 0.0f,
+              "E did not start the Spin target");
+        Check(InteractSpinSystem(world, context.resources, input),
+              "second E edge did not hit the same Spin target");
+        CheckNear(world.Get<Spin>(interactive)->speed, 0.0f,
+                  "second E edge did not stop the Spin target");
+
+        input.keyPressed['E'] = false;
+        Check(!InteractSpinSystem(world, context.resources, input),
+              "held/non-edge E toggled interaction");
+
+        world.Destroy(interactive);
+        input.keyPressed['E'] = true;
+        Check(!InteractSpinSystem(world, context.resources, input),
+              "interaction ignored its maximum distance");
+        CheckNear(world.Get<Spin>(farSpinner)->speed, 0.0f,
+                  "out-of-range Spin target was toggled");
     }
 
     void FailedPlayCaptureIsAtomic(TestContext& context)
@@ -751,6 +861,7 @@ namespace
             { "functional/input-host-boundaries", InputContextsRespectHostBoundaries },
             { "functional/editor-camera-isolation", EditorCameraDoesNotMutateSceneCamera },
             { "functional/play-system-context", PlaySystemsUseSessionTimeAndInput },
+            { "functional/player-startup-arguments", PlayerStartupArguments },
         };
 
         bool allPassed = true;
@@ -794,6 +905,7 @@ int main()
         TestContext context;
         const TestCase tests[] = {
             { "functional/play-stop-rollback", PlayStopRestoresExactEditWorld },
+            { "functional/demo-scene-interaction", DemoSceneAndSpinInteraction },
             { "functional/play-capture-failure", FailedPlayCaptureIsAtomic },
             { "regression/repeated-play-stop", RepeatedPlayStopIsStable },
             { "functional/file-memory-identical", FileAndMemoryUseIdenticalBytes },

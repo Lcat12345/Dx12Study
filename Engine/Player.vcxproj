@@ -42,6 +42,7 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <GenerateMapFile>true</GenerateMapFile>
       <MapFileName>$(OutDir)Player.map</MapFileName>
+      <AdditionalDependencies>Shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -50,9 +51,11 @@
   <ItemGroup>
     <ClCompile Include="Source\Player\Main.cpp" />
     <ClCompile Include="Source\Player\PlayerApp.cpp" />
+    <ClCompile Include="Source\Player\PlayerStartup.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\Player\PlayerApp.h" />
+    <ClInclude Include="Source\Player\PlayerStartup.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="Engine.vcxproj">

@@ -7,11 +7,13 @@
 #include "Graphics/RenderData.h"
 
 #include <vector>
+#include <filesystem>
 
 class PlayerApp final : public Engine
 {
 public:
-    PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths);
+    PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths,
+              std::filesystem::path scenePath, const wchar_t* windowTitle);
 
 protected:
     void OnInit() override;
@@ -26,4 +28,5 @@ private:
     std::vector<DrawItem> m_drawItems;
     CameraView            m_camera;
     LightingData          m_lighting;
+    std::filesystem::path m_scenePath;
 };

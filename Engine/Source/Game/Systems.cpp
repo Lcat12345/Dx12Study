@@ -1,6 +1,7 @@
 #include "Game/Systems.h"
 
 #include "Game/Components.h"
+#include "Game/Picking.h"
 
 #include <Windows.h>
 #include <algorithm>
@@ -52,7 +53,8 @@ namespace
         return camera;
     }
 
-    void ApplyCameraInput(Transform& transform, const InputContext& input, float dt)
+    void ApplyCameraInput(Transform& transform, const InputContext& input, float dt,
+                          bool allowVerticalMovement)
     {
         transform.rotation.y += input.mouseDeltaX * kMouseSpeed;
         transform.rotation.x -= input.mouseDeltaY * kMouseSpeed;
@@ -70,8 +72,10 @@ namespace
         if (input.IsDown('S')) move = XMVectorSubtract(move, forward);
         if (input.IsDown('D')) move = XMVectorAdd(move, right);
         if (input.IsDown('A')) move = XMVectorSubtract(move, right);
-        if (input.IsDown('E')) move = XMVectorAdd(move, worldUp);
-        if (input.IsDown('Q')) move = XMVectorSubtract(move, worldUp);
+        if (allowVerticalMovement && input.IsDown('E'))
+            move = XMVectorAdd(move, worldUp);
+        if (allowVerticalMovement && input.IsDown('Q'))
+            move = XMVectorSubtract(move, worldUp);
 
         if (XMVectorGetX(XMVector3LengthSq(move)) > 0.0f)
         {
@@ -136,7 +140,7 @@ void GameCameraSystem(World& world, const InputContext& input, float dt)
     const Entity camera = FindActiveCamera(world);
     if (Transform* transform = world.Get<Transform>(camera))
     {
-        ApplyCameraInput(*transform, input, dt);
+        ApplyCameraInput(*transform, input, dt, false);
     }
 }
 
@@ -195,16 +199,53 @@ bool GetActiveCameraView(World& world, CameraView& outCamera)
 
 void RunEditorSystems(EditorCamera& camera, const FrameContext& frame)
 {
-    ApplyCameraInput(camera.transform, frame.input, frame.deltaSeconds);
+    ApplyCameraInput(camera.transform, frame.input, frame.deltaSeconds, true);
 }
 
-void RunPlaySystems(World& world, const PlaySession& session)
+bool InteractSpinSystem(World& world, const ResourceManager& resources,
+                        const InputContext& input)
+{
+    if (!input.WasPressed('E'))
+    {
+        return false;
+    }
+
+    CameraView camera;
+    if (!GetActiveCameraView(world, camera))
+    {
+        return false;
+    }
+
+    Ray ray;
+    ray.origin = camera.position;
+    XMStoreFloat3(&ray.direction,
+                  XMVector3Normalize(XMLoadFloat3(&camera.forward)));
+
+    Entity target;
+    constexpr float kInteractionDistance = 10.0f;
+    if (!PickSpinEntity(world, resources, ray, kInteractionDistance, target))
+    {
+        return false;
+    }
+
+    Spin* spin = world.Get<Spin>(target);
+    constexpr float kDefaultSpinSpeed = 1.2f;
+    spin->speed = std::fabs(spin->speed) < 1e-6f ? kDefaultSpinSpeed : 0.0f;
+    return true;
+}
+
+void RunPlaySystems(World& world, const PlaySession& session,
+                    const ResourceManager* resources)
 {
     if (!session.IsActive())
     {
         return;
     }
     GameCameraSystem(world, session.Input(), session.DeltaSeconds());
+    if (resources)
+    {
+        InteractSpinSystem(world, *resources, session.Input());
+    }
     SpinSystem(world, session.DeltaSeconds());
     LightOrbitSystem(world, session.ElapsedSeconds());
 }

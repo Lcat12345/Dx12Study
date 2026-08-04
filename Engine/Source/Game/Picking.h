@@ -73,3 +73,8 @@ bool RayAabb(const Ray& ray, const Aabb& bounds, float& outDistance);
 // far plane removed from the picture is not selectable.
 bool PickEntity(World& world, const ResourceManager& resources, const Ray& ray,
                 Entity& outEntity);
+
+// Gameplay variant: only entities carrying Spin are candidates, and the ray
+// direction is normalized so maxDistance is measured in world units.
+bool PickSpinEntity(World& world, const ResourceManager& resources, const Ray& ray,
+                    float maxDistance, Entity& outEntity);

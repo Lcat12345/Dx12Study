@@ -186,6 +186,40 @@ bool PickEntity(World& world, const ResourceManager& resources, const Ray& ray,
     return nearest.IsValid();
 }
 
+bool PickSpinEntity(World& world, const ResourceManager& resources, const Ray& ray,
+                    float maxDistance, Entity& outEntity)
+{
+    Entity nearest;
+    float  nearestDistance = maxDistance;
+
+    world.ForEach<Spin>([&](Entity entity, Spin&) {
+        const Transform* transform = world.Get<Transform>(entity);
+        const MeshRenderer* renderer = world.Get<MeshRenderer>(entity);
+        if (!transform || !renderer || !renderer->mesh.IsValid())
+        {
+            return;
+        }
+
+        XMFLOAT4X4 world4x4;
+        XMStoreFloat4x4(&world4x4, WorldMatrixOf(*transform));
+        Ray localRay;
+        float distance = 0.0f;
+        if (!RayToLocalSpace(ray, world4x4, localRay) ||
+            !RayAabb(localRay, resources.GetMesh(renderer->mesh).bounds, distance))
+        {
+            return;
+        }
+        if (distance <= nearestDistance)
+        {
+            nearestDistance = distance;
+            nearest = entity;
+        }
+    });
+
+    outEntity = nearest;
+    return nearest.IsValid();
+}
+
 bool RayPlaneY(const Ray& ray, float planeY, XMFLOAT3& outPoint)
 {
     // Solve origin.y + t * direction.y = planeY for t.

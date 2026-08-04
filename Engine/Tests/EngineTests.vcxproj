@@ -49,6 +49,7 @@
   <ItemGroup>
     <ClCompile Include="Phase12Tests.cpp" />
     <ClCompile Include="..\Source\Game\EditorSession.cpp" />
+    <ClCompile Include="..\Source\Player\PlayerStartup.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Engine.vcxproj">

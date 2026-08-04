@@ -76,7 +76,7 @@ void EditorApp::RunEditorOnly(const FrameContext& frame)
 void EditorApp::RunPlayOnly(const FrameContext& frame)
 {
     m_play.BeginFrame(frame);
-    RunPlaySystems(m_world, m_play);
+    RunPlaySystems(m_world, m_play, &GetRenderer().Resources());
     m_play.EndFrame();
     GetActiveCameraView(m_world, m_camera);
 }

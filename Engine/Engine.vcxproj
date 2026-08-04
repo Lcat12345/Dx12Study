@@ -83,6 +83,7 @@
     <None Include="Docs\Phase12.3-PresentationBoundary.md" />
     <None Include="Docs\Phase12.4-ProjectBoundary.md" />
     <None Include="Docs\Phase12.5-RuntimeContent.md" />
+    <None Include="Docs\Phase12.6-PlayerBootstrap.md" />
     <None Include="Shaders\Basic.hlsl" />
     <None Include="Shaders\Skybox.hlsl" />
     <None Include="Shaders\ShadowDepth.hlsl" />

@@ -197,7 +197,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 | 12.3 | 완료 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
 | 12.4 | 완료 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
 | 12.5 | 완료 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
-| 12.6 | 대기 | Player 시작 Scene + 데모 게임 | CLI, runtime bootstrap, 상호작용 | 중 | - |
+| 12.6 | 완료 | Player 시작 Scene + 데모 게임 | CLI, runtime bootstrap, 상호작용 | 중 | - |
 | 12.7 | 대기 | staging 패키지 + 독립 실행 검증 | 재현 가능한 배포, binary audit | 중 | v1.3 |
 
 의존성 때문에 순서를 바꾸지 않는다. 특히 12.3의 ImGui 결합 제거 없이 12.4에서
@@ -724,16 +724,16 @@ Debug는 symbol/debug flag, Release는 최적화 flag를 사용하되 파일 이
 
 #### Player bootstrap
 
-- [ ] `CommandLineToArgvW` 또는 동등한 wide-character argument parser 사용
-- [ ] `--scene <path>` 지원
-- [ ] 상대 경로는 exe runtime root 기준으로 resolve
-- [ ] 인자가 없으면 패키지 기본 Scene(예: `Assets/Scenes/Demo.scene`) 사용
-- [ ] 알 수 없는 option, 빠진 값, Scene load 실패 시 명확한 메시지와 non-zero exit
-- [ ] Scene에 ActiveCamera가 없으면 시작 실패. EditorCamera fallback 금지
-- [ ] Player는 Always + Play-only 시스템만 호출
-- [ ] Player input은 창 전체를 대상으로 하며 ImGui capture/viewport hover 조건 없음
-- [ ] ESC/창 닫기로 정상 종료 코드 0
-- [ ] Player title/log에 시작 Scene과 runtime root 표시
+- [x] `CommandLineToArgvW` 또는 동등한 wide-character argument parser 사용
+- [x] `--scene <path>` 지원
+- [x] 상대 경로는 exe runtime root 기준으로 resolve
+- [x] 인자가 없으면 패키지 기본 Scene(예: `Assets/Scenes/Demo.scene`) 사용
+- [x] 알 수 없는 option, 빠진 값, Scene load 실패 시 명확한 메시지와 non-zero exit
+- [x] Scene에 ActiveCamera가 없으면 시작 실패. EditorCamera fallback 금지
+- [x] Player는 Always + Play-only 시스템만 호출
+- [x] Player input은 창 전체를 대상으로 하며 ImGui capture/viewport hover 조건 없음
+- [x] ESC/창 닫기로 정상 종료 코드 0
+- [x] Player title/log에 시작 Scene과 runtime root 표시
 
 #### 데모 게임 규칙
 
@@ -777,6 +777,25 @@ serialization이 필요 없다. 구체적인 대상 이름이나 배치는 `Demo
 
 **완료 기준**: 같은 Scene을 Editor Play와 Player에서 실행해 동일한 게임 규칙으로
 이동·상호작용할 수 있다.
+
+#### 구현 결과 (2026-08-04)
+
+- Player는 `CommandLineToArgvW`로 `--scene <path>`를 읽고 상대 경로를 exe runtime
+  root에 결합한다. 인자가 없으면 `BuildSettings.props`의 단일 `DefaultPlayerScene`
+  값인 `Assets/Scenes/Demo.scene`을 사용한다.
+- Player의 `BuildWorld` bootstrap을 제거하고 선택한 Scene을 트랜잭션 로드한다. 잘못된
+  option/누락 값/Scene load 실패/ActiveCamera 부재는 명확한 메시지와 non-zero code로
+  종료하며, title과 debugger log에 선택 Scene과 runtime root를 남긴다.
+- `Picking`을 Editor host에서 Game library로 옮겼다. 공용 `RunPlaySystems`는 WASD/mouse
+  카메라 뒤에 E key edge 기반 10-unit ray/AABB 상호작용을 실행해 가장 가까운 `Spin`
+  mesh를 정지/회전 상태로 토글한다. Editor Play와 Player가 같은 함수를 호출한다.
+- `Demo.scene`은 중앙 상호작용 대상과 skybox, normal map, shadow, transparent content를
+  함께 포함한다. Release x64 전체 빌드는 경고 0, 오류 0이었고 테스트 25/25와 Phase 12.4
+  project/link boundary 검증이 통과했다.
+
+세부 startup과 게임 규칙은
+[`Engine/Docs/Phase12.6-PlayerBootstrap.md`](../Engine/Docs/Phase12.6-PlayerBootstrap.md)에
+기록했다.
 
 ---
 

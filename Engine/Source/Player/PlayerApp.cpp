@@ -1,28 +1,37 @@
 #include "Player/PlayerApp.h"
 
-#include "Game/BuildWorld.h"
+#include "Game/Scene.h"
 #include "Game/Systems.h"
+#include "Core/TextEncoding.h"
 
 #include <stdexcept>
+#include <utility>
 
 namespace
 {
-    constexpr wchar_t kWindowTitle[] = L"Dx12Engine Player";
     constexpr UINT    kClientWidth   = 1280;
     constexpr UINT    kClientHeight  = 720;
 }
 
-PlayerApp::PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
-    : Engine(instance, kWindowTitle, kClientWidth, kClientHeight, runtimePaths)
+PlayerApp::PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths,
+                     std::filesystem::path scenePath, const wchar_t* windowTitle)
+    : Engine(instance, windowTitle, kClientWidth, kClientHeight, runtimePaths)
+    , m_scenePath(std::move(scenePath))
 {
 }
 
 void PlayerApp::OnInit()
 {
-    BuildWorld(GetRenderer().Resources(), m_world);
+    std::string error;
+    if (!LoadScene(m_scenePath, GetRenderer().Resources(), m_world, error))
+    {
+        throw std::runtime_error("could not load Player Scene '" +
+                                 ToUtf8(m_scenePath.wstring()) + "': " + error);
+    }
     if (!GetActiveCameraView(m_world, m_camera))
     {
-        throw std::runtime_error("Player world has no active camera");
+        throw std::runtime_error("Player Scene has no ActiveCamera: " +
+                                 ToUtf8(m_scenePath.wstring()));
     }
     m_play.Begin();
 }
@@ -31,7 +40,7 @@ void PlayerApp::OnUpdate(float dt)
 {
     const FrameContext frame = MakePlayerFrameContext(CaptureHostFrame(dt));
     m_play.BeginFrame(frame);
-    RunPlaySystems(m_world, m_play);
+    RunPlaySystems(m_world, m_play, &GetRenderer().Resources());
     m_play.EndFrame();
 
     if (!GetActiveCameraView(m_world, m_camera))
