@@ -249,6 +249,7 @@ namespace
         session.selected = Entity{ 7, 3 };
         session.scenePath = L"Assets/Scenes/Keep.scene";
         session.sceneStatus = "keep status";
+        session.runStatus = "clear run status";
         session.openSaveAs = true;
         session.saveAsName[0] = 'X';
         EditorCommand command;
@@ -266,6 +267,7 @@ namespace
               "scene path did not survive replacement");
         Check(session.sceneStatus == "keep status",
               "scene status did not survive replacement");
+        Check(session.runStatus.empty(), "run status survived World replacement");
     }
 
     void InputContextsRespectHostBoundaries()
@@ -386,6 +388,108 @@ namespace
         CheckNear(world.Get<Transform>(orbit)->position.z, 0.0f,
                   "Edit wait leaked into play elapsed time");
         play.EndFrame();
+    }
+
+    void PlayStopRestoresExactEditWorld(TestContext& context)
+    {
+        World world = MakeCompleteWorld(context.resources, "Rollback");
+        const std::string before = Snapshot(world, context.resources);
+        const Entity original = FirstEntity(world);
+        const MeshHandle originalMesh = world.Get<MeshRenderer>(original)->mesh;
+
+        EditorSession editor;
+        editor.scenePath = L"Assets/Scenes/Keep.scene";
+        editor.sceneStatus = "saved Keep.scene";
+        editor.selected = original;
+        PlaySession play;
+
+        Check(editor.EnterPlay(world, context.resources, play),
+              "valid World could not enter Play");
+        Check(editor.runMode == RunMode::Play, "EnterPlay did not change the mode");
+        Check(play.IsActive(), "EnterPlay did not begin the PlaySession");
+        Check(editor.HasPlaySnapshot(), "EnterPlay did not retain a rollback snapshot");
+        Check(editor.sceneStatus == "saved Keep.scene",
+              "EnterPlay overwrote file status");
+
+        world.Get<Transform>(original)->position = { 99.0f, 88.0f, 77.0f };
+        world.Destroy(original);
+        const Entity runtimeOnly = world.Create();
+        SetName(world, runtimeOnly, "Runtime only");
+        world.Add<Transform>(runtimeOnly, { { -9.0f, -8.0f, -7.0f } });
+
+        editor.selected = runtimeOnly;
+        EditorCommand deferred;
+        deferred.kind = EditorCommand::Kind::Destroy;
+        deferred.target = runtimeOnly;
+        editor.commands.push_back(deferred);
+
+        FrameContext frame;
+        frame.deltaSeconds = 0.5f;
+        frame.input.keyDown['W'] = true;
+        play.BeginFrame(frame);
+        play.EndFrame();
+
+        Check(editor.StopPlay(world, context.resources, play),
+              "valid snapshot could not stop Play");
+        Check(editor.runMode == RunMode::Edit, "StopPlay did not return to Edit");
+        Check(!play.IsActive(), "StopPlay left the PlaySession active");
+        CheckNear(play.ElapsedSeconds(), 0.0f, "StopPlay did not reset play time");
+        Check(!editor.HasPlaySnapshot(), "successful Stop retained its snapshot");
+        Check(Snapshot(world, context.resources) == before,
+              "StopPlay did not restore the exact Edit World bytes");
+        Check(!editor.selected.IsValid(), "Play selection survived rollback");
+        Check(editor.commands.empty(), "queued Play edits survived rollback");
+        Check(editor.scenePath == L"Assets/Scenes/Keep.scene",
+              "StopPlay changed scene path identity");
+        Check(editor.sceneStatus == "saved Keep.scene",
+              "StopPlay overwrote file status");
+        Check(world.Get<MeshRenderer>(FirstEntity(world))->mesh.index == originalMesh.index,
+              "StopPlay did not resolve the mesh through the shared resource cache");
+    }
+
+    void FailedPlayCaptureIsAtomic(TestContext& context)
+    {
+        World world;
+        const Entity entity = world.Create();
+        MeshRenderer invalid;
+        invalid.mesh = MeshHandle{ 0x00FFFFFFu };
+        world.Add<MeshRenderer>(entity, invalid);
+
+        EditorSession editor;
+        PlaySession play;
+        Check(!editor.EnterPlay(world, context.resources, play),
+              "invalid World unexpectedly entered Play");
+        Check(editor.runMode == RunMode::Edit,
+              "failed snapshot capture changed the mode");
+        Check(!play.IsActive(), "failed snapshot capture began PlaySession");
+        Check(!editor.HasPlaySnapshot(), "failed snapshot capture published bytes");
+        Check(world.IsAlive(entity), "failed snapshot capture replaced the World");
+        Check(world.Get<MeshRenderer>(entity)->mesh.index == invalid.mesh.index,
+              "failed snapshot capture mutated a component");
+        Check(editor.runStatus.find("Play failed:") == 0,
+              "failed snapshot capture did not expose an error");
+    }
+
+    void RepeatedPlayStopIsStable(TestContext& context)
+    {
+        World world = MakeCompleteWorld(context.resources, "Repeat");
+        const std::string expected = Snapshot(world, context.resources);
+        EditorSession editor;
+        PlaySession play;
+
+        for (int cycle = 0; cycle < 100; ++cycle)
+        {
+            Check(editor.EnterPlay(world, context.resources, play),
+                  "repeated EnterPlay failed");
+            const Entity entity = FirstEntity(world);
+            world.Get<Transform>(entity)->rotation.y += float(cycle + 1);
+            const Entity runtimeOnly = world.Create();
+            world.Add<Transform>(runtimeOnly);
+            Check(editor.StopPlay(world, context.resources, play),
+                  "repeated StopPlay failed");
+            Check(Snapshot(world, context.resources) == expected,
+                  "repeated Play/Stop drifted scene bytes");
+        }
     }
 
     void Version1Defaults(TestContext& context)
@@ -589,6 +693,9 @@ int main()
     {
         TestContext context;
         const TestCase tests[] = {
+            { "functional/play-stop-rollback", PlayStopRestoresExactEditWorld },
+            { "functional/play-capture-failure", FailedPlayCaptureIsAtomic },
+            { "regression/repeated-play-stop", RepeatedPlayStopIsStable },
             { "functional/file-memory-identical", FileAndMemoryUseIdenticalBytes },
             { "functional/memory-round-trip", MemoryRoundTripIsStable },
             { "functional/disk-memory-disk-round-trip", DiskMemoryDiskRoundTripIsStable },

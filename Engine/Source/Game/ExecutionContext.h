@@ -4,8 +4,8 @@
 
 #include <array>
 
-// RunMode is editor state, not scene data. Phase 12.2 will attach snapshot
-// lifetime to these transitions; 12.1 only defines what is allowed to run.
+// RunMode is editor state, not scene data. EditorSession owns the snapshot
+// transaction attached to these transitions.
 enum class RunMode
 {
     Edit,

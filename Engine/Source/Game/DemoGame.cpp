@@ -143,13 +143,21 @@ void DemoGame::SetRunMode(RunMode mode)
 
     if (mode == RunMode::Play)
     {
-        m_play.Begin();
+        if (m_editor.EnterPlay(m_world, GetRenderer().Resources(), m_play))
+        {
+            // The request is handled after this frame's system selection, so
+            // select the Play camera now rather than showing one Edit-camera
+            // frame under an already-Play toolbar.
+            GetActiveCameraView(m_world, m_camera);
+        }
     }
     else
     {
-        m_play.End();
+        if (m_editor.StopPlay(m_world, GetRenderer().Resources(), m_play))
+        {
+            m_camera = GetEditorCameraView(m_editorCamera);
+        }
     }
-    m_editor.runMode = mode;
 }
 
 void DemoGame::OnRender()

@@ -13,6 +13,8 @@
 #include <string>
 #include <vector>
 
+class ResourceManager;
+
 enum class EditorComponent
 {
     Name,
@@ -68,6 +70,10 @@ public:
     std::filesystem::path scenePath;
     std::string           sceneStatus;
 
+    // Feedback for the Play transaction is separate from file status: a
+    // Play/Stop cycle must not erase which scene was opened or last saved.
+    std::string runStatus;
+
     // Popup input is transient and must not leak across a World epoch.
     bool                 openSaveAs = false;
     std::array<char, 64> saveAsName = [] {
@@ -84,4 +90,18 @@ public:
     // deferred edits aimed at the old World. Scene path/status intentionally
     // survive; callers decide whether a New/Open operation changes them.
     void OnWorldReplaced();
+
+    // Play mutates the live World in place. Enter captures its exact scene
+    // bytes; Stop first restores those bytes into a temporary World and only
+    // commits the replacement after the complete parse succeeds.
+    bool EnterPlay(World& world, const ResourceManager& resources,
+                   PlaySession& play);
+    bool StopPlay(World& world, ResourceManager& resources, PlaySession& play);
+
+    bool HasPlaySnapshot() const { return !m_playSnapshot.empty(); }
+
+private:
+    // Editor-only, memory-only rollback state. It is never a scene component,
+    // never autosaved, and disappears naturally when the editor closes.
+    std::string m_playSnapshot;
 };

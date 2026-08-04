@@ -735,6 +735,8 @@ namespace
 
         if (ImGui::BeginMenu("File"))
         {
+            const bool fileCommandsEnabled = ui.runMode == RunMode::Edit;
+            ImGui::BeginDisabled(!fileCommandsEnabled);
             if (ImGui::MenuItem("New"))
             {
                 QueueScene(session, Command::Kind::NewScene);
@@ -785,6 +787,12 @@ namespace
             {
                 session.openSaveAs = true;
             }
+            ImGui::EndDisabled();
+            if (!fileCommandsEnabled)
+            {
+                ImGui::Separator();
+                ImGui::TextDisabled("Scene file commands are unavailable during Play");
+            }
             ImGui::EndMenu();
         }
 
@@ -810,6 +818,11 @@ namespace
             ImGui::Separator();
             ImGui::TextDisabled("%s", session.sceneStatus.c_str());
         }
+        if (!session.runStatus.empty())
+        {
+            ImGui::Separator();
+            ImGui::TextDisabled("%s", session.runStatus.c_str());
+        }
 
         ImGui::EndMainMenuBar();
     }
@@ -817,7 +830,7 @@ namespace
     // A modal rather than a Win32 file dialog: the scenes folder is a known
     // place, so a name is all that is missing.
     void DrawSaveAsPopup(World& world, const ResourceManager& resources,
-                         EditorSession& session)
+                         EditorSession& session, RunMode runMode)
     {
         if (session.openSaveAs)
         {
@@ -835,6 +848,13 @@ namespace
         {
             return;
         }
+
+        const bool saveAllowed = runMode == RunMode::Edit;
+        if (!saveAllowed)
+        {
+            ImGui::TextDisabled("Saving is unavailable during Play.");
+        }
+        ImGui::BeginDisabled(!saveAllowed);
 
         ImGui::TextDisabled("Assets/Scenes/");
         ImGui::SameLine();
@@ -878,6 +898,7 @@ namespace
             SaveTo(world, resources, GetSceneDir() / (ToWide(name) + L".scene"), session);
             ImGui::CloseCurrentPopup();
         }
+        ImGui::EndDisabled();
         ImGui::SameLine();
         if (ImGui::Button("Cancel"))
         {
@@ -1123,7 +1144,7 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
 {
     // Before the dock space, which sizes itself around the menu bar.
     DrawMainMenuBar(world, resources, session, ui);
-    DrawSaveAsPopup(world, resources, session);
+    DrawSaveAsPopup(world, resources, session, ui.runMode);
 
     // A full-window dock space so the panels can be rearranged and docked.
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
