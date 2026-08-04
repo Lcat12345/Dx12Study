@@ -8,13 +8,13 @@
 #include <d3d12.h>
 #include <dxgiformat.h>
 
-class GraphicsDevice;
 class DescriptorAllocator;
 
 class ImGuiLayer
 {
 public:
-    ImGuiLayer(HWND hwnd, GraphicsDevice& device, DescriptorAllocator& srvAllocator,
+    ImGuiLayer(HWND hwnd, ID3D12Device* device, ID3D12CommandQueue* commandQueue,
+               DescriptorAllocator& srvAllocator,
                DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat, int framesInFlight);
     ~ImGuiLayer();
 

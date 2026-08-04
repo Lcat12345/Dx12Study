@@ -90,10 +90,14 @@
     <ClCompile Include="..\Source\Game\Scene.cpp" />
     <ClCompile Include="..\Source\Game\Systems.cpp" />
     <ClCompile Include="..\Source\Graphics\DescriptorAllocator.cpp" />
+    <ClCompile Include="..\Source\Graphics\DepthTarget.cpp" />
     <ClCompile Include="..\Source\Graphics\GraphicsDevice.cpp" />
     <ClCompile Include="..\Source\Graphics\Image.cpp" />
     <ClCompile Include="..\Source\Graphics\Mesh.cpp" />
+    <ClCompile Include="..\Source\Graphics\Renderer.cpp" />
+    <ClCompile Include="..\Source\Graphics\RenderTarget.cpp" />
     <ClCompile Include="..\Source\Graphics\ResourceManager.cpp" />
+    <ClCompile Include="..\Source\Graphics\SwapChain.cpp" />
     <ClCompile Include="..\Source\Loaders\ObjLoader.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

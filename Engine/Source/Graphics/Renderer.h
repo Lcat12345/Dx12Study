@@ -9,9 +9,9 @@
 #include "Graphics/RenderTarget.h"
 #include "Graphics/ResourceManager.h"
 #include "Graphics/RenderData.h"
-#include "Graphics/ImGuiLayer.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -21,7 +21,17 @@
 class Renderer
 {
 public:
-    Renderer(HWND hwnd, UINT width, UINT height);
+    enum class SceneOutput
+    {
+        OffscreenTexture,
+        SwapChain
+    };
+
+    using OverlayRecorder = std::function<void(ID3D12GraphicsCommandList*)>;
+
+    Renderer(HWND hwnd, UINT width, UINT height,
+             GraphicsDevice::AdapterPolicy adapterPolicy =
+                 GraphicsDevice::AdapterPolicy::HardwareOnly);
     ~Renderer();
 
     Renderer(const Renderer&)            = delete;
@@ -30,17 +40,18 @@ public:
     // Meshes and textures are created against this device (see BuildWorld).
     ID3D12Device* Device() const { return m_device.Device(); }
 
-    // The shader-visible heap other systems draw slots from. ImGui takes one
-    // for its font atlas; it is deliberately larger than we need.
+    // Generic graphics services used by optional host-owned rendering layers.
+    ID3D12CommandQueue* CommandQueue() const { return m_device.Queue(); }
     DescriptorAllocator& ShaderVisibleDescriptors() { return m_srvAllocator; }
+    static constexpr DXGI_FORMAT OutputFormat() { return SwapChain::kFormat; }
+    static constexpr int FramesInFlight() { return int(kFramesInFlight); }
 
     // Assets are loaded and cached here (see BuildWorld).
     ResourceManager& Resources() { return m_resources; }
 
-    // The debug overlay, created separately because it needs the window
-    // handle and must be torn down before the device.
-    void        InitializeOverlay(HWND hwnd);
-    ImGuiLayer* Overlay() { return m_overlay.get(); }
+    // A host-owned GPU layer must drain queued work before destroying its
+    // resources. Normal frame rendering remains asynchronous.
+    void WaitForGpu() { m_device.WaitForGpu(); }
 
     // The window changed size. Only the swap chain cares - the scene now
     // lives in its own target, sized by the viewport panel instead.
@@ -51,8 +62,7 @@ public:
     // next frame, once the GPU is known to be finished with the old texture.
     void SetSceneViewportSize(UINT width, UINT height);
 
-    // The scene texture, as ImGui wants it. Returned as a plain integer so
-    // no D3D type leaks into the UI code.
+    // The offscreen output texture as a plain descriptor-handle integer.
     uint64_t SceneTextureId() const { return m_sceneColor->SRV().ptr; }
 
     // The aspect the scene was last drawn with. Picking has to unproject
@@ -79,10 +89,12 @@ public:
     // is hit.
     UINT MaxDrawItems() const { return kMaxObjects; }
 
-    // Takes flattened data, not a scene graph - the renderer has no idea
-    // entities exist. See RenderData.h.
-    void Render(const CameraView& camera, const LightingData& lighting,
-                const std::vector<DrawItem>& items);
+    // Takes flattened data, not a scene graph. Scene passes are shared by
+    // both outputs; only the final presentation path differs. The optional
+    // recorder is a host extension point and may be empty.
+    void RenderFrame(const CameraView& camera, const LightingData& lighting,
+                     const std::vector<DrawItem>& items, SceneOutput output,
+                     const OverlayRecorder& overlayRecorder = {});
 
     // Vsync off only actually uncaps the frame rate when the display path
     // supports tearing.
@@ -101,6 +113,18 @@ public:
     bool     HasDebugLayer()     const { return m_device.HasDebugLayer(); }
 
 private:
+    struct SceneAttachments
+    {
+        ID3D12Resource* color = nullptr;
+        D3D12_CPU_DESCRIPTOR_HANDLE rtv = {};
+        D3D12_CPU_DESCRIPTOR_HANDLE dsv = {};
+        D3D12_VIEWPORT viewport = {};
+        D3D12_RECT scissor = {};
+        UINT width = 1;
+        UINT height = 1;
+        D3D12_RESOURCE_STATES restingState = D3D12_RESOURCE_STATE_COMMON;
+    };
+
     // What a pipeline state is FOR. Phase 11 adds passes that draw the same
     // geometry with different state; naming the role keeps "which PSO" from
     // becoming a comment.
@@ -133,7 +157,8 @@ private:
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                              const LightingData& lighting,
                              const std::vector<DrawItem>& items,
-                             const DrawQueue& shadowCasters);
+                             const DrawQueue& shadowCasters,
+                             float renderAspect);
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
 
@@ -160,20 +185,32 @@ private:
     void DrawShadowDepthPass(FrameResource& frame,
                              const std::vector<DrawItem>& items,
                              const DrawQueue& opaqueItems);
-    void DrawOpaquePass(FrameResource& frame, const std::vector<DrawItem>& items,
+    void DrawOpaquePass(FrameResource& frame, const SceneAttachments& target,
+                        const std::vector<DrawItem>& items,
                         const DrawQueue& opaqueItems);
     // After opaque so it only fills pixels nothing has claimed, and before
     // transparent (11.6) so alpha has a background to blend against.
-    void DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox);
-    void DrawTransparentPass(FrameResource& frame,
+    void DrawSkyboxPass(FrameResource& frame, const SceneAttachments& target,
+                        CubeTextureHandle skybox);
+    void DrawTransparentPass(FrameResource& frame, const SceneAttachments& target,
                              const std::vector<DrawItem>& items,
                              const DrawQueue& transparentItems);
-    void ResolveSceneColor();
-    void DrawOverlayPass();
+    SceneAttachments GetSceneAttachments(SceneOutput output) const;
+    void RecordScenePasses(FrameResource& frame, const SceneAttachments& target,
+                           const LightingData& lighting,
+                           const std::vector<DrawItem>& items,
+                           const DrawQueue& opaqueItems,
+                           const DrawQueue& transparentItems);
+    void PresentOffscreen(const OverlayRecorder& overlayRecorder);
+    void PresentSwapChain(const SceneAttachments& target,
+                          const OverlayRecorder& overlayRecorder);
+    void RecordBackBufferOverlay(const OverlayRecorder& overlayRecorder,
+                                 bool clearBackBuffer);
 
     // Shared setup every geometry pass needs, so adding a pass does not mean
     // copying six bind calls.
-    void BindScenePass(FrameResource& frame, PsoRole role);
+    void BindScenePass(FrameResource& frame, const SceneAttachments& target,
+                       PsoRole role);
     void DrawItems(FrameResource& frame, const std::vector<DrawItem>& items,
                    const DrawQueue& drawQueue);
 
@@ -182,11 +219,10 @@ private:
     GraphicsDevice m_device;
     SwapChain      m_swapChain;
 
-    // Room to spare: more render targets arrive with shadow mapping.
+    // Room to spare for the offscreen and Player presentation targets.
     static constexpr UINT kRtvHeapCapacity = 8;
     static constexpr UINT kDsvHeapCapacity = 8;
-    // ImGui's font atlas, the scene texture, and every loaded texture share
-    // this heap.
+    // Host layers, scene textures, and loaded textures share this heap.
     static constexpr UINT kSrvHeapCapacity = 64;
 
     DescriptorAllocator m_rtvAllocator;
@@ -199,6 +235,12 @@ private:
     std::unique_ptr<DepthTarget>  m_sceneDepth;
     UINT m_requestedViewportWidth  = 0;
     UINT m_requestedViewportHeight = 0;
+
+    // Swap-chain output owns window-sized depth in both modes. In 4x it also
+    // owns the multisample colour source resolved into the current back buffer;
+    // in 1x the back buffer itself is the scene colour target.
+    std::unique_ptr<RenderTarget> m_swapChainMsaaColor;
+    std::unique_ptr<DepthTarget>  m_swapChainDepth;
 
     // Fixed size, unlike the scene target: this is the resolution the LIGHT
     // samples the world at, and has nothing to do with the window.
@@ -244,9 +286,6 @@ private:
     // The box the skybox is drawn on - the same procedural cube any entity
     // could use. Resolved once because every frame with a sky needs it.
     MeshHandle m_skyboxMesh;
-
-    // Declared last: it is torn down before the device and heaps it uses.
-    std::unique_ptr<ImGuiLayer> m_overlay;
 
     bool m_vsync = true;
 };

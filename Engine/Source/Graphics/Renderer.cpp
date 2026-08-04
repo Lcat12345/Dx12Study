@@ -48,8 +48,9 @@ namespace
     constexpr float kMinShadowRadius = 1.0f;
 }
 
-Renderer::Renderer(HWND hwnd, UINT width, UINT height)
-    : m_device()                                  // debug layer -> device -> queue
+Renderer::Renderer(HWND hwnd, UINT width, UINT height,
+                   GraphicsDevice::AdapterPolicy adapterPolicy)
+    : m_device(adapterPolicy)                     // debug layer -> device -> queue
     , m_swapChain(m_device, hwnd, width, height)  // needs the queue
     , m_rtvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_RTV,
                      kRtvHeapCapacity, /*shaderVisible*/ false)
@@ -76,10 +77,21 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
     // the scene's own depth and false for the shadow map that arrives in
     // 11.4.
     m_sceneColor = std::make_unique<RenderTarget>(
-        m_device, m_rtvAllocator, m_srvAllocator,
+        m_device, m_rtvAllocator, &m_srvAllocator,
         width, height, kSceneColorFormat, kSceneClearColor,
         sceneSampleCount, sceneSampleQuality);
     m_sceneDepth = std::make_unique<DepthTarget>(
+        m_device, m_dsvAllocator, /*srvAllocator*/ nullptr, width, height,
+        sceneSampleCount, sceneSampleQuality);
+
+    // Swap-chain presentation has a separate lifetime from the editor's
+    // docked viewport. The colour source is used only in 4x; at 1x the
+    // current back buffer is the scene target itself.
+    m_swapChainMsaaColor = std::make_unique<RenderTarget>(
+        m_device, m_rtvAllocator, /*srvAllocator*/ nullptr,
+        width, height, kSceneColorFormat, kSceneClearColor,
+        sceneSampleCount, sceneSampleQuality);
+    m_swapChainDepth = std::make_unique<DepthTarget>(
         m_device, m_dsvAllocator, /*srvAllocator*/ nullptr, width, height,
         sceneSampleCount, sceneSampleQuality);
 
@@ -98,21 +110,8 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height)
 
 Renderer::~Renderer()
 {
-    // Never destroy anything the GPU might still be reading. The overlay
-    // holds GPU buffers too, so this has to happen before it unwinds.
+    // Never destroy anything the GPU might still be reading.
     m_device.WaitForGpu();
-}
-
-void Renderer::InitializeOverlay(HWND hwnd)
-{
-    // NumFramesInFlight must match ours: the backend keeps one vertex and
-    // index buffer per frame for exactly the reason our FrameResources do.
-    // DSVFormat is UNKNOWN because the UI pass binds no depth buffer at all -
-    // claiming a format the pass does not have is a debug-layer error.
-    m_overlay = std::make_unique<ImGuiLayer>(hwnd, m_device, m_srvAllocator,
-                                             SwapChain::kFormat,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             int(kFramesInFlight));
 }
 
 // Allocator = command memory, list = recorder, queue = where lists go.
@@ -561,8 +560,8 @@ void Renderer::CreatePipelineStates()
 // Skipping step 1 or 2 makes ResizeBuffers fail - the swap chain cannot free
 // buffers anyone still holds.
 //
-// Note what is NOT here any more: the scene's colour and depth textures. They
-// follow the viewport panel, not the window.
+// The offscreen scene follows the viewport panel. Only the attachments used
+// for direct swap-chain output follow the window.
 void Renderer::Resize(UINT width, UINT height)
 {
     if (width == 0 || height == 0)
@@ -572,6 +571,8 @@ void Renderer::Resize(UINT width, UINT height)
 
     m_device.WaitForGpu();
     m_swapChain.Resize(width, height); // releases its own back buffer refs
+    m_swapChainMsaaColor->Resize(width, height);
+    m_swapChainDepth->Resize(width, height);
 }
 
 // Recorded, not applied: the UI runs before Render(), and tearing down a
@@ -601,6 +602,8 @@ void Renderer::SetMsaaEnabled(bool enabled)
     const UINT sampleQuality = m_msaaEnabled ? m_4xMsaaQuality : 0u;
     m_sceneColor->SetSampleDesc(sampleCount, sampleQuality);
     m_sceneDepth->SetSampleDesc(sampleCount, sampleQuality);
+    m_swapChainMsaaColor->SetSampleDesc(sampleCount, sampleQuality);
+    m_swapChainDepth->SetSampleDesc(sampleCount, sampleQuality);
 }
 
 // Written ONCE per frame: camera and lights are shared by every object.
@@ -609,7 +612,8 @@ void Renderer::SetMsaaEnabled(bool enabled)
 void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                                    const LightingData& lighting,
                                    const std::vector<DrawItem>& items,
-                                   const DrawQueue& shadowCasters)
+                                   const DrawQueue& shadowCasters,
+                                   float renderAspect)
 {
     // Scene loading and the editor already validate these values, but keep
     // this renderer boundary defensive for programmatic LightingData callers.
@@ -631,12 +635,9 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     const XMMATRIX view = XMMatrixLookToLH(eye, forward, up);
 
     // The aspect ratio is deliberately NOT part of CameraView: it belongs to
-    // whatever surface the scene lands on, so resizing stays correct without
-    // the game's help. That surface is now the offscreen target, not the
-    // window - taking it from the swap chain would stretch the image by the
-    // exact amount the panels occupy.
+    // the output selected by the host for this frame.
     const XMMATRIX proj = XMMatrixPerspectiveFovLH(
-        camera.fovY, m_sceneColor->AspectRatio(), camera.nearZ, camera.farZ);
+        camera.fovY, renderAspect, camera.nearZ, camera.farZ);
 
     // The same view with the camera sitting at the origin. Dropping the
     // translation row is what pins the background to the camera: rotating
@@ -740,7 +741,8 @@ void Renderer::UpdateObjectConstants(FrameResource& frame,
 // State every geometry pass into the scene target needs. Extracted so that
 // adding a pass is choosing a role, not copying six bind calls that must
 // stay in sync.
-void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
+void Renderer::BindScenePass(FrameResource& frame, const SceneAttachments& target,
+                             PsoRole role)
 {
     // Command lists are stateless after Reset: root signature, PSO,
     // viewport/scissor, topology and buffers are set every frame.
@@ -755,12 +757,8 @@ void Renderer::BindScenePass(FrameResource& frame, PsoRole role)
         1, frame.passCB->GetGPUVirtualAddress());
     m_commandList->SetGraphicsRootDescriptorTable(4, m_shadowMap->SRV());
 
-    // Viewport and scissor come from the TARGET, not the window: this is what
-    // makes the image fill the panel exactly.
-    const D3D12_VIEWPORT viewport = m_sceneColor->Viewport();
-    const D3D12_RECT     scissor  = m_sceneColor->ScissorRect();
-    m_commandList->RSSetViewports(1, &viewport);
-    m_commandList->RSSetScissorRects(1, &scissor);
+    m_commandList->RSSetViewports(1, &target.viewport);
+    m_commandList->RSSetScissorRects(1, &target.scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 }
 
@@ -925,7 +923,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // the clear and the state transition below still have to happen:
     //
     //   - on the FIRST frame ever, with no return here the resource is
-    //     still DEPTH_WRITE when the debug panel's ImGui::Image samples it
+    //     still DEPTH_WRITE when the debug panel's image widget samples it
     //     through the SRV a few lines later in Render() - reading a resource
     //     through an SRV while it is in DEPTH_WRITE is a Debug Layer error
     //     the panel would trip on the very first empty scene.
@@ -996,39 +994,37 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     m_shadowMapIsShaderResource = true;
 }
 
-// Pass: the world, into the offscreen target. Nothing here knows a window
-// exists.
+// Pass: the world, into the attachment set selected by the host.
 void Renderer::DrawOpaquePass(FrameResource& frame,
+                              const SceneAttachments& target,
                               const std::vector<DrawItem>& items,
                               const DrawQueue& opaqueItems)
 {
-    // Two separate objects, bound together as one attachment set.
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneColor->RTV();
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneDepth->DSV();
-
-    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
-    m_commandList->ClearRenderTargetView(rtvHandle, m_sceneColor->ClearColor(),
+    m_commandList->OMSetRenderTargets(1, &target.rtv, FALSE, &target.dsv);
+    m_commandList->ClearRenderTargetView(target.rtv, kSceneClearColor,
                                          0, nullptr);
     // Depth must be cleared to 1.0 (far) every frame, or last frame's depths
     // would reject this frame's pixels.
-    m_commandList->ClearDepthStencilView(dsvHandle, D3D12_CLEAR_FLAG_DEPTH,
+    m_commandList->ClearDepthStencilView(target.dsv, D3D12_CLEAR_FLAG_DEPTH,
                                          1.0f, 0, 0, nullptr);
 
-    BindScenePass(frame, PsoRole::Opaque);
+    BindScenePass(frame, target, PsoRole::Opaque);
     DrawItems(frame, items, opaqueItems);
 }
 
 // Fills whatever the opaque pass left untouched. Runs AFTER it rather than
 // before so the sky is only shaded where it is actually visible - drawing it
 // first would shade every pixel and then paint over most of them.
-void Renderer::DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox)
+void Renderer::DrawSkyboxPass(FrameResource& frame,
+                              const SceneAttachments& target,
+                              CubeTextureHandle skybox)
 {
     if (!skybox.IsValid() || !m_skyboxMesh.IsValid())
     {
         return; // no sky in this scene - the clear colour stands
     }
 
-    BindScenePass(frame, PsoRole::Skybox);
+    BindScenePass(frame, target, PsoRole::Skybox);
 
     // b0 is unused by the sky shaders but the root signature declares it, so
     // point it at a real address rather than leaving it dangling.
@@ -1048,6 +1044,7 @@ void Renderer::DrawSkyboxPass(FrameResource& frame, CubeTextureHandle skybox)
 // reject transparent fragments behind it, while the PSO keeps depth writes
 // off so transparent surfaces do not reject one another.
 void Renderer::DrawTransparentPass(FrameResource& frame,
+                                   const SceneAttachments& target,
                                    const std::vector<DrawItem>& items,
                                    const DrawQueue& transparentItems)
 {
@@ -1056,67 +1053,81 @@ void Renderer::DrawTransparentPass(FrameResource& frame,
         return;
     }
 
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_sceneColor->RTV();
-    const D3D12_CPU_DESCRIPTOR_HANDLE dsvHandle = m_sceneDepth->DSV();
-    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, &dsvHandle);
+    m_commandList->OMSetRenderTargets(1, &target.rtv, FALSE, &target.dsv);
 
-    BindScenePass(frame, PsoRole::Transparent);
+    BindScenePass(frame, target, PsoRole::Transparent);
     DrawItems(frame, items, transparentItems);
 }
 
-// Finish the scene attachment and leave the texture behind SceneTextureId()
-// shader-readable. In 1x the render texture itself is sampled; in 4x the
-// multisample surface is resolved into a separate Texture2D first.
-void Renderer::ResolveSceneColor()
+Renderer::SceneAttachments Renderer::GetSceneAttachments(SceneOutput output) const
 {
-    if (!m_sceneColor->IsMultisampled())
+    SceneAttachments target;
+    if (output == SceneOutput::OffscreenTexture)
     {
-        D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
-            m_sceneColor->ColorResource(),
-            D3D12_RESOURCE_STATE_RENDER_TARGET,
-            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-        m_commandList->ResourceBarrier(1, &toShaderResource);
-        return;
+        target.color = m_sceneColor->ColorResource();
+        target.rtv = m_sceneColor->RTV();
+        target.dsv = m_sceneDepth->DSV();
+        target.viewport = m_sceneColor->Viewport();
+        target.scissor = m_sceneColor->ScissorRect();
+        target.width = m_sceneColor->Width();
+        target.height = m_sceneColor->Height();
+        target.restingState = m_sceneColor->IsMultisampled()
+            ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE
+            : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        return target;
     }
 
-    D3D12_RESOURCE_BARRIER barriers[] = {
-        TransitionBarrier(m_sceneColor->ColorResource(),
-                          D3D12_RESOURCE_STATE_RENDER_TARGET,
-                          D3D12_RESOURCE_STATE_RESOLVE_SOURCE),
-        TransitionBarrier(m_sceneColor->ShaderResource(),
-                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
-                          D3D12_RESOURCE_STATE_RESOLVE_DEST),
+    target.dsv = m_swapChainDepth->DSV();
+    target.width = m_swapChain.Width();
+    target.height = m_swapChain.Height();
+    target.viewport = {
+        0.0f, 0.0f, float(target.width), float(target.height), 0.0f, 1.0f
     };
-    m_commandList->ResourceBarrier(_countof(barriers), barriers);
-    m_commandList->ResolveSubresource(
-        m_sceneColor->ShaderResource(), 0,
-        m_sceneColor->ColorResource(), 0,
-        m_sceneColor->ColorFormat());
-
-    D3D12_RESOURCE_BARRIER resolveToShader = TransitionBarrier(
-        m_sceneColor->ShaderResource(),
-        D3D12_RESOURCE_STATE_RESOLVE_DEST,
-        D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
-    m_commandList->ResourceBarrier(1, &resolveToShader);
+    target.scissor = { 0, 0, LONG(target.width), LONG(target.height) };
+    if (m_msaaEnabled)
+    {
+        target.color = m_swapChainMsaaColor->ColorResource();
+        target.rtv = m_swapChainMsaaColor->RTV();
+        target.restingState = D3D12_RESOURCE_STATE_RESOLVE_SOURCE;
+    }
+    else
+    {
+        target.color = m_swapChain.CurrentBackBuffer();
+        target.rtv = m_swapChain.CurrentBackBufferRTV();
+        target.restingState = D3D12_RESOURCE_STATE_PRESENT;
+    }
+    return target;
 }
 
-// Pass: the editor, into the back buffer. The scene appears here only as a
-// texture inside an ImGui window - the back buffer no longer needs a depth
-// buffer at all.
-void Renderer::DrawOverlayPass()
+// Every output uses this exact scene sequence. The target supplies attachment
+// handles and dimensions; it does not select or duplicate any scene pass.
+void Renderer::RecordScenePasses(FrameResource& frame,
+                                 const SceneAttachments& target,
+                                 const LightingData& lighting,
+                                 const std::vector<DrawItem>& items,
+                                 const DrawQueue& opaqueItems,
+                                 const DrawQueue& transparentItems)
 {
-    ID3D12Resource* backBuffer = m_swapChain.CurrentBackBuffer();
+    DrawShadowDepthPass(frame, items, opaqueItems);
 
-    // The buffer we are about to draw into was just being presented.
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
-        backBuffer,
-        D3D12_RESOURCE_STATE_PRESENT,
-        D3D12_RESOURCE_STATE_RENDER_TARGET);
+        target.color, target.restingState, D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
-    const D3D12_CPU_DESCRIPTOR_HANDLE rtvHandle = m_swapChain.CurrentBackBufferRTV();
-    m_commandList->OMSetRenderTargets(1, &rtvHandle, FALSE, nullptr);
-    m_commandList->ClearRenderTargetView(rtvHandle, kEditorClearColor, 0, nullptr);
+    DrawOpaquePass(frame, target, items, opaqueItems);
+    DrawSkyboxPass(frame, target, lighting.skybox);
+    DrawTransparentPass(frame, target, items, transparentItems);
+}
+
+void Renderer::RecordBackBufferOverlay(const OverlayRecorder& overlayRecorder,
+                                       bool clearBackBuffer)
+{
+    const D3D12_CPU_DESCRIPTOR_HANDLE rtv = m_swapChain.CurrentBackBufferRTV();
+    m_commandList->OMSetRenderTargets(1, &rtv, FALSE, nullptr);
+    if (clearBackBuffer)
+    {
+        m_commandList->ClearRenderTargetView(rtv, kEditorClearColor, 0, nullptr);
+    }
 
     const D3D12_VIEWPORT viewport = {
         0.0f, 0.0f, float(m_swapChain.Width()), float(m_swapChain.Height()), 0.0f, 1.0f
@@ -1127,20 +1138,106 @@ void Renderer::DrawOverlayPass()
     m_commandList->RSSetViewports(1, &viewport);
     m_commandList->RSSetScissorRects(1, &scissor);
 
-    if (m_overlay)
+    if (overlayRecorder)
     {
-        m_overlay->Render(m_commandList.Get());
+        overlayRecorder(m_commandList.Get());
+    }
+}
+
+// Offscreen output becomes shader-readable, then a host-owned layer records
+// the actual back-buffer presentation. An empty recorder still clears and
+// presents a valid frame.
+void Renderer::PresentOffscreen(const OverlayRecorder& overlayRecorder)
+{
+    if (!m_sceneColor->IsMultisampled())
+    {
+        D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
+            m_sceneColor->ColorResource(), D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_commandList->ResourceBarrier(1, &toShaderResource);
+    }
+    else
+    {
+        D3D12_RESOURCE_BARRIER barriers[] = {
+            TransitionBarrier(m_sceneColor->ColorResource(),
+                              D3D12_RESOURCE_STATE_RENDER_TARGET,
+                              D3D12_RESOURCE_STATE_RESOLVE_SOURCE),
+            TransitionBarrier(m_sceneColor->ShaderResource(),
+                              D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                              D3D12_RESOURCE_STATE_RESOLVE_DEST),
+        };
+        m_commandList->ResourceBarrier(_countof(barriers), barriers);
+        m_commandList->ResolveSubresource(
+            m_sceneColor->ShaderResource(), 0, m_sceneColor->ColorResource(), 0,
+            m_sceneColor->ColorFormat());
+        D3D12_RESOURCE_BARRIER resolveToShader = TransitionBarrier(
+            m_sceneColor->ShaderResource(), D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+        m_commandList->ResourceBarrier(1, &resolveToShader);
     }
 
+    ID3D12Resource* backBuffer = m_swapChain.CurrentBackBuffer();
+    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
+        backBuffer, D3D12_RESOURCE_STATE_PRESENT,
+        D3D12_RESOURCE_STATE_RENDER_TARGET);
+    m_commandList->ResourceBarrier(1, &toRenderTarget);
+    RecordBackBufferOverlay(overlayRecorder, true);
     D3D12_RESOURCE_BARRIER toPresent = TransitionBarrier(
-        backBuffer,
-        D3D12_RESOURCE_STATE_RENDER_TARGET,
+        backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
         D3D12_RESOURCE_STATE_PRESENT);
     m_commandList->ResourceBarrier(1, &toPresent);
 }
 
-void Renderer::Render(const CameraView& camera, const LightingData& lighting,
-                      const std::vector<DrawItem>& items)
+void Renderer::PresentSwapChain(const SceneAttachments& target,
+                                const OverlayRecorder& overlayRecorder)
+{
+    ID3D12Resource* backBuffer = m_swapChain.CurrentBackBuffer();
+    if (!m_msaaEnabled)
+    {
+        // The 1x scene is already in the back buffer and it remains bound as
+        // an RTV, so an optional layer can append without another transition.
+        RecordBackBufferOverlay(overlayRecorder, false);
+        D3D12_RESOURCE_BARRIER toPresent = TransitionBarrier(
+            backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT);
+        m_commandList->ResourceBarrier(1, &toPresent);
+        return;
+    }
+
+    D3D12_RESOURCE_BARRIER resolveBarriers[] = {
+        TransitionBarrier(target.color, D3D12_RESOURCE_STATE_RENDER_TARGET,
+                          D3D12_RESOURCE_STATE_RESOLVE_SOURCE),
+        TransitionBarrier(backBuffer, D3D12_RESOURCE_STATE_PRESENT,
+                          D3D12_RESOURCE_STATE_RESOLVE_DEST),
+    };
+    m_commandList->ResourceBarrier(_countof(resolveBarriers), resolveBarriers);
+    m_commandList->ResolveSubresource(backBuffer, 0, target.color, 0,
+                                      SwapChain::kFormat);
+
+    if (overlayRecorder)
+    {
+        D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
+            backBuffer, D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            D3D12_RESOURCE_STATE_RENDER_TARGET);
+        m_commandList->ResourceBarrier(1, &toRenderTarget);
+        RecordBackBufferOverlay(overlayRecorder, false);
+        D3D12_RESOURCE_BARRIER toPresent = TransitionBarrier(
+            backBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET,
+            D3D12_RESOURCE_STATE_PRESENT);
+        m_commandList->ResourceBarrier(1, &toPresent);
+    }
+    else
+    {
+        D3D12_RESOURCE_BARRIER toPresent = TransitionBarrier(
+            backBuffer, D3D12_RESOURCE_STATE_RESOLVE_DEST,
+            D3D12_RESOURCE_STATE_PRESENT);
+        m_commandList->ResourceBarrier(1, &toPresent);
+    }
+}
+
+void Renderer::RenderFrame(const CameraView& camera, const LightingData& lighting,
+                           const std::vector<DrawItem>& items, SceneOutput output,
+                           const OverlayRecorder& overlayRecorder)
 {
     FrameResource& frame = m_frames[m_currentFrame];
 
@@ -1174,52 +1271,30 @@ void Renderer::Render(const CameraView& camera, const LightingData& lighting,
 
     // Only now is it safe to overwrite this frame's constant buffers and
     // recycle its command memory.
-    UpdatePassConstants(frame, camera, lighting, items, opaqueItems);
+    const SceneAttachments target = GetSceneAttachments(output);
+    const float renderAspect = target.height == 0
+        ? 1.0f : float(target.width) / float(target.height);
+    UpdatePassConstants(frame, camera, lighting, items, opaqueItems, renderAspect);
     UpdateObjectConstants(frame, items);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
     ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr),
                   "CommandList Reset");
 
-    // Bound once for BOTH passes - scene textures and ImGui's font atlas live
-    // in the same heap, so there is nothing to swap between them.
+    // Bound once for scene resources and any host-owned recorder resources.
     ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-    // The frame, spelled out. Every pass Phase 11 adds appears in this list
-    // rather than inside another one, so the order stays readable:
-    //
-    //   Directional Shadow Depth  (11.4)
-    //   Opaque Scene
-    //   Skybox
-    //   Transparent Scene         (11.6)
-    //   MSAA Resolve              (11.7)
-    //   ImGui Overlay
-    //
-    // The scene target's two state changes bracket the passes that share it
-    // rather than living inside any one of them - which one "owns" the
-    // transition stops being answerable once more than one pass draws there.
-    // Before the scene target's barrier, because it touches a different
-    // resource entirely and has to be finished before anything samples it.
-    DrawShadowDepthPass(frame, items, opaqueItems);
-
-    const D3D12_RESOURCE_STATES sceneColorRestingState =
-        m_sceneColor->IsMultisampled()
-        ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE
-        : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
-    D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
-        m_sceneColor->ColorResource(),
-        sceneColorRestingState,
-        D3D12_RESOURCE_STATE_RENDER_TARGET);
-    m_commandList->ResourceBarrier(1, &toRenderTarget);
-
-    DrawOpaquePass(frame, items, opaqueItems);
-    DrawSkyboxPass(frame, lighting.skybox);
-    DrawTransparentPass(frame, items, transparentItems);
-
-    ResolveSceneColor();
-
-    DrawOverlayPass();
+    RecordScenePasses(frame, target, lighting, items,
+                      opaqueItems, transparentItems);
+    if (output == SceneOutput::OffscreenTexture)
+    {
+        PresentOffscreen(overlayRecorder);
+    }
+    else
+    {
+        PresentSwapChain(target, overlayRecorder);
+    }
 
     ThrowIfFailed(m_commandList->Close(), "CommandList Close");
 

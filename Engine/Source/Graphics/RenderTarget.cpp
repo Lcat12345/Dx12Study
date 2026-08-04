@@ -9,13 +9,14 @@ using Microsoft::WRL::ComPtr;
 
 RenderTarget::RenderTarget(GraphicsDevice& device,
                            DescriptorAllocator& rtvAllocator,
-                           DescriptorAllocator& srvAllocator,
+                           DescriptorAllocator* srvAllocator,
                            UINT width, UINT height,
                            DXGI_FORMAT colorFormat,
                            const float clearColor[4],
                            UINT sampleCount,
-                           UINT sampleQuality)
+    UINT sampleQuality)
     : m_device(device)
+    , m_sampled(srvAllocator != nullptr)
     , m_width(std::max(width, 1u))
     , m_height(std::max(height, 1u))
     , m_sampleCount(std::max(sampleCount, 1u))
@@ -31,7 +32,10 @@ RenderTarget::RenderTarget(GraphicsDevice& device,
     // underneath but keeps the same slots, so anyone holding the SRV handle
     // (ImGui) stays valid.
     m_rtv = rtvAllocator.Allocate();
-    m_srv = srvAllocator.Allocate();
+    if (srvAllocator)
+    {
+        m_srv = srvAllocator->Allocate();
+    }
 
     CreateResources();
 }
@@ -59,11 +63,12 @@ void RenderTarget::CreateResources()
         colorClear.Color[i] = m_clearColor[i];
     }
 
-    // A 1x texture is sampled directly. An MSAA texture cannot be sampled by
-    // ImGui, so its between-frame resting state is RESOLVE_SOURCE instead.
+    // A sampled 1x texture rests shader-readable. A multisample colour source
+    // always rests as RESOLVE_SOURCE, ready for its presentation destination.
     const D3D12_RESOURCE_STATES initialColorState = IsMultisampled()
         ? D3D12_RESOURCE_STATE_RESOLVE_SOURCE
-        : D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
+        : (m_sampled ? D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE
+                     : D3D12_RESOURCE_STATE_RENDER_TARGET);
     ThrowIfFailed(m_device.Device()->CreateCommittedResource(
                       &heapProps, D3D12_HEAP_FLAG_NONE, &colorDesc,
                       initialColorState,
@@ -76,7 +81,7 @@ void RenderTarget::CreateResources()
                                              : D3D12_RTV_DIMENSION_TEXTURE2D;
     m_device.Device()->CreateRenderTargetView(m_color.Get(), &rtvDesc, m_rtv.cpu);
 
-    if (IsMultisampled())
+    if (IsMultisampled() && m_sampled)
     {
         // The resolve destination is deliberately a plain, single-sample
         // texture. It is never an RTV; ResolveSubresource is its only writer.
@@ -91,12 +96,15 @@ void RenderTarget::CreateResources()
                       "CreateCommittedResource(RenderTarget resolve)");
     }
 
-    D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-    srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
-    srvDesc.Format                  = m_colorFormat;
-    srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
-    srvDesc.Texture2D.MipLevels     = 1;
-    m_device.Device()->CreateShaderResourceView(ShaderResource(), &srvDesc, m_srv.cpu);
+    if (m_sampled)
+    {
+        D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
+        srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+        srvDesc.Format                  = m_colorFormat;
+        srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
+        srvDesc.Texture2D.MipLevels     = 1;
+        m_device.Device()->CreateShaderResourceView(ShaderResource(), &srvDesc, m_srv.cpu);
+    }
 }
 
 void RenderTarget::Resize(UINT width, UINT height)

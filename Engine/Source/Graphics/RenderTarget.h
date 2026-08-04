@@ -22,7 +22,7 @@ class RenderTarget
 public:
     RenderTarget(GraphicsDevice& device,
                  DescriptorAllocator& rtvAllocator,
-                 DescriptorAllocator& srvAllocator,
+                 DescriptorAllocator* srvAllocator,
                  UINT width, UINT height,
                  DXGI_FORMAT colorFormat,
                  const float clearColor[4],
@@ -58,6 +58,7 @@ public:
     {
         return m_resolve ? m_resolve.Get() : m_color.Get();
     }
+    bool HasShaderResource() const { return m_srv.IsValid(); }
     DXGI_FORMAT     ColorFormat()   const { return m_colorFormat; }
 
     D3D12_CPU_DESCRIPTOR_HANDLE RTV() const { return m_rtv.cpu; }
@@ -79,6 +80,7 @@ private:
 
     DescriptorHandle m_rtv;
     DescriptorHandle m_srv;
+    bool m_sampled = false;
 
     UINT        m_width  = 0;
     UINT        m_height = 0;

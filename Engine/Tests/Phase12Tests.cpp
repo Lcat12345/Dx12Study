@@ -6,6 +6,7 @@
 #include "Game/Systems.h"
 #include "Graphics/DescriptorAllocator.h"
 #include "Graphics/GraphicsDevice.h"
+#include "Graphics/Renderer.h"
 #include "Graphics/ResourceManager.h"
 
 #include <Windows.h>
@@ -633,6 +634,67 @@ namespace
         }
     }
 
+    void PresentationPathsStayClean(TestContext&)
+    {
+        constexpr wchar_t className[] = L"Dx12EnginePhase12PresentationTest";
+        WNDCLASSEXW windowClass = {};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = className;
+        const ATOM atom = RegisterClassExW(&windowClass);
+        Check(atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS,
+              "could not register presentation test window");
+
+        HWND hwnd = CreateWindowExW(0, className, L"Phase 12.3 Test",
+                                    WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                    320, 200, nullptr, nullptr,
+                                    windowClass.hInstance, nullptr);
+        Check(hwnd != nullptr, "could not create presentation test window");
+
+        try
+        {
+            Renderer renderer(hwnd, 320, 200,
+                              GraphicsDevice::AdapterPolicy::SoftwareOnly);
+            CameraView camera;
+            LightingData lighting;
+            std::vector<DrawItem> items;
+
+            renderer.SetMsaaEnabled(false);
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::SwapChain);
+
+            if (renderer.Is4xMsaaSupported())
+            {
+                renderer.SetMsaaEnabled(true);
+                renderer.RenderFrame(camera, lighting, items,
+                                     Renderer::SceneOutput::OffscreenTexture);
+                renderer.RenderFrame(camera, lighting, items,
+                                     Renderer::SceneOutput::SwapChain);
+            }
+
+            renderer.Resize(400, 240);
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::SwapChain);
+            if (renderer.HasDebugLayer())
+            {
+                Check(renderer.DebugMessageCount() == 0,
+                      "presentation paths recorded a D3D12 debug message");
+            }
+        }
+        catch (...)
+        {
+            DestroyWindow(hwnd);
+            UnregisterClassW(className, windowClass.hInstance);
+            throw;
+        }
+
+        DestroyWindow(hwnd);
+        UnregisterClassW(className, windowClass.hInstance);
+    }
+
     struct TestCase
     {
         const char* name;
@@ -709,6 +771,7 @@ int main()
             { "regression/existing-fixtures", ExistingFixturesStillRoundTrip },
             { "regression/future-version-and-bom", FutureVersionAndBomPolicy },
             { "regression/classic-locale", SerializationForcesClassicLocale },
+            { "functional/presentation-paths", PresentationPathsStayClean },
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
         };
 

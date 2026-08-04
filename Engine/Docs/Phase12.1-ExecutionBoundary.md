@@ -38,5 +38,6 @@ Editor project (or an Editor static library). They must not be linked by Player:
 Shared Game/runtime implementation remains in `BuildWorld.cpp`, `Scene.cpp`,
 `Systems.cpp`, and `ExecutionContext.cpp`. `MakePlayerFrameContext` and
 `RunPlaySystems` are intentionally free of editor and ImGui types. Phase 12.3
-must first remove the remaining Renderer/Engine ownership of `ImGuiLayer`; then
-Phase 12.4 can enforce this list as a link boundary.
+has removed the remaining Renderer/Engine ownership of `ImGuiLayer`; Phase 12.4
+can now enforce this list as a link boundary. See
+[`Phase12.3-PresentationBoundary.md`](Phase12.3-PresentationBoundary.md).

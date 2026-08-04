@@ -1,6 +1,5 @@
 #include "Graphics/ImGuiLayer.h"
 
-#include "Graphics/GraphicsDevice.h"
 #include "Graphics/DescriptorAllocator.h"
 
 #include "imgui.h"
@@ -40,7 +39,8 @@ namespace
     }
 }
 
-ImGuiLayer::ImGuiLayer(HWND hwnd, GraphicsDevice& device,
+ImGuiLayer::ImGuiLayer(HWND hwnd, ID3D12Device* device,
+                       ID3D12CommandQueue* commandQueue,
                        DescriptorAllocator& srvAllocator,
                        DXGI_FORMAT rtvFormat, DXGI_FORMAT dsvFormat,
                        int framesInFlight)
@@ -77,8 +77,8 @@ ImGuiLayer::ImGuiLayer(HWND hwnd, GraphicsDevice& device,
     }
 
     ImGui_ImplDX12_InitInfo info = {};
-    info.Device            = device.Device();
-    info.CommandQueue      = device.Queue();
+    info.Device            = device;
+    info.CommandQueue      = commandQueue;
     // MUST match kFramesInFlight. The backend keeps one vertex/index buffer
     // per frame for exactly the same reason our FrameResources exist.
     info.NumFramesInFlight = framesInFlight;

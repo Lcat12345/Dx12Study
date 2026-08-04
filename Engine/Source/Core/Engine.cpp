@@ -10,13 +10,6 @@ Engine::Engine(HINSTANCE instance, const wchar_t* title, UINT width, UINT height
                                             m_window.ClientWidth(),
                                             m_window.ClientHeight());
 
-    m_renderer->InitializeOverlay(m_window.Handle());
-
-    // Route messages to the overlay first. Window stays unaware of ImGui;
-    // it only knows there is "a hook".
-    m_window.SetMessageHook([](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
-        return ImGuiLayer::HandleMessage(hwnd, message, wParam, lParam);
-    });
 }
 
 Engine::~Engine() = default;
@@ -53,13 +46,6 @@ int Engine::Run(int cmdShow)
         }
 
         const float dt = m_timer.Tick();
-
-        // Everything between NewFrame and the renderer's overlay pass can
-        // build UI; the game does that inside OnUpdate.
-        if (ImGuiLayer* overlay = m_renderer->Overlay())
-        {
-            overlay->NewFrame();
-        }
 
         OnUpdate(dt);
         OnRender();

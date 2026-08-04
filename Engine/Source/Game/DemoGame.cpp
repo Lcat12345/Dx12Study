@@ -4,8 +4,6 @@
 #include "Game/DebugUI.h"
 #include "Game/Systems.h"
 
-#include "Graphics/ImGuiLayer.h"
-
 namespace
 {
     constexpr wchar_t kWindowTitle[] = L"Dx12Engine";
@@ -16,6 +14,18 @@ namespace
 DemoGame::DemoGame(HINSTANCE instance)
     : Engine(instance, kWindowTitle, kClientWidth, kClientHeight)
 {
+    Renderer& renderer = GetRenderer();
+    m_overlay = std::make_unique<ImGuiLayer>(
+        GetWindow().Handle(), renderer.Device(), renderer.CommandQueue(),
+        renderer.ShaderVisibleDescriptors(), renderer.OutputFormat(),
+        DXGI_FORMAT_UNKNOWN, renderer.FramesInFlight());
+
+    // The host, not Engine or Renderer, decides whether a window message
+    // belongs to its optional UI layer.
+    GetWindow().SetMessageHook(
+        [](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
+            return ImGuiLayer::HandleMessage(hwnd, message, wParam, lParam);
+        });
 }
 
 void DemoGame::OnInit()
@@ -31,10 +41,10 @@ void DemoGame::OnInit()
 
 void DemoGame::OnUpdate(float dt)
 {
-    ImGuiLayer* overlay = GetRenderer().Overlay();
+    m_overlay->NewFrame();
     const FrameContext hostFrame = CaptureHostFrame(dt);
     const FrameContext frame = MakeEditorFrameContext(
-        hostFrame, m_viewportHovered, overlay && overlay->WantsKeyboard());
+        hostFrame, m_viewportHovered, m_overlay->WantsKeyboard());
 
     if (m_editor.runMode == RunMode::Edit)
     {
@@ -165,5 +175,20 @@ void DemoGame::OnRender()
     // The one place the two halves meet: the world is flattened into plain
     // arrays, and the renderer takes it from there.
     BuildRenderData(m_world, GetRenderer().Resources(), m_drawItems, m_lighting);
-    GetRenderer().Render(m_camera, m_lighting, m_drawItems);
+    GetRenderer().RenderFrame(
+        m_camera, m_lighting, m_drawItems,
+        Renderer::SceneOutput::OffscreenTexture,
+        [this](ID3D12GraphicsCommandList* commandList) {
+            m_overlay->Render(commandList);
+        });
+}
+
+DemoGame::~DemoGame()
+{
+    // The host layer owns GPU buffers that may still be referenced by the
+    // last submitted frame. Drain before derived members unwind; the base
+    // Renderer does not own or know about this layer anymore.
+    GetRenderer().WaitForGpu();
+    GetWindow().SetMessageHook({});
+    m_overlay.reset();
 }

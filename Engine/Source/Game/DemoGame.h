@@ -8,6 +8,7 @@
 #include "Game/ExecutionContext.h"
 #include "Game/Systems.h"
 #include "Graphics/RenderData.h"
+#include "Graphics/ImGuiLayer.h"
 
 #include <memory>
 #include <vector>
@@ -18,6 +19,7 @@ class DemoGame : public Engine
 {
 public:
     DemoGame(HINSTANCE instance);
+    ~DemoGame() override;
 
 protected:
     void OnInit() override;
@@ -40,6 +42,8 @@ private:
     // ResourceManager, which does not exist until the base class has
     // initialized.
     std::unique_ptr<AssetBrowser> m_assets;
+    // Editor-owned: destroyed before the base Engine and its graphics device.
+    std::unique_ptr<ImGuiLayer> m_overlay;
 
     // Rebuilt every frame by the render system. Kept as a member so the
     // vector's storage is reused instead of reallocated 5000 times a second.
