@@ -43,6 +43,17 @@ namespace
         }
     }
 
+    // Takes the string by reference rather than passing error.c_str() beside
+    // the operation that mutates it. Function argument evaluation order is
+    // intentionally irrelevant now: the reference observes the final error.
+    void CheckSucceeded(bool succeeded, const std::string& error)
+    {
+        if (!succeeded)
+        {
+            throw TestFailure(error.empty() ? "operation failed without an error" : error);
+        }
+    }
+
     std::string ReadAll(const std::filesystem::path& path)
     {
         std::ifstream file(path, std::ios::binary);
@@ -112,7 +123,7 @@ namespace
     {
         std::string snapshot;
         std::string error;
-        Check(CaptureSceneSnapshot(world, resources, snapshot, error), error.c_str());
+        CheckSucceeded(CaptureSceneSnapshot(world, resources, snapshot, error), error);
         return snapshot;
     }
 
@@ -120,7 +131,7 @@ namespace
     {
         World world;
         std::string error;
-        Check(RestoreSceneSnapshot(fixture, resources, world, error), error.c_str());
+        CheckSucceeded(RestoreSceneSnapshot(fixture, resources, world, error), error);
         return world;
     }
 
@@ -147,7 +158,7 @@ namespace
 
     struct TestContext
     {
-        GraphicsDevice      device;
+        GraphicsDevice      device{ GraphicsDevice::AdapterPolicy::SoftwareOnly };
         DescriptorAllocator srv{ device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                                  128, true };
         ResourceManager     resources{ device, srv };
@@ -160,7 +171,7 @@ namespace
         const std::string memory = Snapshot(world, context.resources);
         const auto path = context.temp.path / L"identical.scene";
         std::string error;
-        Check(SaveScene(world, context.resources, path, error), error.c_str());
+        CheckSucceeded(SaveScene(world, context.resources, path, error), error);
         Check(ReadAll(path) == memory, "file and memory serialization differ");
     }
 
@@ -170,9 +181,26 @@ namespace
         const std::string before = Snapshot(source, context.resources);
         World restored;
         std::string error;
-        Check(RestoreSceneSnapshot(before, context.resources, restored, error), error.c_str());
+        CheckSucceeded(RestoreSceneSnapshot(before, context.resources, restored, error), error);
         Check(Snapshot(restored, context.resources) == before,
               "memory round trip changed serialized bytes");
+    }
+
+    void DiskMemoryDiskRoundTripIsStable(TestContext& context)
+    {
+        World source = MakeCompleteWorld(context.resources, "Disk memory disk");
+        const auto beforePath = context.temp.path / L"roundtrip-before.scene";
+        const auto afterPath  = context.temp.path / L"roundtrip-after.scene";
+        std::string error;
+        CheckSucceeded(SaveScene(source, context.resources, beforePath, error), error);
+
+        const std::string snapshot = Snapshot(source, context.resources);
+        World restored;
+        CheckSucceeded(RestoreSceneSnapshot(snapshot, context.resources, restored, error), error);
+        CheckSucceeded(SaveScene(restored, context.resources, afterPath, error), error);
+
+        Check(ReadAll(beforePath) == ReadAll(afterPath),
+              "disk-memory-disk round trip changed serialized bytes");
     }
 
     void InvalidMemoryKeepsLiveWorld(TestContext& context)
@@ -194,8 +222,8 @@ namespace
         World first = MakeCompleteWorld(context.resources, "First");
         World second = MakeCompleteWorld(context.resources, "Second");
         std::string error;
-        Check(SaveScene(first, context.resources, path, error), error.c_str());
-        Check(SaveScene(second, context.resources, path, error), error.c_str());
+        CheckSucceeded(SaveScene(first, context.resources, path, error), error);
+        CheckSucceeded(SaveScene(second, context.resources, path, error), error);
         const std::string lastGood = ReadAll(path);
         Check(lastGood == Snapshot(second, context.resources),
               "replacement did not publish the second scene");
@@ -213,7 +241,7 @@ namespace
         Check(!std::filesystem::exists(tempPath), "failed save left a sibling .tmp file");
     }
 
-    void EditorSessionResetPolicy(TestContext&)
+    void EditorSessionResetPolicy()
     {
         EditorSession session;
         session.selected = Entity{ 7, 3 };
@@ -318,11 +346,11 @@ namespace
             World world;
             std::string error;
             const auto path = GetSceneDir() / fileName;
-            Check(LoadScene(path, context.resources, world, error), error.c_str());
+            CheckSucceeded(LoadScene(path, context.resources, world, error), error);
             const std::string first = Snapshot(world, context.resources);
             World restored;
-            Check(RestoreSceneSnapshot(first, context.resources, restored, error),
-                  error.c_str());
+            CheckSucceeded(RestoreSceneSnapshot(first, context.resources, restored, error),
+                           error);
             Check(Snapshot(restored, context.resources) == first,
                   "existing fixture changed after memory round trip");
         }
@@ -357,14 +385,14 @@ namespace
         std::ostringstream output;
         output.imbue(std::locale(std::locale::classic(), new CommaDecimalPoint));
         std::string error;
-        Check(SerializeScene(output, world, context.resources, error), error.c_str());
+        CheckSucceeded(SerializeScene(output, world, context.resources, error), error);
         Check(output.str().find("1.25") != std::string::npos,
               "serializer inherited a decimal-comma locale");
 
         std::istringstream input(output.str());
         input.imbue(std::locale(std::locale::classic(), new CommaDecimalPoint));
         World restored;
-        Check(DeserializeScene(input, context.resources, restored, error), error.c_str());
+        CheckSucceeded(DeserializeScene(input, context.resources, restored, error), error);
         Transform* transform = restored.Get<Transform>(FirstEntity(restored));
         Check(transform != nullptr, "locale test transform missing");
         CheckNear(transform->position.x, 1.25f, "parser inherited a decimal-comma locale");
@@ -384,28 +412,50 @@ namespace
         const char* name;
         void (*run)(TestContext&);
     };
+
+    bool RunCpuTests(int& passed, int& total)
+    {
+        ++total;
+        try
+        {
+            EditorSessionResetPolicy();
+            ++passed;
+            std::cout << "[PASS] functional/editor-session-reset\n";
+            return true;
+        }
+        catch (const std::exception& e)
+        {
+            std::cerr << "[FAIL] functional/editor-session-reset: " << e.what() << '\n';
+            return false;
+        }
+    }
 }
 
 int main()
 {
+    int result = 0;
+    int passed = 0;
+    int total  = 0;
+    RunCpuTests(passed, total);
+
     const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(comResult))
     {
         std::cerr << "COM initialization failed: 0x" << std::hex
                   << static_cast<unsigned>(comResult) << '\n';
+        std::cerr << passed << '/' << total << " CPU tests passed before COM failure\n";
         return 2;
     }
 
-    int result = 0;
     try
     {
         TestContext context;
         const TestCase tests[] = {
             { "functional/file-memory-identical", FileAndMemoryUseIdenticalBytes },
             { "functional/memory-round-trip", MemoryRoundTripIsStable },
+            { "functional/disk-memory-disk-round-trip", DiskMemoryDiskRoundTripIsStable },
             { "functional/invalid-memory-is-transactional", InvalidMemoryKeepsLiveWorld },
             { "functional/atomic-save", AtomicSavePreservesLastGoodFile },
-            { "functional/editor-session-reset", EditorSessionResetPolicy },
             { "regression/scene-v1-defaults", Version1Defaults },
             { "regression/scene-v2-skybox", Version2Skybox },
             { "regression/scene-v3-normal-map", Version3NormalMap },
@@ -417,9 +467,9 @@ int main()
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
         };
 
-        int passed = 0;
         for (const TestCase& test : tests)
         {
+            ++total;
             try
             {
                 test.run(context);
@@ -432,12 +482,13 @@ int main()
             }
         }
 
-        std::cout << passed << '/' << std::size(tests) << " tests passed\n";
-        result = passed == std::size(tests) ? 0 : 1;
+        std::cout << passed << '/' << total << " tests passed\n";
+        result = passed == total ? 0 : 1;
     }
     catch (const std::exception& e)
     {
         std::cerr << "test setup failed: " << e.what() << '\n';
+        std::cerr << passed << '/' << total << " CPU tests passed before setup failure\n";
         result = 2;
     }
 

@@ -9,7 +9,8 @@
 
 using Microsoft::WRL::ComPtr;
 
-GraphicsDevice::GraphicsDevice()
+GraphicsDevice::GraphicsDevice(AdapterPolicy adapterPolicy)
+    : m_adapterPolicy(adapterPolicy)
 {
     // Order matters and is the reason this is a constructor rather than
     // four loose calls: the debug layer is only honoured if it is turned on
@@ -61,33 +62,51 @@ void GraphicsDevice::CreateFactory()
 
 void GraphicsDevice::CreateDevice()
 {
-    ComPtr<IDXGIAdapter1> adapter;
-    for (UINT i = 0;
-         m_factory->EnumAdapterByGpuPreference(
-             i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
-             IID_PPV_ARGS(&adapter)) != DXGI_ERROR_NOT_FOUND;
-         ++i)
+    if (m_adapterPolicy == AdapterPolicy::HardwareOnly)
     {
-        DXGI_ADAPTER_DESC1 desc;
-        adapter->GetDesc1(&desc);
-        if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+        ComPtr<IDXGIAdapter1> adapter;
+        for (UINT i = 0;
+             m_factory->EnumAdapterByGpuPreference(
+                 i, DXGI_GPU_PREFERENCE_HIGH_PERFORMANCE,
+                 IID_PPV_ARGS(&adapter)) != DXGI_ERROR_NOT_FOUND;
+             ++i)
         {
-            continue; // WARP etc. - we want real hardware
-        }
-        if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
-                                        IID_PPV_ARGS(&m_device))))
-        {
+            DXGI_ADAPTER_DESC1 desc;
+            adapter->GetDesc1(&desc);
+            if (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE)
+            {
+                continue; // WARP etc. - production wants real hardware
+            }
+            if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
+                                            IID_PPV_ARGS(&m_device))))
+            {
 #if defined(_DEBUG)
-            // Optional: fails when the "Graphics Tools" Windows feature is
-            // not installed, which is normal on a fresh machine. The count
-            // then stays 0 - reported honestly by DebugMessageCount as "no
-            // info queue" rather than as "no problems".
-            m_device.As(&m_infoQueue);
+                // Optional: fails when the "Graphics Tools" Windows feature is
+                // not installed, which is normal on a fresh machine. The count
+                // then stays 0 - reported honestly by DebugMessageCount as "no
+                // info queue" rather than as "no problems".
+                m_device.As(&m_infoQueue);
 #endif
-            return;
+                return;
+            }
         }
+        throw std::runtime_error("No D3D12-capable hardware GPU found");
     }
-    throw std::runtime_error("No D3D12-capable hardware GPU found");
+
+    // Deterministic test/headless mode: always use WARP, even on a machine
+    // with a GPU. Production keeps HardwareOnly, so it can never silently
+    // fall back to a software renderer.
+    ComPtr<IDXGIAdapter> warpAdapter;
+    if (SUCCEEDED(m_factory->EnumWarpAdapter(IID_PPV_ARGS(&warpAdapter))) &&
+        SUCCEEDED(D3D12CreateDevice(warpAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
+                                    IID_PPV_ARGS(&m_device))))
+    {
+#if defined(_DEBUG)
+        m_device.As(&m_infoQueue);
+#endif
+        return;
+    }
+    throw std::runtime_error("No D3D12-capable WARP adapter found");
 }
 
 UINT64 GraphicsDevice::DebugMessageCount() const

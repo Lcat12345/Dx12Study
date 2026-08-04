@@ -15,7 +15,13 @@
 class GraphicsDevice
 {
 public:
-    GraphicsDevice();
+    enum class AdapterPolicy
+    {
+        HardwareOnly,
+        SoftwareOnly
+    };
+
+    explicit GraphicsDevice(AdapterPolicy adapterPolicy = AdapterPolicy::HardwareOnly);
     ~GraphicsDevice();
 
     // Non-copyable, non-movable: exactly one owner, no lifetime puzzles.
@@ -78,4 +84,5 @@ private:
     UINT64 m_fenceValue       = 0;
     HANDLE m_fenceEvent       = nullptr;
     bool   m_tearingSupported = false;
+    AdapterPolicy m_adapterPolicy = AdapterPolicy::HardwareOnly;
 };
