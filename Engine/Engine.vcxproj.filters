@@ -42,6 +42,9 @@
     <ClCompile Include="Source\Game\DemoGame.cpp">
       <Filter>Game</Filter>
     </ClCompile>
+    <ClCompile Include="Source\Game\EditorSession.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
     <ClCompile Include="Source\Game\Main.cpp">
       <Filter>Game</Filter>
     </ClCompile>
@@ -141,6 +144,9 @@
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Source\Game\DemoGame.h">
+      <Filter>Game</Filter>
+    </ClInclude>
+    <ClInclude Include="Source\Game\EditorSession.h">
       <Filter>Game</Filter>
     </ClInclude>
     <ClInclude Include="Source\Game\Picking.h">

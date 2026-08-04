@@ -7,6 +7,7 @@
 #include <cmath>
 #include <cstdio>
 #include <fstream>
+#include <locale>
 #include <sstream>
 
 using namespace DirectX;
@@ -80,79 +81,74 @@ namespace
     }
 }
 
-static bool SaveSceneImpl(World& world, const ResourceManager& resources,
-                          const std::filesystem::path& path, std::string& outError)
+static bool SerializeSceneImpl(std::ostream& out, World& world,
+                               const ResourceManager& resources, std::string& outError)
 {
-    std::error_code error;
-    std::filesystem::create_directories(path.parent_path(), error);
-
-    // Written to a sibling temporary and moved into place at the end.
-    // Opening the real file directly truncates it FIRST, so a disk full, a
-    // write error or a crash halfway through would destroy the last good
-    // save - the one thing a save must never do. The temporary lives in the
-    // same directory so the move is a rename within one volume, not a copy.
-    //
-    // Built by APPENDING to the path, never through path::string(): that
-    // converts the native UTF-16 to the ANSI code page and throws on
-    // anything it cannot represent - a Korean scene name on an English
-    // Windows would have taken the process down here, in the one function
-    // whose whole job is not to lose the file.
-    std::filesystem::path tempPath = path;
-    tempPath += L".tmp";
-
-    std::ofstream file(tempPath, std::ios::binary);
-    if (!file)
-    {
-        outError = "could not open the file for writing";
-        return false;
-    }
-
     // 9 significant digits is the shortest that survives a float round trip
-    // exactly. Fewer and a position drifts every time the scene is re-saved.
-    file.precision(9);
+    // exactly. The classic locale keeps file and string streams byte-identical
+    // even when the editor is running under a locale with decimal commas.
+    out.imbue(std::locale::classic());
+    out.precision(9);
 
-    file << "scene " << kSceneVersion << "\n";
+    out << "scene " << kSceneVersion << "\n";
+    bool namesResolved = true;
 
     // ForEachEntity walks indices in order, so two saves of one scene are
     // byte-identical - an unordered_map's order is not.
     world.ForEachEntity([&](Entity entity) {
-        file << "entity\n";
+        if (!namesResolved)
+        {
+            return;
+        }
+        out << "entity\n";
 
         if (const Name* name = world.Get<Name>(entity))
         {
-            file << "  name ";
-            WriteQuoted(file, name->value);
-            file << "\n";
+            out << "  name ";
+            WriteQuoted(out, name->value);
+            out << "\n";
         }
 
         if (const Transform* transform = world.Get<Transform>(entity))
         {
-            file << "  transform";
-            WriteFloat3(file, transform->position);
-            WriteFloat3(file, transform->rotation);
-            WriteFloat3(file, transform->scale);
-            file << "\n";
+            out << "  transform";
+            WriteFloat3(out, transform->position);
+            WriteFloat3(out, transform->rotation);
+            WriteFloat3(out, transform->scale);
+            out << "\n";
         }
 
         if (const MeshRenderer* renderer = world.Get<MeshRenderer>(entity))
         {
             const Material& material = renderer->material;
-            file << "  meshrenderer mesh ";
+            const std::wstring& meshName = resources.MeshName(renderer->mesh);
+            const std::wstring& textureName = resources.TextureName(material.texture);
+            const std::wstring& normalName = resources.TextureName(material.normalTexture);
+            if ((renderer->mesh.IsValid() && meshName.empty()) ||
+                (material.texture.IsValid() && textureName.empty()) ||
+                (material.normalTexture.IsValid() && normalName.empty()))
+            {
+                outError = "entity " + std::to_string(entity.index) +
+                           " contains an asset handle with no registered name";
+                namesResolved = false;
+                return;
+            }
+            out << "  meshrenderer mesh ";
             // The NAME, not the handle. Index 3 means nothing next run.
-            WriteQuoted(file, ToUtf8(resources.MeshName(renderer->mesh)));
-            file << " texture ";
-            WriteQuoted(file, ToUtf8(resources.TextureName(material.texture)));
-            file << " albedo " << material.diffuseAlbedo.x << ' ' << material.diffuseAlbedo.y
+            WriteQuoted(out, ToUtf8(meshName));
+            out << " texture ";
+            WriteQuoted(out, ToUtf8(textureName));
+            out << " albedo " << material.diffuseAlbedo.x << ' ' << material.diffuseAlbedo.y
                  << ' ' << material.diffuseAlbedo.z << ' ' << material.diffuseAlbedo.w
                  << " specular";
-            WriteFloat3(file, material.specularColor);
-            file << " shininess " << material.shininess;
+            WriteFloat3(out, material.specularColor);
+            out << " shininess " << material.shininess;
             // Appended rather than inserted, and read back as OPTIONAL, so a
             // version 2 file - every scene saved before 11.3 - still loads
             // and simply keeps the flat default.
-            file << " normal ";
-            WriteQuoted(file, ToUtf8(resources.TextureName(material.normalTexture)));
-            file << " strength " << material.normalStrength
+            out << " normal ";
+            WriteQuoted(out, ToUtf8(normalName));
+            out << " strength " << material.normalStrength
                  << " blend "
                  << (material.blendMode == Material::BlendMode::AlphaBlend
                          ? "alpha" : "opaque")
@@ -161,75 +157,75 @@ static bool SaveSceneImpl(World& world, const ResourceManager& resources,
 
         if (const CameraComponent* lens = world.Get<CameraComponent>(entity))
         {
-            file << "  camera " << lens->fovY << ' ' << lens->nearZ << ' '
+            out << "  camera " << lens->fovY << ' ' << lens->nearZ << ' '
                  << lens->farZ << "\n";
         }
 
         if (const Light* light = world.Get<Light>(entity))
         {
-            file << "  light "
+            out << "  light "
                  << (light->type == Light::Type::Directional ? "directional" : "point");
-            WriteFloat3(file, light->color);
-            file << ' ' << light->range << "\n";
+            WriteFloat3(out, light->color);
+            out << ' ' << light->range << "\n";
         }
 
         if (const Spin* spin = world.Get<Spin>(entity))
         {
-            file << "  spin " << spin->speed << "\n";
+            out << "  spin " << spin->speed << "\n";
         }
 
         if (world.Has<ActiveCamera>(entity))
         {
-            file << "  activecamera\n";
+            out << "  activecamera\n";
         }
 
         if (const Environment* environment = world.Get<Environment>(entity))
         {
-            file << "  environment";
-            WriteFloat3(file, environment->ambient);
+            const std::wstring& skyboxName = resources.CubeTextureName(environment->skybox);
+            if (environment->skybox.IsValid() && skyboxName.empty())
+            {
+                outError = "entity " + std::to_string(entity.index) +
+                           " contains a skybox handle with no registered name";
+                namesResolved = false;
+                return;
+            }
+            out << "  environment";
+            WriteFloat3(out, environment->ambient);
             // Appended, not a new line: a reader that stops after three
             // numbers still gets a valid Environment, which is exactly what
             // makes this an additive change.
             if (environment->skybox.IsValid())
             {
-                file << " skybox ";
-                WriteQuoted(file, ToUtf8(resources.CubeTextureName(environment->skybox)));
+                out << " skybox ";
+                WriteQuoted(out, ToUtf8(skyboxName));
             }
-            file << " shadow " << (environment->shadowsEnabled ? 1 : 0)
+            out << " shadow " << (environment->shadowsEnabled ? 1 : 0)
                  << ' ' << environment->shadowBias
                  << ' ' << environment->shadowStrength;
-            file << "\n";
+            out << "\n";
         }
     });
 
-    file.close(); // flush before asking whether it all landed
-    if (!file)
+    if (!namesResolved)
     {
-        outError = "the file could not be written completely";
-        std::filesystem::remove(tempPath, error);
         return false;
     }
 
-    // The swap. rename replaces an existing file on Windows, so the old
-    // scene is only gone once the new one is complete on disk.
-    std::filesystem::rename(tempPath, path, error);
-    if (error)
+    if (!out)
     {
-        outError = "could not replace the existing file: " + error.message();
-        std::filesystem::remove(tempPath, error);
+        outError = "the scene could not be written completely";
         return false;
     }
     return true;
 }
 
-bool SaveScene(World& world, const ResourceManager& resources,
-               const std::filesystem::path& path, std::string& outError)
+bool SerializeScene(std::ostream& out, World& world,
+                    const ResourceManager& resources, std::string& outError)
 {
-    // The same backstop LoadScene has. Losing a save is bad; losing the
-    // whole session because a save failed is worse.
+    outError.clear();
     try
     {
-        return SaveSceneImpl(world, resources, path, outError);
+        return SerializeSceneImpl(out, world, resources, outError);
     }
     catch (const std::exception& e)
     {
@@ -243,15 +239,10 @@ bool SaveScene(World& world, const ResourceManager& resources,
     }
 }
 
-static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& resources,
-                          World& outWorld, std::string& outError)
+static bool DeserializeSceneImpl(std::istream& input, ResourceManager& resources,
+                                 World& outWorld, std::string& outError)
 {
-    std::ifstream file(path, std::ios::binary);
-    if (!file)
-    {
-        outError = "could not open the file";
-        return false;
-    }
+    input.imbue(std::locale::classic());
 
     // Everything lands here first. outWorld is only touched once the last
     // line has parsed.
@@ -261,7 +252,7 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
     int    lineNumber = 0;
 
     std::string line;
-    while (std::getline(file, line))
+    while (std::getline(input, line))
     {
         ++lineNumber;
         if (!line.empty() && line.back() == '\r')
@@ -586,7 +577,7 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
     // the same thing: bad() means the stream broke partway, so what parsed
     // is only part of the scene. Replacing the live world with it would be
     // silent data loss dressed up as a successful load.
-    if (file.bad())
+    if (input.bad())
     {
         outError = "the file could not be read completely";
         return false;
@@ -603,15 +594,128 @@ static bool LoadSceneImpl(const std::filesystem::path& path, ResourceManager& re
     return true;
 }
 
-bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
-               World& outWorld, std::string& outError)
+bool DeserializeScene(std::istream& input, ResourceManager& resources,
+                      World& outWorld, std::string& outError)
 {
+    outError.clear();
     // The backstop. Opening a file the user picked must never be able to
     // end the process, whatever the file turns out to contain - the parser
     // above converts what it anticipates, this catches what it does not.
     try
     {
-        return LoadSceneImpl(path, resources, outWorld, outError);
+        return DeserializeSceneImpl(input, resources, outWorld, outError);
+    }
+    catch (const std::exception& e)
+    {
+        outError = e.what();
+        return false;
+    }
+    catch (...)
+    {
+        outError = "unknown error while loading";
+        return false;
+    }
+}
+
+bool CaptureSceneSnapshot(World& world, const ResourceManager& resources,
+                          std::string& outSnapshot, std::string& outError)
+{
+    std::ostringstream stream(std::ios::out | std::ios::binary);
+    if (!SerializeScene(stream, world, resources, outError))
+    {
+        return false;
+    }
+    outSnapshot = stream.str();
+    return true;
+}
+
+bool RestoreSceneSnapshot(const std::string& snapshot, ResourceManager& resources,
+                          World& outWorld, std::string& outError)
+{
+    std::istringstream stream(snapshot, std::ios::in | std::ios::binary);
+    return DeserializeScene(stream, resources, outWorld, outError);
+}
+
+bool SaveScene(World& world, const ResourceManager& resources,
+               const std::filesystem::path& path, std::string& outError)
+{
+    outError.clear();
+    try
+    {
+        std::error_code error;
+        if (!path.parent_path().empty())
+        {
+            std::filesystem::create_directories(path.parent_path(), error);
+            if (error)
+            {
+                outError = "could not create the scene directory: " + error.message();
+                return false;
+            }
+        }
+
+        // Opening the destination directly would destroy the last good save
+        // before the new bytes are complete. Write a sibling and replace only
+        // after SerializeScene and close have both succeeded.
+        std::filesystem::path tempPath = path;
+        tempPath += L".tmp";
+
+        std::ofstream file(tempPath, std::ios::binary | std::ios::trunc);
+        if (!file)
+        {
+            outError = "could not open the file for writing";
+            return false;
+        }
+        if (!SerializeScene(file, world, resources, outError))
+        {
+            file.close();
+            std::filesystem::remove(tempPath, error);
+            return false;
+        }
+        file.close();
+        if (!file)
+        {
+            outError = "the file could not be written completely";
+            std::filesystem::remove(tempPath, error);
+            return false;
+        }
+
+        // std::filesystem::rename does not replace an existing target on
+        // Windows. MoveFileEx gives the intended same-volume atomic swap.
+        if (!MoveFileExW(tempPath.c_str(), path.c_str(),
+                         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        {
+            outError = "could not replace the existing file (Win32 error " +
+                       std::to_string(GetLastError()) + ")";
+            std::filesystem::remove(tempPath, error);
+            return false;
+        }
+        return true;
+    }
+    catch (const std::exception& e)
+    {
+        outError = e.what();
+        return false;
+    }
+    catch (...)
+    {
+        outError = "unknown error while saving";
+        return false;
+    }
+}
+
+bool LoadScene(const std::filesystem::path& path, ResourceManager& resources,
+               World& outWorld, std::string& outError)
+{
+    outError.clear();
+    try
+    {
+        std::ifstream file(path, std::ios::binary);
+        if (!file)
+        {
+            outError = "could not open the file";
+            return false;
+        }
+        return DeserializeScene(file, resources, outWorld, outError);
     }
     catch (const std::exception& e)
     {

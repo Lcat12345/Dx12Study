@@ -3,6 +3,7 @@
 #include "Game/AssetBrowser.h"
 #include "Game/BuildWorld.h"
 #include "Game/Components.h"
+#include "Game/EditorSession.h"
 #include "Game/Picking.h"
 #include "Game/Scene.h"
 #include "Game/Systems.h"
@@ -24,11 +25,6 @@ using namespace DirectX;
 
 namespace
 {
-    // Which entity the inspector is showing. Persisting it across frames is
-    // editor state, NOT scene data - it deliberately does not live in a
-    // component, because saving the scene should not save what was selected.
-    Entity g_selected;
-
     // The size range a click-placed mesh is clamped into, in world units.
     //
     // 20 is a quarter of the 80-unit floor and well inside the 200 far plane,
@@ -99,11 +95,8 @@ namespace
 
     // Order must match kComponents below - the static_assert catches drift,
     // but only in the count, so keep them side by side.
-    enum class Comp
-    {
-        Name, Transform, MeshRenderer, Camera, Light, Spin, ActiveCamera, Environment,
-        Count
-    };
+    using Comp    = EditorComponent;
+    using Command = EditorCommand;
 
     const ComponentOps kComponents[] = {
         MakeOps<Name>("Name"),
@@ -128,40 +121,18 @@ namespace
     // sliders write directly and only the buttons queue.
     // ---------------------------------------------------------------------
 
-    // --- scene file state (editor state, never saved with the scene) ---
-    std::filesystem::path g_scenePath;   // empty until saved or opened once
-    std::string           g_sceneStatus; // last save/load result, shown in the bar
-    bool                  g_openSaveAs = false;
-
-    struct Command
-    {
-        enum class Kind { Create, Destroy, Duplicate, AddComponent, RemoveComponent, Place,
-                          NewScene, LoadScene };
-
-        Kind   kind;
-        Entity target;
-        Comp   component = Comp::Count; // only for Add/RemoveComponent
-
-        // Place only.
-        DirectX::XMFLOAT3 position = { 0.0f, 0.0f, 0.0f };
-        MeshHandle        mesh;
-        TextureHandle     texture;
-        std::string       name;
-    };
-
-    std::vector<Command> g_commands;
-
-    void Queue(Command::Kind kind, Entity target, Comp component = Comp::Count)
+    void Queue(EditorSession& session, Command::Kind kind, Entity target,
+               Comp component = Comp::Count)
     {
         Command command;
         command.kind      = kind;
         command.target    = target;
         command.component = component;
-        g_commands.push_back(std::move(command));
+        session.commands.push_back(std::move(command));
     }
 
-    void QueuePlace(const XMFLOAT3& position, MeshHandle mesh, TextureHandle texture,
-                    const char* name)
+    void QueuePlace(EditorSession& session, const XMFLOAT3& position,
+                    MeshHandle mesh, TextureHandle texture, const char* name)
     {
         Command command;
         command.kind     = Command::Kind::Place;
@@ -169,20 +140,26 @@ namespace
         command.mesh     = mesh;
         command.texture  = texture;
         command.name     = name;
-        g_commands.push_back(std::move(command));
+        session.commands.push_back(std::move(command));
     }
 
-    void QueueScene(Command::Kind kind, const std::wstring& path = {})
+    void QueueScene(EditorSession& session, Command::Kind kind,
+                    const std::wstring& path = {})
     {
         Command command;
         command.kind = kind;
         command.name = ToUtf8(path);
-        g_commands.push_back(std::move(command));
+        session.commands.push_back(std::move(command));
     }
 
-    void ApplyCommands(World& world, ResourceManager& resources)
+    void ApplyCommands(World& world, ResourceManager& resources, EditorSession& session)
     {
-        for (const Command& command : g_commands)
+        // Move the batch out first. OnWorldReplaced can then clear the public
+        // queue without invalidating this iteration, and no command queued for
+        // an old World can survive into its replacement.
+        std::vector<Command> commands = std::move(session.commands);
+        session.commands.clear();
+        for (const Command& command : commands)
         {
             switch (command.kind)
             {
@@ -193,7 +170,7 @@ namespace
                 const Entity created = world.Create();
                 world.Add<Name>(created, { "New Entity" });
                 world.Add<Transform>(created);
-                g_selected = created;
+                session.selected = created;
                 break;
             }
 
@@ -221,7 +198,7 @@ namespace
                     std::snprintf(buffer, sizeof(buffer), "%s copy", name->value);
                     std::memcpy(name->value, buffer, sizeof(buffer));
                 }
-                g_selected = copy;
+                session.selected = copy;
                 break;
             }
 
@@ -229,9 +206,9 @@ namespace
                 world.Destroy(command.target);
                 // IsAlive would already report false thanks to the bumped
                 // generation; clearing it makes the intent explicit.
-                if (command.target == g_selected)
+                if (command.target == session.selected)
                 {
-                    g_selected = Entity{};
+                    session.selected = Entity{};
                 }
                 break;
 
@@ -287,7 +264,7 @@ namespace
                 renderer.material.texture = command.texture;
                 world.Add<MeshRenderer>(placed, renderer);
 
-                g_selected = placed;
+                session.selected = placed;
                 break;
             }
 
@@ -295,10 +272,10 @@ namespace
                 // Replacing the world invalidates every handle into it.
                 world = World{};
                 BuildEmptyScene(world);
-                g_selected    = Entity{};
-                g_scenePath.clear();
-                g_sceneStatus = "new scene";
-                break;
+                session.OnWorldReplaced();
+                session.scenePath.clear();
+                session.sceneStatus = "new scene";
+                return;
 
             case Command::Kind::LoadScene:
             {
@@ -308,15 +285,16 @@ namespace
                 if (LoadScene(path, resources, loaded, error))
                 {
                     world         = std::move(loaded);
-                    g_selected    = Entity{};
-                    g_scenePath   = path;
-                    g_sceneStatus = "opened " + ToUtf8(path.filename().wstring());
+                    session.OnWorldReplaced();
+                    session.scenePath   = path;
+                    session.sceneStatus = "opened " + ToUtf8(path.filename().wstring());
+                    return;
                 }
                 else
                 {
                     // The current scene is untouched - LoadScene built into
                     // a temporary and never got as far as swapping it in.
-                    g_sceneStatus = "open failed: " + error;
+                    session.sceneStatus = "open failed: " + error;
                 }
                 break;
             }
@@ -330,7 +308,6 @@ namespace
                 break;
             }
         }
-        g_commands.clear();
     }
 
     // ---------------------------------------------------------------------
@@ -364,7 +341,7 @@ namespace
         std::snprintf(out, size, "%s #%u", kind, entity.index);
     }
 
-    void DrawEntityList(World& world)
+    void DrawEntityList(World& world, EditorSession& session)
     {
         // FirstUseEver, not Always: this is only a starting layout. Once the
         // user drags a panel, imgui.ini remembers it and this stops applying.
@@ -376,22 +353,22 @@ namespace
             return;
         }
 
-        const bool hasSelection = world.IsAlive(g_selected);
+        const bool hasSelection = world.IsAlive(session.selected);
 
         if (ImGui::Button("New"))
         {
-            Queue(Command::Kind::Create, Entity{});
+            Queue(session, Command::Kind::Create, Entity{});
         }
         ImGui::SameLine();
         ImGui::BeginDisabled(!hasSelection);
         if (ImGui::Button("Duplicate"))
         {
-            Queue(Command::Kind::Duplicate, g_selected);
+            Queue(session, Command::Kind::Duplicate, session.selected);
         }
         ImGui::SameLine();
         if (ImGui::Button("Delete"))
         {
-            Queue(Command::Kind::Destroy, g_selected);
+            Queue(session, Command::Kind::Destroy, session.selected);
         }
         ImGui::EndDisabled();
 
@@ -405,9 +382,9 @@ namespace
             world.ForEachEntity([&](Entity entity) {
                 char label[96];
                 DescribeEntity(world, entity, label, sizeof(label));
-                if (ImGui::Selectable(label, g_selected == entity))
+                if (ImGui::Selectable(label, session.selected == entity))
                 {
-                    g_selected = entity;
+                    session.selected = entity;
                 }
                 ++count;
             });
@@ -420,19 +397,20 @@ namespace
 
     // A component header with ImGui's built-in close button. Returns true
     // when the body should be drawn; the X queues a removal.
-    bool ComponentHeader(const char* label, Comp type, Entity entity)
+    bool ComponentHeader(EditorSession& session, const char* label,
+                         Comp type, Entity entity)
     {
         bool keep = true;
         const bool open = ImGui::CollapsingHeader(label, &keep,
                                                   ImGuiTreeNodeFlags_DefaultOpen);
         if (!keep)
         {
-            Queue(Command::Kind::RemoveComponent, entity, type);
+            Queue(session, Command::Kind::RemoveComponent, entity, type);
         }
         return open;
     }
 
-    void DrawAddComponentMenu(World& world)
+    void DrawAddComponentMenu(World& world, EditorSession& session)
     {
         if (ImGui::Button("Add Component", ImVec2(-1.0f, 0.0f)))
         {
@@ -448,14 +426,14 @@ namespace
         {
             // Add is really "add or overwrite" in the storage, so offering a
             // type the entity already has would quietly reset its values.
-            if (kComponents[i].has(world, g_selected))
+            if (kComponents[i].has(world, session.selected))
             {
                 continue;
             }
             anyOffered = true;
             if (ImGui::Selectable(kComponents[i].name))
             {
-                Queue(Command::Kind::AddComponent, g_selected, Comp(i));
+                Queue(session, Command::Kind::AddComponent, session.selected, Comp(i));
             }
         }
         if (!anyOffered)
@@ -465,7 +443,8 @@ namespace
         ImGui::EndPopup();
     }
 
-    void DrawInspector(World& world, const ResourceManager& resources, AssetBrowser& assets)
+    void DrawInspector(World& world, const ResourceManager& resources,
+                       AssetBrowser& assets, EditorSession& session)
     {
         ImGui::SetNextWindowPos(ImVec2(1000, 20), ImGuiCond_FirstUseEver);
         ImGui::SetNextWindowSize(ImVec2(280, 500), ImGuiCond_FirstUseEver);
@@ -475,21 +454,22 @@ namespace
             return;
         }
 
-        if (!world.IsAlive(g_selected))
+        if (!world.IsAlive(session.selected))
         {
             ImGui::TextDisabled("Nothing selected.");
             ImGui::End();
             return;
         }
 
-        ImGui::Text("Entity #%u  (generation %u)", g_selected.index, g_selected.generation);
+        ImGui::Text("Entity #%u  (generation %u)",
+                    session.selected.index, session.selected.generation);
         ImGui::Separator();
 
         // The inspector is written per component type. Adding a component to
         // the engine means adding a block here - no central switch to extend.
-        if (Name* name = world.Get<Name>(g_selected))
+        if (Name* name = world.Get<Name>(session.selected))
         {
-            if (ComponentHeader("Name", Comp::Name, g_selected))
+            if (ComponentHeader(session, "Name", Comp::Name, session.selected))
             {
                 // Writes straight into the component's buffer. Safe because
                 // structural edits are deferred - nothing can move this
@@ -498,9 +478,9 @@ namespace
             }
         }
 
-        if (Transform* transform = world.Get<Transform>(g_selected))
+        if (Transform* transform = world.Get<Transform>(session.selected))
         {
-            if (ComponentHeader("Transform", Comp::Transform, g_selected))
+            if (ComponentHeader(session, "Transform", Comp::Transform, session.selected))
             {
                 ImGui::DragFloat3("Position", &transform->position.x, 0.1f);
                 ImGui::DragFloat3("Rotation", &transform->rotation.x, 0.01f);
@@ -519,9 +499,10 @@ namespace
             }
         }
 
-        if (MeshRenderer* renderer = world.Get<MeshRenderer>(g_selected))
+        if (MeshRenderer* renderer = world.Get<MeshRenderer>(session.selected))
         {
-            if (ComponentHeader("Mesh Renderer", Comp::MeshRenderer, g_selected))
+            if (ComponentHeader(session, "Mesh Renderer", Comp::MeshRenderer,
+                                session.selected))
             {
                 // A freshly added MeshRenderer has no mesh and draws
                 // nothing until one is assigned from the browser.
@@ -561,7 +542,7 @@ namespace
                 ImGui::BeginDisabled(!renderer->mesh.IsValid());
                 if (ImGui::Button("Fit"))
                 {
-                    if (Transform* transform = world.Get<Transform>(g_selected))
+                    if (Transform* transform = world.Get<Transform>(session.selected))
                     {
                         const Aabb& bounds = resources.GetMesh(renderer->mesh).bounds;
                         if (!bounds.IsEmpty())
@@ -638,9 +619,9 @@ namespace
             }
         }
 
-        if (CameraComponent* lens = world.Get<CameraComponent>(g_selected))
+        if (CameraComponent* lens = world.Get<CameraComponent>(session.selected))
         {
-            if (ComponentHeader("Camera", Comp::Camera, g_selected))
+            if (ComponentHeader(session, "Camera", Comp::Camera, session.selected))
             {
                 ImGui::SliderAngle("FOV", &lens->fovY, 10.0f, 150.0f);
                 ImGui::DragFloat("Near", &lens->nearZ, 0.01f, 0.01f, 10.0f);
@@ -648,9 +629,9 @@ namespace
             }
         }
 
-        if (Light* light = world.Get<Light>(g_selected))
+        if (Light* light = world.Get<Light>(session.selected))
         {
-            if (ComponentHeader("Light", Comp::Light, g_selected))
+            if (ComponentHeader(session, "Light", Comp::Light, session.selected))
             {
                 int type = int(light->type);
                 if (ImGui::Combo("Type", &type, "Directional\0Point\0"))
@@ -669,25 +650,27 @@ namespace
             }
         }
 
-        if (Spin* spin = world.Get<Spin>(g_selected))
+        if (Spin* spin = world.Get<Spin>(session.selected))
         {
-            if (ComponentHeader("Spin", Comp::Spin, g_selected))
+            if (ComponentHeader(session, "Spin", Comp::Spin, session.selected))
             {
                 ImGui::DragFloat("Speed", &spin->speed, 0.05f, -5.0f, 5.0f);
             }
         }
 
-        if (world.Has<ActiveCamera>(g_selected))
+        if (world.Has<ActiveCamera>(session.selected))
         {
-            if (ComponentHeader("Active Camera", Comp::ActiveCamera, g_selected))
+            if (ComponentHeader(session, "Active Camera", Comp::ActiveCamera,
+                                session.selected))
             {
                 ImGui::TextDisabled("A tag: no data, just a type.");
             }
         }
 
-        if (Environment* environment = world.Get<Environment>(g_selected))
+        if (Environment* environment = world.Get<Environment>(session.selected))
         {
-            if (ComponentHeader("Environment", Comp::Environment, g_selected))
+            if (ComponentHeader(session, "Environment", Comp::Environment,
+                                session.selected))
             {
                 ImGui::ColorEdit3("Ambient", &environment->ambient.x);
 
@@ -722,7 +705,7 @@ namespace
         }
 
         ImGui::Separator();
-        DrawAddComponentMenu(world);
+        DrawAddComponentMenu(world, session);
 
         ImGui::End();
     }
@@ -730,21 +713,22 @@ namespace
     // Saving is the one action that does NOT go through the command queue:
     // it only reads the world, so there is nothing to defer.
     void SaveTo(World& world, const ResourceManager& resources,
-                const std::filesystem::path& path)
+                const std::filesystem::path& path, EditorSession& session)
     {
         std::string error;
         if (SaveScene(world, resources, path, error))
         {
-            g_scenePath   = path;
-            g_sceneStatus = "saved " + ToUtf8(path.filename().wstring());
+            session.scenePath   = path;
+            session.sceneStatus = "saved " + ToUtf8(path.filename().wstring());
         }
         else
         {
-            g_sceneStatus = "save failed: " + error;
+            session.sceneStatus = "save failed: " + error;
         }
     }
 
-    void DrawMainMenuBar(World& world, ResourceManager& resources)
+    void DrawMainMenuBar(World& world, ResourceManager& resources,
+                         EditorSession& session)
     {
         if (!ImGui::BeginMainMenuBar())
         {
@@ -755,7 +739,7 @@ namespace
         {
             if (ImGui::MenuItem("New"))
             {
-                QueueScene(Command::Kind::NewScene);
+                QueueScene(session, Command::Kind::NewScene);
             }
 
             // Scanned while the menu is open rather than cached: a folder
@@ -780,7 +764,8 @@ namespace
                         const std::string label = ToUtf8(item.path().filename().wstring());
                         if (ImGui::MenuItem(label.c_str()))
                         {
-                            QueueScene(Command::Kind::LoadScene, item.path().wstring());
+                            QueueScene(session, Command::Kind::LoadScene,
+                                       item.path().wstring());
                         }
                     }
                 }
@@ -795,20 +780,20 @@ namespace
             // otherwise it would silently do nothing on a brand new scene.
             if (ImGui::MenuItem("Save", nullptr, false))
             {
-                if (g_scenePath.empty()) { g_openSaveAs = true; }
-                else                     { SaveTo(world, resources, g_scenePath); }
+                if (session.scenePath.empty()) { session.openSaveAs = true; }
+                else { SaveTo(world, resources, session.scenePath, session); }
             }
             if (ImGui::MenuItem("Save As..."))
             {
-                g_openSaveAs = true;
+                session.openSaveAs = true;
             }
             ImGui::EndMenu();
         }
 
-        if (!g_sceneStatus.empty())
+        if (!session.sceneStatus.empty())
         {
             ImGui::Separator();
-            ImGui::TextDisabled("%s", g_sceneStatus.c_str());
+            ImGui::TextDisabled("%s", session.sceneStatus.c_str());
         }
 
         ImGui::EndMainMenuBar();
@@ -816,12 +801,13 @@ namespace
 
     // A modal rather than a Win32 file dialog: the scenes folder is a known
     // place, so a name is all that is missing.
-    void DrawSaveAsPopup(World& world, const ResourceManager& resources)
+    void DrawSaveAsPopup(World& world, const ResourceManager& resources,
+                         EditorSession& session)
     {
-        if (g_openSaveAs)
+        if (session.openSaveAs)
         {
             ImGui::OpenPopup("Save Scene As");
-            g_openSaveAs = false;
+            session.openSaveAs = false;
         }
 
         // Centred, because a modal that appears under the cursor is easy to
@@ -835,11 +821,12 @@ namespace
             return;
         }
 
-        static char name[64] = "MyScene";
         ImGui::TextDisabled("Assets/Scenes/");
         ImGui::SameLine();
         ImGui::SetNextItemWidth(200.0f);
-        const bool entered = ImGui::InputText("##scenename", name, sizeof(name),
+        char* name = session.saveAsName.data();
+        const bool entered = ImGui::InputText("##scenename", name,
+                                              session.saveAsName.size(),
                                               ImGuiInputTextFlags_EnterReturnsTrue);
         ImGui::SameLine();
         ImGui::TextDisabled(".scene");
@@ -873,7 +860,7 @@ namespace
 
         if (confirmed)
         {
-            SaveTo(world, resources, GetSceneDir() / (ToWide(name) + L".scene"));
+            SaveTo(world, resources, GetSceneDir() / (ToWide(name) + L".scene"), session);
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();
@@ -889,7 +876,8 @@ namespace
     // imageMin is the image's top-left in SCREEN coordinates and imageSize
     // its size - the panel's, not the window's and not the render target's.
     void HandleViewportClick(World& world, ResourceManager& resources,
-                             AssetBrowser& assets, const DebugUIContext& ui,
+                             AssetBrowser& assets, EditorSession& session,
+                             const DebugUIContext& ui,
                              const ImVec2& imageMin, const ImVec2& imageSize)
     {
         // IsItemHovered, not IsWindowHovered: the title bar and the resize
@@ -925,7 +913,8 @@ namespace
             // shape - so unlike Create/Destroy it can be applied right here.
             // The panels drawn after this one pick it up the same frame.
             Entity picked;
-            g_selected = PickEntity(world, resources, ray, picked) ? picked : Entity{};
+            session.selected =
+                PickEntity(world, resources, ray, picked) ? picked : Entity{};
             return;
         }
 
@@ -943,14 +932,15 @@ namespace
             name.erase(dot);
         }
 
-        QueuePlace(hit, assets.SelectedMesh(), assets.SelectedTexture(), name.c_str());
+        QueuePlace(session, hit, assets.SelectedMesh(), assets.SelectedTexture(), name.c_str());
     }
 
     // The scene, as a texture inside a window. Everything about this panel is
     // driven by the size ImGui gives it - the renderer follows the panel, not
     // the other way round.
     void DrawSceneViewport(World& world, ResourceManager& resources,
-                           AssetBrowser& assets, DebugUIContext& ui)
+                           AssetBrowser& assets, EditorSession& session,
+                           DebugUIContext& ui)
     {
         // No padding: the image should reach the window border, the way every
         // editor's viewport does.
@@ -984,7 +974,7 @@ namespace
             // stretched for that one frame, then matches again.
             ImGui::Image(ImTextureID(ui.sceneTexture), size);
 
-            HandleViewportClick(world, resources, assets, ui, imageMin, size);
+            HandleViewportClick(world, resources, assets, session, ui, imageMin, size);
         }
 
         ui.viewportHovered = ImGui::IsWindowHovered();
@@ -1109,11 +1099,11 @@ namespace
 }
 
 void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
-                 DebugUIContext& ui)
+                 EditorSession& session, DebugUIContext& ui)
 {
     // Before the dock space, which sizes itself around the menu bar.
-    DrawMainMenuBar(world, resources);
-    DrawSaveAsPopup(world, resources);
+    DrawMainMenuBar(world, resources, session);
+    DrawSaveAsPopup(world, resources, session);
 
     // A full-window dock space so the panels can be rearranged and docked.
     ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
@@ -1123,14 +1113,14 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
     world.ForEachEntity([&](Entity) { ++entityCount; });
 
     // Before DrawStats, which reports the size this panel just asked for.
-    DrawSceneViewport(world, resources, assets, ui);
+    DrawSceneViewport(world, resources, assets, session, ui);
     DrawStats(ui, entityCount);
-    DrawEntityList(world);
-    DrawInspector(world, resources, assets);
+    DrawEntityList(world, session);
+    DrawInspector(world, resources, assets, session);
     DrawShadowDebug(ui);
     assets.Draw();
 
     // Every panel has finished iterating, so it is finally safe to change
     // the shape of the world - or to replace it entirely.
-    ApplyCommands(world, resources);
+    ApplyCommands(world, resources, session);
 }

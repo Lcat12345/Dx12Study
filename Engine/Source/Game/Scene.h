@@ -24,6 +24,7 @@
 #include "Graphics/ResourceManager.h"
 
 #include <filesystem>
+#include <iosfwd>
 #include <string>
 
 // Bumped whenever the format changes. Old files stay readable only if
@@ -40,6 +41,22 @@
 // defaults is the correct interpretation. Only a file from the FUTURE is
 // refused, because there is no way to guess what it contains.
 constexpr int kSceneVersion = 5;
+
+// Path-independent serializer/parser shared by disk files and in-memory play
+// snapshots. The core owns the text-format policy (classic locale and float
+// precision); callers only supply storage.
+bool SerializeScene(std::ostream& out, World& world,
+                    const ResourceManager& resources, std::string& outError);
+bool DeserializeScene(std::istream& in, ResourceManager& resources,
+                      World& outWorld, std::string& outError);
+
+// Convenience wrappers for the editor's transactional Play/Stop snapshot.
+// ResourceManager is deliberately shared rather than copied: asset handles
+// are written as logical names and resolved against the same cache on load.
+bool CaptureSceneSnapshot(World& world, const ResourceManager& resources,
+                          std::string& outSnapshot, std::string& outError);
+bool RestoreSceneSnapshot(const std::string& snapshot, ResourceManager& resources,
+                          World& outWorld, std::string& outError);
 
 // Writes every live entity, in index order so that saving the same scene
 // twice produces the same bytes.

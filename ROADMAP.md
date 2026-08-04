@@ -278,19 +278,39 @@ Dx12Engine/                  # 저장소 루트
 
 지금까지 Engine/Game 경계는 만들었지만 **에디터/게임 경계는 없다** — 현재 실행 파일은 DemoGame이 곧 에디터다. 에디터 뷰포트로 씬을 보는 것과 게임을 플레이하는 것은 다른 일이고, 이 단계가 그 경계를 만든다. (에디터만으로 게임을 테스트하는 것은 개발 중의 편의이지 최종 형태가 아니다.)
 
-- [ ] 시스템 구분: 항상 도는 것(에디터에서도) vs **플레이 중에만 도는 것**. 지금 Spin이 에디터에서도 도는 것이 이 구분이 아직 없다는 증거다
-- [ ] 에디터 카메라 / 게임 카메라 분리 — 플레이 중에는 씬의 ActiveCamera가 화면을 갖고, 에디터 카메라는 편집 전용이 된다
-- [ ] Play/Stop 토글: Play 시 World를 메모리에 직렬화(10.5 씬 포맷 재사용), Stop 시 복원. "플레이 중의 편집은 Stop과 함께 사라진다"까지가 사양이다 — 스냅샷 복원의 자연스러운 결과
-- [ ] Renderer에 게임 전용 프레젠테이션 경로: 씬을 오프스크린 RT가 아니라 **백버퍼에 직접** (10.1 이전 경로의 부활 — 이번에는 선택 가능한 모드로)
-- [ ] Engine을 정적 라이브러리로 분리 → Editor / Player 두 실행 파일 프로젝트
-- [ ] Player: 커맨드라인 인자로 `.scene`을 받아 로드, 게임 시스템만 등록, ImGui 미포함
+> 📄 **세부 계획: [docs/Phase12-Plan.md](docs/Phase12-Plan.md)** — 아래 항목을
+> 8개 단계(12.0~12.7)로 쪼갠 실행 계획. 실행 모드, 링크 경계, presentation,
+> 리소스 패키징, 저장소 독립 검증 기준 포함.
+
+시스템의 실행 조건만 나누는 것으로는 충분하지 않다. **분류는 곧 빌드·링크·패키징
+경계**여야 하며, 배포용 Player에는 Editor-only 코드와 ImGui가 들어가지 않아야 한다.
+목표 산출물 구조는 다음과 같다.
+
+| 산출물 | 책임 | 의존성 규칙 |
+|--------|------|-------------|
+| `Engine.lib` | Win32 루프, ECS 기반, 렌더러, 리소스·저수준 런타임 | Game·Editor·ImGui를 모름 |
+| `Game.lib` | 공유 Component, 씬 포맷, Always/Play-only 시스템, 데모 게임 규칙 | Engine에만 의존, Editor·ImGui를 모름 |
+| `Editor.exe` | Editor-only 시스템, 편집 카메라, 선택·Inspector·Asset Browser, Play/Stop UI | Engine + Game + ImGui |
+| `Player.exe` | 시작 Scene 로드, 게임 입력·시스템 실행, swap-chain presentation | Engine + Game, Editor·ImGui 링크 금지 |
+
+- [ ] 시스템을 **Always / Editor-only / Play-only** 세 종류로 분류하고 등록·실행 경로를 분리한다. 지금 Spin이 에디터에서도 도는 것이 이 구분이 아직 없다는 증거다. Editor-only 소스는 실행 조건으로만 끄는 것이 아니라 Player 프로젝트의 컴파일·링크 입력에서 제외한다
+- [ ] 에디터 카메라 / 게임 카메라 분리 — Edit에서는 World 밖의 EditorCamera, Editor Play와 Player에서는 씬의 ActiveCamera가 화면을 갖는다
+- [ ] 플레이 전용 시간과 입력 컨텍스트 분리 — Play 시작 시 게임 시간을 0으로 초기화하고, Stop/Pause 중에는 Play-only 시스템의 시간과 입력이 진행되지 않는다
+- [ ] 씬 직렬화를 파일 경로와 분리해 메모리 stream/string에서도 같은 포맷을 읽고 쓸 수 있게 한다
+- [ ] Play/Stop 토글: Play 시 World를 메모리에 직렬화하고 Stop 시 복원한다. "플레이 중의 편집은 Stop과 함께 사라진다"까지가 사양이다. World 교체와 함께 선택 Entity·대기 중인 편집 명령 등 Editor-only 임시 상태도 안전하게 초기화한다
+- [ ] Renderer의 scene pass와 presentation을 분리한다. Editor는 offscreen RT → ImGui viewport, Player 1x는 swap-chain back buffer 직접 렌더, Player 4x는 MSAA 임시 target → back buffer resolve를 사용한다. shadow/opaque/skybox/transparent 순서는 공유한다
+- [ ] 프로젝트를 `Engine.lib + Game.lib + Editor.exe + Player.exe`로 분리하고 프로젝트 참조 방향을 위 표대로 고정한다. Renderer/Engine의 ImGui 초기화와 overlay pass는 Editor 쪽 어댑터로 분리해 Player 링크에서 ImGui 구현과 심볼이 사라지게 한다
+- [ ] Player 시작 Scene 지정 — 커맨드라인의 명시적 `.scene` 경로(예: `--scene Assets/Scenes/Demo.scene`)를 우선하고, 인자가 없을 때 사용할 패키지 기본 Scene 정책을 정한다
+- [ ] 리소스 루트를 **실행 파일 위치 기준**으로 바꾼다. 개발 저장소 탐색은 Editor/개발 빌드의 fallback일 뿐이며 Player 배포 경로의 전제가 되어서는 안 된다
+- [ ] 패키징 단계에서 `Player.exe`, `Assets/`, 컴파일된 `Shaders/`, 필요한 비시스템 DLL과 시작 Scene을 하나의 staging 폴더로 복사한다. Player는 런타임 HLSL 소스 컴파일이나 `Dx12Engine.slnx` 탐색 없이 동작해야 한다
 - [ ] 작은 데모 게임 하나 (WASD 이동 + 간단한 상호작용 규칙) — 런타임의 검증 기준은 "돌아간다"가 아니라 "논다"
+- [ ] 독립 배포 검증 — 새 빈 폴더에 staging 결과만 복사하고 저장소·솔루션·소스·개발 경로를 찾을 수 없는 상태에서 지정 Scene으로 실행한다. 가능하면 개발 도구가 없는 다른 PC에서도 같은 패키지를 검증한다
 
 **선행 조건**: 10.5 씬 저장/불러오기 (Player가 로드할 파일 포맷이자 Play/Stop 스냅샷 수단). Phase 11과는 독립이므로, 원하면 11보다 먼저 진행해도 된다.
 
-**핵심 개념**: 에디터/런타임 분리(에셋과 씬은 같고 실행 형태만 다르다), 시뮬레이션 상태의 스냅샷/복원, 하나의 렌더러가 두 프레젠테이션 경로를 갖는 구조, 에디터 전용 코드가 게임 바이너리에 끌려 들어가지 않게 하는 링크 단위 설계
+**핵심 개념**: 에디터/런타임 분리(에셋과 씬은 같고 실행 형태만 다르다), 시뮬레이션 상태의 스냅샷/복원, 하나의 렌더러가 두 프레젠테이션 경로를 갖는 구조, 실행 조건 분리와 링크 단위 분리의 차이, 실행 파일 기준 리소스 탐색과 재현 가능한 패키징
 
-**완료 기준**: 에디터에서 Play로 즉석 확인하고, 같은 씬을 Player 단독 실행으로 플레이한다. 빌드 결과물만 복사한(에디터 없는) 환경에서도 게임이 돈다. **여기서 `v1.3` 태그.**
+**완료 기준**: 에디터에서 Play로 즉석 확인하고 같은 씬을 Player 단독 실행으로 플레이한다. `Player.exe`와 런타임 리소스만 새 빈 폴더 또는 다른 PC로 복사한 뒤, 솔루션·소스·저장소 구조·개발 머신 절대 경로 없이 시작 Scene을 정상 로드해 플레이할 수 있다. Player 바이너리에는 Editor-only 코드와 ImGui가 링크되지 않는다. **여기서 `v1.3` 태그.**
 
 ---
 

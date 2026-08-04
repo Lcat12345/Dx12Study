@@ -4,6 +4,7 @@
 #include "Core/Engine.h"
 #include "Core/World.h"
 #include "Game/AssetBrowser.h"
+#include "Game/EditorSession.h"
 #include "Graphics/RenderData.h"
 
 #include <memory>
@@ -23,6 +24,7 @@ protected:
 
 private:
     World m_world;
+    EditorSession m_editor;
 
     // Created in OnInit, not the constructor: it needs the renderer's
     // ResourceManager, which does not exist until the base class has
