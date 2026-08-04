@@ -36,6 +36,9 @@
     <RuntimeContentProject>true</RuntimeContentProject>
   </PropertyGroup>
   <Import Project="BuildSettings.props" />
+  <PropertyGroup>
+    <PlayerPackageDir>$([MSBuild]::NormalizeDirectory('$(OutDir)..\PlayerPackage'))</PlayerPackageDir>
+  </PropertyGroup>
   <ItemDefinitionGroup>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -43,6 +46,7 @@
       <GenerateMapFile>true</GenerateMapFile>
       <MapFileName>$(OutDir)Player.map</MapFileName>
       <AdditionalDependencies>Shell32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions Condition="'$(Configuration)'=='Release'">/PDBALTPATH:%_PDB% %(AdditionalOptions)</AdditionalOptions>
     </Link>
     <Manifest>
       <EnableSegmentHeap>true</EnableSegmentHeap>
@@ -65,5 +69,10 @@
       <Project>{4B97D56C-5AD0-4D9F-AF18-858566940D19}</Project>
     </ProjectReference>
   </ItemGroup>
+  <Target Name="StagePlayerPackage"
+          Condition="'$(Configuration)'=='Release' and '$(DesignTimeBuild)'!='true'"
+          AfterTargets="CopyRuntimeContent">
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Tests\StagePlayerPackage.ps1&quot; -Configuration &quot;$(Configuration)&quot; -PlayerOutputDir &quot;$(OutDir).&quot; -AssetSourceDir &quot;$(MSBuildThisFileDirectory)Assets&quot; -PackageDir &quot;$(PlayerPackageDir).&quot; -DefaultScene &quot;$(DefaultPlayerScene)&quot; -RepoRoot &quot;$(MSBuildThisFileDirectory)..&quot;" />
+  </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

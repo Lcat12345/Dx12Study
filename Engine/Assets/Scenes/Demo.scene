@@ -31,4 +31,4 @@ entity
   light point 1 0.45 0.18 25
 entity
   name "Environment"
-  environment 0.14 0.16 0.22 skybox "ColdSunset" shadow 1 0.001 0.85
+  environment 0.14 0.16 0.22 skybox "Test" shadow 1 0.001 0.85

@@ -198,7 +198,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 | 12.4 | 완료 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
 | 12.5 | 완료 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
 | 12.6 | 완료 | Player 시작 Scene + 데모 게임 | CLI, runtime bootstrap, 상호작용 | 중 | - |
-| 12.7 | 대기 | staging 패키지 + 독립 실행 검증 | 재현 가능한 배포, binary audit | 중 | v1.3 |
+| 12.7 | 완료 | staging 패키지 + 독립 실행 검증 | 재현 가능한 배포, binary audit | 중 | v1.3 |
 
 의존성 때문에 순서를 바꾸지 않는다. 특히 12.3의 ImGui 결합 제거 없이 12.4에서
 프로젝트부터 쪼개면 `Engine.lib`의 Renderer object file이 ImGui 심볼을 참조해
@@ -825,19 +825,19 @@ Output/x64/Release/PlayerPackage/
 
 #### 작업 항목
 
-- [ ] Player Release build 뒤 staging을 만드는 MSBuild target 또는 명시적 build script
-- [ ] 이전 staging의 stale file이 남지 않는 clean/recreate 정책
-- [ ] `Player.exe`, Assets, `.cso`, 필요한 DLL, 기본 Scene 자동 복사
-- [ ] package manifest 생성
-- [ ] 금지 파일 검사: `.slnx`, `.vcxproj`, `.cpp`, `.h`, `.hlsl`, ImGui ini/source
-- [ ] Player link map/symbol 검사로 Editor/ImGui 부재 재확인
-- [ ] 새 빈 임시 폴더에 staging 내용만 복사
-- [ ] working directory를 package 밖으로 둔 상태에서 Player 실행
-- [ ] repo 경로를 탐색하지 않았음을 runtime path log로 확인
-- [ ] 기본 Scene과 `--scene` 지정 Scene 각각 실행
-- [ ] 1x/4x, resize, 입력, 상호작용, 종료 코드 검증
+- [x] Player Release build 뒤 staging을 만드는 MSBuild target 또는 명시적 build script
+- [x] 이전 staging의 stale file이 남지 않는 clean/recreate 정책
+- [x] `Player.exe`, Assets, `.cso`, 필요한 DLL, 기본 Scene 자동 복사
+- [x] package manifest 생성
+- [x] 금지 파일 검사: `.slnx`, `.vcxproj`, `.cpp`, `.h`, `.hlsl`, ImGui ini/source
+- [x] Player link map/symbol 검사로 Editor/ImGui 부재 재확인
+- [x] 새 빈 임시 폴더에 staging 내용만 복사
+- [x] working directory를 package 밖으로 둔 상태에서 Player 실행
+- [x] repo 경로를 탐색하지 않았음을 runtime path log로 확인
+- [x] 기본 Scene과 `--scene` 지정 Scene 각각 실행
+- [x] 1x/4x, resize, 입력, 상호작용, 종료 코드 검증
 - [ ] 가능하면 Visual Studio와 저장소가 없는 다른 PC에서 같은 zip/package 실행
-- [ ] 결과와 package 크기, 포함 DLL 정책을 계획서의 결과 섹션에 기록
+- [x] 결과와 package 크기, 포함 DLL 정책을 계획서의 결과 섹션에 기록
 
 #### 독립성 검증 절차
 
@@ -878,6 +878,24 @@ Output/x64/Release/PlayerPackage/
 **완료 기준**: `Player.exe`와 runtime resource만 들어 있는 package를 새 빈 폴더 또는
 다른 PC로 복사한 뒤, 솔루션·소스·저장소 구조·개발 머신 절대 경로 없이 정상 시작하고
 플레이하며 종료한다. **여기서 `v1.3` 태그.**
+
+#### 구현 결과 (2026-08-04)
+
+- Release Player 빌드 뒤 `StagePlayerPackage` MSBuild target이 이전 staging을 지우고
+  `Output/x64/Release/PlayerPackage`를 다시 만든다. manifest에는 configuration, platform,
+  commit, source state, 기본 Scene, DLL 정책, 정렬된 파일 목록만 기록한다.
+- staging은 source/project/HLSL/ImGui 파일과 Player link map의 Editor/ImGui symbol을
+  거부한다. Release는 static CRT이며 binary dependency는 Windows system DLL 6개뿐이라
+  package에 별도 DLL이 없다.
+- 검증 스크립트가 package 내용만 시스템 임시 폴더로 복사하고 별도 working directory에서
+  기본 `Demo.scene`과 `--scene Assets/Scenes/ShadowA.scene`을 실행했다. runtime log는 두
+  실행 모두 임시 package root만 가리켰고 resize, E 상호작용, 1x/4x 전환 뒤 exit code 0이었다.
+- Release x64 전체 빌드는 경고 0, 오류 0, Engine tests 25/25와 project/link boundary 검사가
+  통과했다. 현재 local package는 40 files, 51.60 MiB다. 다른 PC 검증은 수행하지 않았다.
+
+세부 package 계약과 검증 절차는
+[`Engine/Docs/Phase12.7-PlayerPackage.md`](../Engine/Docs/Phase12.7-PlayerPackage.md)에
+기록했다.
 
 ---
 
@@ -924,13 +942,13 @@ Phase 12는 실행 파일과 배포 경계를 만들지만, 아래 주제를 자
 
 ### 실행 의미
 
-- [ ] Edit / Play / Player 세 모드의 카메라와 시스템 표가 실제 코드와 일치
-- [ ] Edit 중 Spin, LightOrbit, 게임 입력이 Scene 상태를 변경하지 않음
-- [ ] EditorCamera가 Scene 저장 데이터 밖에 존재
-- [ ] Play 진입마다 play elapsed time이 0부터 시작
-- [ ] Play 중 변경이 Stop과 함께 모두 폐기
-- [ ] Stop 복원 뒤 선택 Entity와 pending editor command가 안전하게 초기화
-- [ ] 파일 저장과 Play snapshot이 같은 scene serializer 사용
+- [x] Edit / Play / Player 세 모드의 카메라와 시스템 표가 실제 코드와 일치
+- [x] Edit 중 Spin, LightOrbit, 게임 입력이 Scene 상태를 변경하지 않음
+- [x] EditorCamera가 Scene 저장 데이터 밖에 존재
+- [x] Play 진입마다 play elapsed time이 0부터 시작
+- [x] Play 중 변경이 Stop과 함께 모두 폐기
+- [x] Stop 복원 뒤 선택 Entity와 pending editor command가 안전하게 초기화
+- [x] 파일 저장과 Play snapshot이 같은 scene serializer 사용
 
 ### 렌더링
 
@@ -939,7 +957,7 @@ Phase 12는 실행 파일과 배포 경계를 만들지만, 아래 주제를 자
 - [x] Player 4x용 경로는 MSAA colour/depth에서 back buffer로 resolve
 - [x] shadow → opaque → skybox → transparent 순서가 두 presentation에서 공유
 - [x] resize와 1x↔4x 전환 후 Debug Layer 경고·오류 0
-- [ ] Phase 11 skybox, normal mapping, shadow, transparency가 Player에서도 유지
+- [x] Phase 11 skybox, normal mapping, shadow, transparency가 Player에서도 유지
 
 ### 빌드·링크 경계
 
@@ -957,9 +975,9 @@ Phase 12는 실행 파일과 배포 경계를 만들지만, 아래 주제를 자
 - [x] Player가 `Dx12Engine.slnx`와 개발 저장소를 탐색하지 않음
 - [x] 모든 runtime shader가 build-time compiled `.cso`
 - [x] Player runtime output에 HLSL/source/project 파일이 없음
-- [ ] Assets, compiled Shaders, 필요한 DLL, 기본 Scene이 자동 staging됨
-- [ ] `--scene`과 기본 Scene 시작 모두 정상
-- [ ] 새 빈 저장소 밖 폴더에서 package만으로 실행·플레이·종료 코드 0
+- [x] Assets, compiled Shaders, 필요한 DLL, 기본 Scene이 자동 staging됨
+- [x] `--scene`과 기본 Scene 시작 모두 정상
+- [x] 새 빈 저장소 밖 폴더에서 package만으로 실행·플레이·종료 코드 0
 - [ ] 가능하면 개발 도구가 없는 다른 PC에서 같은 package 검증
 
 ROADMAP 완료 기준인 다음 문장을 그대로 만족해야 한다.

@@ -51,6 +51,10 @@ void PlayerApp::OnUpdate(float dt)
     {
         GetRenderer().SetVSync(!GetRenderer().IsVSync());
     }
+    if (frame.input.WasPressed('M'))
+    {
+        GetRenderer().SetMsaaEnabled(!GetRenderer().IsMsaaEnabled());
+    }
 }
 
 FrameContext PlayerApp::CaptureHostFrame(float dt)

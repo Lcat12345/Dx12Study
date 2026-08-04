@@ -1,11 +1,40 @@
 #include "Player/PlayerApp.h"
 #include "Player/PlayerStartup.h"
+#include "Core/TextEncoding.h"
 
 #include <Windows.h>
 #include <shellapi.h>
 #include <objbase.h>
+#include <filesystem>
+#include <fstream>
 #include <stdexcept>
 #include <vector>
+
+namespace
+{
+    void WriteRuntimePathLogIfRequested(const std::wstring& pathLog)
+    {
+        constexpr wchar_t variable[] = L"DX12ENGINE_RUNTIME_PATH_LOG";
+        const DWORD required = GetEnvironmentVariableW(variable, nullptr, 0);
+        if (required <= 1)
+        {
+            return;
+        }
+
+        std::vector<wchar_t> buffer(required);
+        if (GetEnvironmentVariableW(variable, buffer.data(), required) == 0)
+        {
+            return;
+        }
+
+        std::ofstream stream(std::filesystem::path(buffer.data()),
+                             std::ios::binary | std::ios::trunc);
+        if (stream)
+        {
+            stream << ToUtf8(pathLog);
+        }
+    }
+}
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                       _In_opt_ HINSTANCE hPrevInstance,
@@ -52,6 +81,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                                      paths.shaderDir.wstring() + L"\nScene: " +
                                      startup.scenePath.wstring() + L"\n";
         OutputDebugStringW(pathLog.c_str());
+        WriteRuntimePathLogIfRequested(pathLog);
 
         const std::wstring title = L"Dx12Engine Player - " +
                                    startup.scenePath.filename().wstring();
