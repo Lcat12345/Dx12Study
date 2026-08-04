@@ -1,6 +1,5 @@
 #include "Loaders/ObjLoader.h"
 
-#include "Core/Common.h"
 #include "Core/TextEncoding.h"
 
 #include <fstream>
@@ -150,7 +149,8 @@ namespace
     // takes. Empty when nothing matches - the caller falls back to the
     // MeshRenderer's own texture rather than failing the whole model.
     std::wstring ResolveMtlTexture(const std::wstring& declared,
-                                   const std::filesystem::path& objPath)
+                                   const std::filesystem::path& objPath,
+                                   const std::filesystem::path& assetRoot)
     {
         if (declared.empty())
         {
@@ -176,7 +176,7 @@ namespace
             if (std::filesystem::is_regular_file(full, error) && !error)
             {
                 const std::filesystem::path relative =
-                    std::filesystem::relative(full, GetAssetDir(), error);
+                    std::filesystem::relative(full, assetRoot, error);
                 return error ? std::wstring() : relative.wstring();
             }
         }
@@ -189,7 +189,8 @@ namespace
     // takes from the MeshRenderer instead, and pulling them from the file
     // would silently override what the editor shows.
     std::unordered_map<std::wstring, std::wstring> LoadMtlTextures(
-        const std::filesystem::path& mtlPath, const std::filesystem::path& objPath)
+        const std::filesystem::path& mtlPath, const std::filesystem::path& objPath,
+        const std::filesystem::path& assetRoot)
     {
         std::unordered_map<std::wstring, std::wstring> textures;
 
@@ -227,14 +228,15 @@ namespace
                 {
                     value.pop_back();
                 }
-                textures[current] = ResolveMtlTexture(ToWide(value), objPath);
+                textures[current] = ResolveMtlTexture(ToWide(value), objPath, assetRoot);
             }
         }
         return textures;
     }
 }
 
-MeshData LoadObj(const std::filesystem::path& path)
+MeshData LoadObj(const std::filesystem::path& path,
+                 const std::filesystem::path& assetRoot)
 {
     if (!std::filesystem::exists(path))
     {
@@ -379,7 +381,8 @@ MeshData LoadObj(const std::filesystem::path& path)
             }
             // Beside the .obj, not under Assets/ - a downloaded model keeps
             // its pieces together.
-            materialTextures = LoadMtlTextures(path.parent_path() / ToWide(name), path);
+            materialTextures = LoadMtlTextures(path.parent_path() / ToWide(name),
+                                               path, assetRoot);
         }
         else if (tag == "usemtl")
         {

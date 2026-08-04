@@ -7,17 +7,17 @@
 #include "Graphics/SwapChain.h"
 #include "Loaders/ObjLoader.h"
 
-#include <d3dcompiler.h>
 #include <algorithm>
 #include <cwctype>
+#include <fstream>
 #include <stdexcept>
-
-#pragma comment(lib, "d3dcompiler.lib")
 
 using Microsoft::WRL::ComPtr;
 
-ResourceManager::ResourceManager(GraphicsDevice& device, DescriptorAllocator& srvAllocator)
-    : m_device(device)
+ResourceManager::ResourceManager(GraphicsDevice& device, DescriptorAllocator& srvAllocator,
+                                 const RuntimePaths& paths)
+    : m_paths(paths)
+    , m_device(device)
     , m_srvAllocator(srvAllocator)
 {
     ThrowIfFailed(m_device.Device()->CreateCommandAllocator(
@@ -130,7 +130,7 @@ MeshHandle ResourceManager::LoadMesh(const std::wstring& fileName, float fitToSi
 
     // Opened by the canonical name too, so there is exactly one spelling in
     // play. Windows resolves it to the file whatever its case on disk.
-    MeshData data = LoadObj(GetAssetDir() / key);
+    MeshData data = LoadObj(m_paths.assetDir / key, m_paths.assetDir);
     if (fitToSize > 0.0f)
     {
         FitMeshToSize(data, fitToSize);
@@ -250,7 +250,7 @@ TextureHandle ResourceManager::LoadTexture(const std::wstring& fileName)
     }
     // Decoding is the only file-specific part; everything after it is the
     // same upload whether the pixels came from disk or from code.
-    return AddTexture(key, LoadImageRGBA(GetAssetDir() / key));
+    return AddTexture(key, LoadImageRGBA(m_paths.assetDir / key));
 }
 
 TextureHandle ResourceManager::AddTexture(const std::wstring& name, const ImageData& image)
@@ -396,7 +396,7 @@ CubeTextureHandle ResourceManager::LoadCubeTexture(const std::wstring& name)
     // Decode all six BEFORE creating anything on the GPU, so a missing or
     // mismatched face fails without leaving a half-built resource behind.
     ImageData faces[6];
-    const std::filesystem::path directory = GetSkyboxDir() / key;
+    const std::filesystem::path directory = m_paths.SkyboxDir() / key;
     for (int face = 0; face < 6; ++face)
     {
         const std::filesystem::path facePath =
@@ -549,49 +549,51 @@ DescriptorHandle ResourceManager::TextureSRV(TextureHandle handle) const
 
 // ---------------------------------------------------------------- shaders
 
-ComPtr<ID3DBlob> ResourceManager::LoadShader(const std::filesystem::path& path,
-                                             const char* entryPoint, const char* target)
+const ShaderBytecode& ResourceManager::LoadShader(
+    const std::filesystem::path& logicalPath)
 {
     ++m_stats.shaderRequests;
 
-    // One .hlsl holds several entry points, so the key has to include them.
-    const std::string key = ToUtf8(path.wstring()) + "|" + entryPoint + "|" + target;
+    const std::filesystem::path normalized = logicalPath.lexically_normal();
+    if (normalized.empty() || normalized.is_absolute() ||
+        *normalized.begin() == std::filesystem::path(L".."))
+    {
+        throw std::runtime_error("Shader path must be relative to the runtime shader root: " +
+                                 ToUtf8(logicalPath.wstring()));
+    }
+
+    const std::string key = ToUtf8(normalized.generic_wstring());
     auto it = m_shaderCache.find(key);
     if (it != m_shaderCache.end())
     {
         return it->second;
     }
 
-    // D3DCompileFromFile only reports a bare HRESULT for a missing file,
-    // which is painful to diagnose - check first and name the path.
-    if (!std::filesystem::exists(path))
+    const std::filesystem::path path = m_paths.shaderDir / normalized;
+    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    if (!file)
     {
-        throw std::runtime_error("Shader file not found:\n" + ToUtf8(path.wstring()));
+        throw std::runtime_error("Compiled shader not found:\n" +
+                                 ToUtf8(path.wstring()) +
+                                 "\nRuntime root: " + ToUtf8(m_paths.root.wstring()));
     }
 
-    UINT flags = 0;
-#if defined(_DEBUG)
-    // Embed debug info and keep the HLSL readable in PIX/RenderDoc.
-    flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
-#endif
-    ComPtr<ID3DBlob> bytecode;
-    ComPtr<ID3DBlob> errors;
-    HRESULT hr = D3DCompileFromFile(path.c_str(), nullptr,
-                                    D3D_COMPILE_STANDARD_FILE_INCLUDE,
-                                    entryPoint, target, flags, 0,
-                                    &bytecode, &errors);
-    if (FAILED(hr))
+    const std::streamoff length = file.tellg();
+    if (length <= 0)
     {
-        // The compiler writes human-readable errors into the blob.
-        if (errors)
-        {
-            throw std::runtime_error(
-                static_cast<const char*>(errors->GetBufferPointer()));
-        }
-        ThrowIfFailed(hr, "D3DCompileFromFile");
+        throw std::runtime_error("Compiled shader is empty:\n" + ToUtf8(path.wstring()));
     }
 
-    m_shaderCache.emplace(key, bytecode);
-    ++m_stats.shaderCompiles;
-    return bytecode;
+    ShaderBytecode bytecode;
+    bytecode.bytes.resize(static_cast<size_t>(length));
+    file.seekg(0, std::ios::beg);
+    if (!file.read(reinterpret_cast<char*>(bytecode.bytes.data()), length))
+    {
+        throw std::runtime_error("Could not read compiled shader:\n" +
+                                 ToUtf8(path.wstring()));
+    }
+
+    auto inserted = m_shaderCache.emplace(key, std::move(bytecode));
+    ++m_stats.shaderLoads;
+    return inserted.first->second;
 }

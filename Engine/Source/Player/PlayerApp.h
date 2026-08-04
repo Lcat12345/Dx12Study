@@ -11,7 +11,7 @@
 class PlayerApp final : public Engine
 {
 public:
-    explicit PlayerApp(HINSTANCE instance);
+    PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths);
 
 protected:
     void OnInit() override;

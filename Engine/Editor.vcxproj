@@ -32,10 +32,15 @@
     <CharacterSet>Unicode</CharacterSet>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <PropertyGroup>
+    <RuntimeContentProject>true</RuntimeContentProject>
+    <AllowRepositoryAssetFallback Condition="'$(AllowRepositoryAssetFallback)'==''">true</AllowRepositoryAssetFallback>
+  </PropertyGroup>
   <Import Project="BuildSettings.props" />
   <ItemDefinitionGroup>
     <ClCompile>
       <AdditionalIncludeDirectories>$(ProjectDir)..\ThirdParty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions Condition="'$(AllowRepositoryAssetFallback)'=='true'">EDITOR_REPOSITORY_ASSET_FALLBACK;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>

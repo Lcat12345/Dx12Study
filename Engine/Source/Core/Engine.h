@@ -3,6 +3,7 @@
 
 #include "Core/Window.h"
 #include "Core/Timer.h"
+#include "Core/RuntimePaths.h"
 #include "Graphics/Renderer.h"
 
 #include <memory>
@@ -16,7 +17,8 @@
 class Engine
 {
 public:
-    Engine(HINSTANCE instance, const wchar_t* title, UINT width, UINT height);
+    Engine(HINSTANCE instance, const wchar_t* title, UINT width, UINT height,
+           const RuntimePaths& runtimePaths);
     virtual ~Engine();
 
     Engine(const Engine&)            = delete;

@@ -20,7 +20,14 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     int exitCode = -1;
     try
     {
-        PlayerApp app(hInstance);
+        const RuntimePaths paths = MakePlayerRuntimePaths();
+        const std::wstring pathLog = L"Dx12Engine Player runtime root: " +
+                                     paths.root.wstring() + L"\nAssets: " +
+                                     paths.assetDir.wstring() + L"\nShaders: " +
+                                     paths.shaderDir.wstring() + L"\n";
+        OutputDebugStringW(pathLog.c_str());
+
+        PlayerApp app(hInstance, paths);
         exitCode = app.Run(nCmdShow);
     }
     catch (const std::exception& error)

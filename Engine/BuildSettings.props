@@ -3,6 +3,10 @@
   <PropertyGroup>
     <OutDir>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..\Output\$(Platform)\$(Configuration)\$(ProjectName)'))</OutDir>
     <IntDir>$([MSBuild]::NormalizeDirectory('$(MSBuildThisFileDirectory)..\Output\Intermediate\$(ProjectName)\$(Platform)\$(Configuration)'))</IntDir>
+    <RuntimeShaderIntermediateDir>$([MSBuild]::NormalizeDirectory('$(IntDir)CompiledShaders'))</RuntimeShaderIntermediateDir>
+    <FxcToolPath>$([MSBuild]::NormalizePath('$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\fxc.exe'))</FxcToolPath>
+    <RuntimeShaderFlags Condition="'$(Configuration)'=='Debug'">/Zi /Od</RuntimeShaderFlags>
+    <RuntimeShaderFlags Condition="'$(Configuration)'=='Release'">/O3</RuntimeShaderFlags>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -12,8 +16,8 @@
       <ConformanceMode>true</ConformanceMode>
       <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)Source;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebugDLL</RuntimeLibrary>
-      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreadedDLL</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Debug'">MultiThreadedDebug</RuntimeLibrary>
+      <RuntimeLibrary Condition="'$(Configuration)'=='Release'">MultiThreaded</RuntimeLibrary>
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Debug'">
@@ -28,4 +32,54 @@
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
   </ItemDefinitionGroup>
+  <ItemGroup Condition="'$(RuntimeContentProject)'=='true'">
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\Basic.hlsl">
+      <EntryPoint>VSMain</EntryPoint>
+      <Profile>vs_5_0</Profile>
+      <OutputName>Basic.VS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\Basic.hlsl">
+      <EntryPoint>PSMain</EntryPoint>
+      <Profile>ps_5_0</Profile>
+      <OutputName>Basic.PS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\Skybox.hlsl">
+      <EntryPoint>VSMain</EntryPoint>
+      <Profile>vs_5_0</Profile>
+      <OutputName>Skybox.VS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\Skybox.hlsl">
+      <EntryPoint>PSMain</EntryPoint>
+      <Profile>ps_5_0</Profile>
+      <OutputName>Skybox.PS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\ShadowDepth.hlsl">
+      <EntryPoint>VSMain</EntryPoint>
+      <Profile>vs_5_0</Profile>
+      <OutputName>ShadowDepth.VS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeAsset Include="$(MSBuildThisFileDirectory)Assets\**\*" />
+  </ItemGroup>
+  <Target Name="CompileRuntimeShader"
+          Condition="'$(RuntimeContentProject)'=='true'"
+          BeforeTargets="Link"
+          Inputs="%(RuntimeShader.FullPath)"
+          Outputs="$(RuntimeShaderIntermediateDir)%(RuntimeShader.OutputName)">
+    <Error Condition="!Exists('$(FxcToolPath)')"
+           Text="FXC was not found at $(FxcToolPath). Install the Windows SDK shader compiler." />
+    <MakeDir Directories="$(RuntimeShaderIntermediateDir)" />
+    <Exec Command="&quot;$(FxcToolPath)&quot; /nologo $(RuntimeShaderFlags) /E %(RuntimeShader.EntryPoint) /T %(RuntimeShader.Profile) /Fo &quot;$(RuntimeShaderIntermediateDir)%(RuntimeShader.OutputName)&quot; &quot;%(RuntimeShader.FullPath)&quot;" />
+  </Target>
+  <Target Name="CopyRuntimeContent"
+          Condition="'$(RuntimeContentProject)'=='true'"
+          AfterTargets="Build"
+          DependsOnTargets="CompileRuntimeShader">
+    <MakeDir Directories="$(OutDir)Assets;$(OutDir)Shaders" />
+    <Copy SourceFiles="@(RuntimeShader->'$(RuntimeShaderIntermediateDir)%(OutputName)')"
+          DestinationFolder="$(OutDir)Shaders"
+          SkipUnchangedFiles="true" />
+    <Copy SourceFiles="@(RuntimeAsset)"
+          DestinationFiles="@(RuntimeAsset->'$(OutDir)Assets\%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
 </Project>

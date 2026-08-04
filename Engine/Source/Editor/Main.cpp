@@ -20,7 +20,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     int exitCode = -1;
     try
     {
-        EditorApp app(hInstance);
+#if defined(EDITOR_REPOSITORY_ASSET_FALLBACK)
+        constexpr bool kAllowRepositoryAssetFallback = true;
+#else
+        constexpr bool kAllowRepositoryAssetFallback = false;
+#endif
+        const RuntimePaths paths =
+            MakeEditorRuntimePaths(kAllowRepositoryAssetFallback);
+        const std::wstring pathLog = L"Dx12Engine Editor runtime root: " +
+                                     paths.root.wstring() + L"\nAssets: " +
+                                     paths.assetDir.wstring() + L"\nShaders: " +
+                                     paths.shaderDir.wstring() + L"\n";
+        OutputDebugStringW(pathLog.c_str());
+
+        EditorApp app(hInstance, paths);
         exitCode = app.Run(nCmdShow);
     }
     catch (const std::exception& error)

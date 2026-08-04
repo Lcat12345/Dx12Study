@@ -16,7 +16,7 @@
 class EditorApp final : public Engine
 {
 public:
-    explicit EditorApp(HINSTANCE instance);
+    EditorApp(HINSTANCE instance, const RuntimePaths& runtimePaths);
     ~EditorApp() override;
 
 protected:

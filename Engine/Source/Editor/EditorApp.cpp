@@ -11,8 +11,8 @@ namespace
     constexpr UINT    kClientHeight  = 720;
 }
 
-EditorApp::EditorApp(HINSTANCE instance)
-    : Engine(instance, kWindowTitle, kClientWidth, kClientHeight)
+EditorApp::EditorApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
+    : Engine(instance, kWindowTitle, kClientWidth, kClientHeight, runtimePaths)
 {
     Renderer& renderer = GetRenderer();
     m_overlay = std::make_unique<ImGuiLayer>(

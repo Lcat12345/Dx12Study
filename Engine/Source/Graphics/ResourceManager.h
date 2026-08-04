@@ -4,10 +4,12 @@
 #include "Graphics/Handles.h"
 #include "Graphics/Mesh.h"
 #include "Graphics/DescriptorAllocator.h"
+#include "Core/RuntimePaths.h"
 
 #include <d3d12.h>
 #include <wrl/client.h>
 #include <cstdint>
+#include <cstddef>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -15,12 +17,21 @@
 
 class GraphicsDevice;
 
+struct ShaderBytecode
+{
+    std::vector<std::byte> bytes;
+
+    const void* Data() const { return bytes.data(); }
+    size_t Size() const { return bytes.size(); }
+};
+
 // Owns every loaded asset for the lifetime of the app. Loading the same path
 // twice returns the same handle and does no work the second time.
 class ResourceManager
 {
 public:
-    ResourceManager(GraphicsDevice& device, DescriptorAllocator& srvAllocator);
+    ResourceManager(GraphicsDevice& device, DescriptorAllocator& srvAllocator,
+                    const RuntimePaths& paths);
 
     ResourceManager(const ResourceManager&)            = delete;
     ResourceManager& operator=(const ResourceManager&) = delete;
@@ -93,11 +104,13 @@ public:
     // invalid handle rather than throwing: callers here are UI, not draws.
     void TextureSize(TextureHandle handle, UINT& outWidth, UINT& outHeight) const;
 
+    const RuntimePaths& Paths() const { return m_paths; }
+
     // --- shaders ---
-    // Cached on path + entry point + target, since one file holds several.
-    Microsoft::WRL::ComPtr<ID3DBlob> LoadShader(const std::filesystem::path& path,
-                                                const char* entryPoint,
-                                                const char* target);
+    // Loads build-produced bytecode from Shaders/. The logical .cso path is
+    // the cache key; HLSL source and compiler entry points do not exist at
+    // runtime.
+    const ShaderBytecode& LoadShader(const std::filesystem::path& logicalPath);
 
     // Load counts vs request counts - the cache is working when the two
     // differ. Surfaced in the debug title bar.
@@ -105,7 +118,7 @@ public:
     {
         UINT meshLoads = 0, meshRequests = 0;
         UINT textureLoads = 0, textureRequests = 0;
-        UINT shaderCompiles = 0, shaderRequests = 0;
+        UINT shaderLoads = 0, shaderRequests = 0;
     };
     const Stats& GetStats() const { return m_stats; }
 
@@ -119,6 +132,7 @@ private:
     void BeginUpload();
     void EndUpload();
 
+    RuntimePaths         m_paths;
     GraphicsDevice&      m_device;
     DescriptorAllocator& m_srvAllocator;
 
@@ -159,8 +173,7 @@ private:
 
     std::unordered_map<std::wstring, MeshHandle>    m_meshCache;
     std::unordered_map<std::wstring, TextureHandle> m_textureCache;
-    std::unordered_map<std::string,
-                       Microsoft::WRL::ComPtr<ID3DBlob>> m_shaderCache;
+    std::unordered_map<std::string, ShaderBytecode> m_shaderCache;
 
     Stats m_stats;
 };

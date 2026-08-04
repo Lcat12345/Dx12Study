@@ -2,13 +2,15 @@
 
 #include <cstdio>
 
-Engine::Engine(HINSTANCE instance, const wchar_t* title, UINT width, UINT height)
+Engine::Engine(HINSTANCE instance, const wchar_t* title, UINT width, UINT height,
+               const RuntimePaths& runtimePaths)
     : m_title(title)
     , m_window(instance, title, width, height)
 {
     m_renderer = std::make_unique<Renderer>(m_window.Handle(),
                                             m_window.ClientWidth(),
-                                            m_window.ClientHeight());
+                                            m_window.ClientHeight(),
+                                            runtimePaths);
 
 }
 
@@ -85,7 +87,7 @@ void Engine::UpdateTitleFps(float dt)
                   m_window.ClientWidth(), m_window.ClientHeight(), sync,
                   stats.meshLoads, stats.meshRequests,
                   stats.textureLoads, stats.textureRequests,
-                  stats.shaderCompiles, stats.shaderRequests);
+                  stats.shaderLoads, stats.shaderRequests);
 #else
     std::swprintf(title, _countof(title),
                   L"%ls   %d fps   %.2f ms   %ux%u   [%ls]  V=toggle",

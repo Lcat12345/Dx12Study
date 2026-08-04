@@ -748,7 +748,8 @@ namespace
             if (ImGui::BeginMenu("Open"))
             {
                 std::error_code error;
-                std::filesystem::directory_iterator directory(GetSceneDir(), error);
+                std::filesystem::directory_iterator directory(
+                    resources.Paths().SceneDir(), error);
                 bool any = false;
                 if (!error)
                 {
@@ -895,7 +896,8 @@ namespace
 
         if (confirmed)
         {
-            SaveTo(world, resources, GetSceneDir() / (ToWide(name) + L".scene"), session);
+            SaveTo(world, resources,
+                   resources.Paths().SceneDir() / (ToWide(name) + L".scene"), session);
             ImGui::CloseCurrentPopup();
         }
         ImGui::EndDisabled();

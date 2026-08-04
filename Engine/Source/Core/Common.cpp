@@ -29,48 +29,6 @@ D3D12_RESOURCE_BARRIER TransitionBarrier(ID3D12Resource* resource,
     return barrier;
 }
 
-std::filesystem::path GetProjectRoot()
-{
-    wchar_t exePath[MAX_PATH];
-    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
-
-    std::filesystem::path dir = std::filesystem::path(exePath).parent_path();
-    for (int depth = 0; depth < 8; ++depth)
-    {
-        if (std::filesystem::exists(dir / L"Dx12Engine.slnx"))
-        {
-            return dir;
-        }
-        if (dir.parent_path() == dir) // reached the drive root
-        {
-            break;
-        }
-        dir = dir.parent_path();
-    }
-    throw std::runtime_error(
-        "Could not find Dx12Engine.slnx above the exe - cannot locate assets");
-}
-
-std::filesystem::path GetShaderDir()
-{
-    return GetProjectRoot() / L"Engine" / L"Shaders";
-}
-
-std::filesystem::path GetAssetDir()
-{
-    return GetProjectRoot() / L"Engine" / L"Assets";
-}
-
-std::filesystem::path GetSceneDir()
-{
-    return GetAssetDir() / L"Scenes";
-}
-
-std::filesystem::path GetSkyboxDir()
-{
-    return GetAssetDir() / L"Skyboxes";
-}
-
 ComPtr<ID3D12Resource> CreateUploadBuffer(ID3D12Device* device, const void* initData,
                                           UINT64 byteSize, const char* debugWhat)
 {

@@ -1,6 +1,5 @@
 #include "Game/AssetBrowser.h"
 
-#include "Core/Common.h"
 #include "Core/TextEncoding.h"
 #include "Graphics/Mesh.h"
 
@@ -54,7 +53,7 @@ namespace
 AssetBrowser::AssetBrowser(ResourceManager& resources)
     : m_resources(resources)
 {
-    m_assetDirLabel = ToUtf8(GetAssetDir().wstring());
+    m_assetDirLabel = ToUtf8(m_resources.Paths().assetDir.wstring());
     Refresh();
 }
 
@@ -71,7 +70,7 @@ void AssetBrowser::Scan(std::vector<Entry>& out, const wchar_t* extension)
     // RECURSIVE: a downloaded model arrives as a folder - the .obj, its .mtl
     // and the textures they reference only make sense together - so assets
     // are no longer all at the top level.
-    const std::filesystem::path root = GetAssetDir();
+    const std::filesystem::path& root = m_resources.Paths().assetDir;
     std::error_code openError;
     std::filesystem::recursive_directory_iterator directory(root, openError);
     if (openError)
@@ -157,7 +156,8 @@ void AssetBrowser::ScanSkyboxes()
     m_skyboxes.clear();
 
     std::error_code openError;
-    std::filesystem::directory_iterator directory(GetSkyboxDir(), openError);
+    std::filesystem::directory_iterator directory(m_resources.Paths().SkyboxDir(),
+                                                   openError);
     if (openError)
     {
         return; // no Skyboxes folder yet

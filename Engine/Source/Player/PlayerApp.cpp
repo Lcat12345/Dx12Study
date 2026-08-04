@@ -12,8 +12,8 @@ namespace
     constexpr UINT    kClientHeight  = 720;
 }
 
-PlayerApp::PlayerApp(HINSTANCE instance)
-    : Engine(instance, kWindowTitle, kClientWidth, kClientHeight)
+PlayerApp::PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
+    : Engine(instance, kWindowTitle, kClientWidth, kClientHeight, runtimePaths)
 {
 }
 

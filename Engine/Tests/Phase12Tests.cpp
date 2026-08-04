@@ -161,10 +161,11 @@ namespace
 
     struct TestContext
     {
+        RuntimePaths       paths = RuntimePaths::FromRoot(GetExecutableDir());
         GraphicsDevice      device{ GraphicsDevice::AdapterPolicy::SoftwareOnly };
         DescriptorAllocator srv{ device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                                  128, true };
-        ResourceManager     resources{ device, srv };
+        ResourceManager     resources{ device, srv, paths };
         TempDirectory      temp;
     };
 
@@ -572,7 +573,7 @@ namespace
         {
             World world;
             std::string error;
-            const auto path = GetSceneDir() / fileName;
+            const auto path = context.resources.Paths().SceneDir() / fileName;
             CheckSucceeded(LoadScene(path, context.resources, world, error), error);
             const std::string first = Snapshot(world, context.resources);
             World restored;
@@ -634,6 +635,42 @@ namespace
         }
     }
 
+    void RuntimePathsAndCompiledShaderCache(TestContext& context)
+    {
+        const std::filesystem::path executableDir = GetExecutableDir();
+        Check(!executableDir.empty(), "executable directory was empty");
+        Check(context.paths.root == std::filesystem::absolute(executableDir),
+              "runtime root is not the executable directory");
+        Check(context.paths.assetDir == context.paths.root / L"Assets",
+              "asset directory is not rooted beside the executable");
+        Check(context.paths.shaderDir == context.paths.root / L"Shaders",
+              "shader directory is not rooted beside the executable");
+
+        const ResourceManager::Stats before = context.resources.GetStats();
+        const ShaderBytecode& first = context.resources.LoadShader(L"Basic.VS.cso");
+        const ShaderBytecode& again = context.resources.LoadShader(L"Basic.VS.cso");
+        Check(first.Size() > 0, "compiled shader bytecode was empty");
+        Check(&first == &again, "compiled shader cache returned two objects");
+        Check(context.resources.GetStats().shaderLoads == before.shaderLoads + 1,
+              "compiled shader was read more than once");
+        Check(context.resources.GetStats().shaderRequests == before.shaderRequests + 2,
+              "compiled shader requests were not counted");
+
+        try
+        {
+            context.resources.LoadShader(L"Missing.Phase12.5.cso");
+            throw std::runtime_error("missing compiled shader unexpectedly loaded");
+        }
+        catch (const std::runtime_error& error)
+        {
+            const std::string message = error.what();
+            Check(message.find("Missing.Phase12.5.cso") != std::string::npos,
+                  "missing shader error omitted the logical file name");
+            Check(message.find("Runtime root:") != std::string::npos,
+                  "missing shader error omitted the runtime root");
+        }
+    }
+
     void PresentationPathsStayClean(TestContext&)
     {
         constexpr wchar_t className[] = L"Dx12EnginePhase12PresentationTest";
@@ -655,6 +692,7 @@ namespace
         try
         {
             Renderer renderer(hwnd, 320, 200,
+                              RuntimePaths::FromRoot(GetExecutableDir()),
                               GraphicsDevice::AdapterPolicy::SoftwareOnly);
             CameraView camera;
             LightingData lighting;
@@ -773,6 +811,8 @@ int main()
             { "regression/classic-locale", SerializationForcesClassicLocale },
             { "functional/presentation-paths", PresentationPathsStayClean },
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
+            { "functional/runtime-paths-and-compiled-shaders",
+              RuntimePathsAndCompiledShaderCache },
         };
 
         for (const TestCase& test : tests)

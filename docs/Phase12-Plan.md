@@ -196,7 +196,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 | 12.2 | 완료 | Play/Stop 스냅샷 | transactional restore, 시뮬레이션 수명 | 중 | - |
 | 12.3 | 완료 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
 | 12.4 | 완료 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
-| 12.5 | 대기 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
+| 12.5 | 완료 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
 | 12.6 | 대기 | Player 시작 Scene + 데모 게임 | CLI, runtime bootstrap, 상호작용 | 중 | - |
 | 12.7 | 대기 | staging 패키지 + 독립 실행 검증 | 재현 가능한 배포, binary audit | 중 | v1.3 |
 
@@ -542,9 +542,9 @@ Dx12Engine/
 └─ Dx12Engine.slnx
 ```
 
-현재 `Assets/`와 `Shaders/`가 Engine 프로젝트 아래에 있으므로 실제 이동 여부는 12.5의
-패키징 경로와 함께 결정한다. 중요한 것은 물리 폴더 이름보다 **프로젝트 item과 참조
-방향**이다.
+12.5에서 source `Assets/`와 `Shaders/`는 Engine 폴더 아래에 유지하고, host별 MSBuild
+content target이 상대 구조를 보존해 각 exe output으로 복사하도록 결정했다. 중요한 것은
+물리 폴더 이름보다 **프로젝트 item과 참조 방향**, 그리고 exe 기준 runtime root다.
 
 #### 작업 항목
 
@@ -623,20 +623,20 @@ Player/
 
 #### 작업 항목
 
-- [ ] `GetExecutableDir()` 구현: `GetModuleFileNameW` 길이/오류 처리 포함
-- [ ] `RuntimePaths` 또는 동등한 값 객체: root, assetDir, shaderDir
-- [ ] ResourceManager 생성 시 asset/shader root를 주입
-- [ ] Scene/AssetBrowser/Renderer의 전역 `GetAssetDir`/`GetShaderDir` 호출 제거
-- [ ] Player는 `exeDir`를 유일한 runtime root로 사용
-- [ ] Editor는 exe 옆 리소스를 우선하고, 명시적인 개발 설정에서만 repo fallback 허용
-- [ ] HLSL entry point별 build-time compile 규칙 추가
-- [ ] Debug/Release 설정별 FXC flag와 출력 `.cso` 이름 고정
-- [ ] `D3DCompileFromFile` 기반 `LoadShader`를 compiled bytecode loader로 교체
-- [ ] shader cache key를 `.cso` 논리 경로로 변경
-- [ ] build가 `.hlsl` 변경을 추적해 필요한 `.cso`만 다시 생성하는지 확인
-- [ ] `.cso`를 Player output의 `Shaders/`로 자동 복사
-- [ ] Assets를 Player output의 `Assets/`로 자동 복사할 item/target 정의
-- [ ] 필요한 비시스템 DLL 목록을 명시하고 없으면 빈 목록이라고 기록
+- [x] `GetExecutableDir()` 구현: `GetModuleFileNameW` 길이/오류 처리 포함
+- [x] `RuntimePaths` 또는 동등한 값 객체: root, assetDir, shaderDir
+- [x] ResourceManager 생성 시 asset/shader root를 주입
+- [x] Scene/AssetBrowser/Renderer의 전역 `GetAssetDir`/`GetShaderDir` 호출 제거
+- [x] Player는 `exeDir`를 유일한 runtime root로 사용
+- [x] Editor는 exe 옆 리소스를 우선하고, 명시적인 개발 설정에서만 repo fallback 허용
+- [x] HLSL entry point별 build-time compile 규칙 추가
+- [x] Debug/Release 설정별 FXC flag와 출력 `.cso` 이름 고정
+- [x] `D3DCompileFromFile` 기반 `LoadShader`를 compiled bytecode loader로 교체
+- [x] shader cache key를 `.cso` 논리 경로로 변경
+- [x] build가 `.hlsl` 변경을 추적해 필요한 `.cso`만 다시 생성하는지 확인
+- [x] `.cso`를 Player output의 `Shaders/`로 자동 복사
+- [x] Assets를 Player output의 `Assets/`로 자동 복사할 item/target 정의
+- [x] 필요한 비시스템 DLL 목록을 명시하고 없으면 빈 목록이라고 기록
 
 #### 셰이더 컴파일 계약
 
@@ -661,8 +661,8 @@ Debug는 symbol/debug flag, Release는 최적화 flag를 사용하되 파일 이
   개발 머신에서는 성공해 배포 결함이 숨는다.
 - Assets는 논리 이름과 상대 구조를 유지한다. scene file에는 계속 상대 논리 이름만
   저장하고 절대 경로를 넣지 않는다.
-- Release CRT는 `/MT`로 묶거나 `/MD` redistributable을 staging하는 정책 중 하나를
-  명시적으로 선택한다. “개발 PC에 있으니 됨”은 허용하지 않는다.
+- Release CRT는 `/MT`로 묶는다. Engine, Game, Editor, Player, test가 같은 정적 CRT
+  정책을 사용하므로 별도 Visual C++ Redistributable staging은 필요하지 않다.
 
 #### 함정
 
@@ -685,6 +685,35 @@ Debug는 symbol/debug flag, Release는 최적화 flag를 사용하되 파일 이
 
 **완료 기준**: Player가 exe 옆 Assets와 compiled Shaders만 읽고, HLSL source compile과
 저장소 탐색 없이 기본 Scene의 모든 Phase 11 pass를 생성한다.
+
+#### 구현 결과 (2026-08-04)
+
+- `GetExecutableDir()`은 고정 `MAX_PATH` 버퍼 대신 `GetModuleFileNameW` 결과에 따라
+  버퍼를 확장하고 Win32 오류와 경로 한계 초과를 명시적으로 보고한다.
+- `RuntimePaths { root, assetDir, shaderDir }`를 host에서 생성해
+  `Engine → Renderer → ResourceManager` 생성자 체인으로 주입한다. OBJ/MTL texture,
+  Asset Browser, Scene UI도 같은 주입 경로를 사용한다.
+- Player는 exe 디렉터리만 runtime root로 사용한다. Editor는 exe 옆 Assets를 우선하고
+  `AllowRepositoryAssetFallback=true`인 개발 빌드에서 Assets 디렉터리 전체가 없을 때만
+  저장소 Assets fallback을 허용한다. compiled shader는 fallback하지 않는다.
+- `BuildSettings.props`에 entry point별 FXC target을 추가했다. Debug는 `/Zi /Od`,
+  Release는 `/O3`를 사용하고 configuration/project별 intermediate 디렉터리에 다섯
+  `.cso`를 생성한다.
+- HLSL을 수정한 빌드에서는 해당 HLSL의 entry point 출력만 갱신되고, 나머지 `.cso`
+  target은 증분 빌드에서 건너뛰는 것을 확인했다.
+- `ResourceManager::LoadShader`는 `.cso` 논리 경로를 cache key로 사용해 bytecode를
+  읽는다. 누락 오류에는 resolved 파일 이름과 runtime root가 포함된다.
+- Editor, Player, EngineTests output에 상대 구조를 유지한 `Assets/`와 다섯 `.cso`를
+  자동 복사한다. runtime output에는 `.hlsl`이 없다.
+- Release는 전 프로젝트 `/MT`, Debug는 `/MTd`로 통일했다. Player의 동적 의존성은
+  `KERNEL32.dll`, `USER32.dll`, `ole32.dll`, `d3d12.dll`, `dxgi.dll`뿐이므로 Phase 12.5의
+  비시스템 DLL 목록은 비어 있다.
+- Debug/Release x64 전체 빌드는 경고 0, 오류 0이었고 두 구성에서 테스트 23/23이
+  통과했다. Phase 12.4 project/link boundary 검증도 다시 통과했다.
+
+세부 런타임 경로와 content pipeline 계약은
+[`Engine/Docs/Phase12.5-RuntimeContent.md`](../Engine/Docs/Phase12.5-RuntimeContent.md)에
+기록했다.
 
 ---
 
@@ -905,10 +934,10 @@ Phase 12는 실행 파일과 배포 경계를 만들지만, 아래 주제를 자
 
 ### 리소스·배포
 
-- [ ] Player runtime root가 exe 위치 기준
-- [ ] Player가 `Dx12Engine.slnx`와 개발 저장소를 탐색하지 않음
-- [ ] 모든 runtime shader가 build-time compiled `.cso`
-- [ ] package에 HLSL/source/project 파일이 없음
+- [x] Player runtime root가 exe 위치 기준
+- [x] Player가 `Dx12Engine.slnx`와 개발 저장소를 탐색하지 않음
+- [x] 모든 runtime shader가 build-time compiled `.cso`
+- [x] Player runtime output에 HLSL/source/project 파일이 없음
 - [ ] Assets, compiled Shaders, 필요한 DLL, 기본 Scene이 자동 staging됨
 - [ ] `--scene`과 기본 Scene 시작 모두 정상
 - [ ] 새 빈 저장소 밖 폴더에서 package만으로 실행·플레이·종료 코드 0

@@ -8,6 +8,7 @@
   <ItemGroup>
     <ClCompile Include="Source\Core\Common.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Source\Core\Engine.cpp"><Filter>Core</Filter></ClCompile>
+    <ClCompile Include="Source\Core\RuntimePaths.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Source\Core\TextEncoding.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Source\Core\Window.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Source\Graphics\DepthTarget.cpp"><Filter>Graphics</Filter></ClCompile>
@@ -24,6 +25,7 @@
   <ItemGroup>
     <ClInclude Include="Source\Core\Common.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Source\Core\Engine.h"><Filter>Core</Filter></ClInclude>
+    <ClInclude Include="Source\Core\RuntimePaths.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Source\Core\TextEncoding.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Source\Core\Timer.h"><Filter>Core</Filter></ClInclude>
     <ClInclude Include="Source\Core\Window.h"><Filter>Core</Filter></ClInclude>

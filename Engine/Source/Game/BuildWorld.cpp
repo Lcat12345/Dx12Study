@@ -133,9 +133,8 @@ void BuildWorld(ResourceManager& resources, World& world)
     // --- two pyramids: one untouched, one squashed flat on Y ---
     // The squashed one only shades correctly because its normals go through
     // the inverse transpose. Replace gWorldInvTranspose with gWorld in
-    // Basic.hlsl and re-run (shaders compile at startup, so no rebuild
-    // needed) - the squashed pyramid changes, the plain one and every cube
-    // stay exactly the same.
+    // Basic.hlsl, rebuild its Basic.VS.cso output, and re-run - the squashed
+    // pyramid changes, the plain one and every cube stay exactly the same.
     Material pyramidMaterial;
     pyramidMaterial.texture       = resources.LoadTexture(L"Crate.png");
     pyramidMaterial.specularColor = { 0.5f, 0.5f, 0.5f };

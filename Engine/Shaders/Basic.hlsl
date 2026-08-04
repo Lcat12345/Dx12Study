@@ -114,50 +114,44 @@ PSInput VSMain(VSInput input)
 // was visible to the light, then the 3x3 average softens one hard texel edge.
 float DirectionalVisibility(float4 positionLightH, float3 geometryNormal)
 {
-    if (gShadowStrength <= 0.0 || positionLightH.w <= 0.0)
+    float result = 1.0;
+    if (gShadowStrength > 0.0 && positionLightH.w > 0.0)
     {
-        return 1.0;
-    }
+        const float3 ndc = positionLightH.xyz / positionLightH.w;
+        const float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
 
-    const float3 ndc = positionLightH.xyz / positionLightH.w;
-    const float2 uv = float2(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
-
-    // A fixed receiver bias is sufficient only when the surface faces the
-    // light. At a grazing angle, one shadow texel spans a much larger depth
-    // interval and the stored caster depth repeatedly crosses the receiver
-    // depth, exposing the shadow texel grid as acne/triangular moire.
-    //
-    // Use the GEOMETRIC normal, not the sampled normal map: normal maps bend
-    // lighting but do not change the surface written into the shadow map.
-    // Letting texture detail alter bias would imprint that texture into the
-    // shadow test. gShadowBias remains the editable minimum and grows smoothly
-    // to 4x at grazing angles.
-    const float nDotL = saturate(dot(geometryNormal, -gDirLightDirection));
-    const float receiverBias = gShadowBias * (1.0 + 3.0 * (1.0 - nDotL));
-
-    // D3D NDC depth is already [0,1]. Outside the light's fitted volume is
-    // not represented by this map, so it must be treated as lit.
-    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 ||
-        ndc.z < 0.0 || ndc.z > 1.0)
-    {
-        return 1.0;
-    }
-
-    float visibility = 0.0;
-    [unroll]
-    for (int y = -1; y <= 1; ++y)
-    {
-        [unroll]
-        for (int x = -1; x <= 1; ++x)
+        // D3D NDC depth is already [0,1]. Outside the light's fitted volume
+        // is not represented by this map, so it must be treated as lit.
+        const bool insideLightVolume =
+            uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0 &&
+            ndc.z >= 0.0 && ndc.z <= 1.0;
+        if (insideLightVolume)
         {
-            const float2 offset = float2(float(x), float(y)) * gShadowTexelSize;
-            visibility += gShadowMap.SampleCmpLevelZero(
-                gShadowSampler, uv + offset, ndc.z - receiverBias);
+            // A fixed receiver bias is sufficient only when the surface faces
+            // the light. At a grazing angle it grows smoothly to 4x. Use the
+            // GEOMETRIC normal so normal-map detail cannot alter shadow bias.
+            const float nDotL = saturate(dot(geometryNormal, -gDirLightDirection));
+            const float receiverBias =
+                gShadowBias * (1.0 + 3.0 * (1.0 - nDotL));
+
+            float visibility = 0.0;
+            [unroll]
+            for (int y = -1; y <= 1; ++y)
+            {
+                [unroll]
+                for (int x = -1; x <= 1; ++x)
+                {
+                    const float2 offset =
+                        float2(float(x), float(y)) * gShadowTexelSize;
+                    visibility += gShadowMap.SampleCmpLevelZero(
+                        gShadowSampler, uv + offset, ndc.z - receiverBias);
+                }
+            }
+            visibility /= 9.0;
+            result = lerp(1.0, visibility, saturate(gShadowStrength));
         }
     }
-    visibility /= 9.0;
-
-    return lerp(1.0, visibility, saturate(gShadowStrength));
+    return result;
 }
 
 // One light's contribution. 'toLight' points FROM the surface TOWARD the light.

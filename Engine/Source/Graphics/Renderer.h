@@ -9,6 +9,7 @@
 #include "Graphics/RenderTarget.h"
 #include "Graphics/ResourceManager.h"
 #include "Graphics/RenderData.h"
+#include "Core/RuntimePaths.h"
 
 #include <cstdint>
 #include <functional>
@@ -29,7 +30,7 @@ public:
 
     using OverlayRecorder = std::function<void(ID3D12GraphicsCommandList*)>;
 
-    Renderer(HWND hwnd, UINT width, UINT height,
+    Renderer(HWND hwnd, UINT width, UINT height, const RuntimePaths& runtimePaths,
              GraphicsDevice::AdapterPolicy adapterPolicy =
                  GraphicsDevice::AdapterPolicy::HardwareOnly);
     ~Renderer();

@@ -8,7 +8,6 @@
 #include <cfloat>
 #include <cmath>
 #include <stdexcept>
-#include <filesystem>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -49,6 +48,7 @@ namespace
 }
 
 Renderer::Renderer(HWND hwnd, UINT width, UINT height,
+                   const RuntimePaths& runtimePaths,
                    GraphicsDevice::AdapterPolicy adapterPolicy)
     : m_device(adapterPolicy)                     // debug layer -> device -> queue
     , m_swapChain(m_device, hwnd, width, height)  // needs the queue
@@ -58,7 +58,7 @@ Renderer::Renderer(HWND hwnd, UINT width, UINT height,
                      kDsvHeapCapacity, /*shaderVisible*/ false)
     , m_srvAllocator(m_device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
                      kSrvHeapCapacity, /*shaderVisible*/ true)
-    , m_resources(m_device, m_srvAllocator)
+    , m_resources(m_device, m_srvAllocator, runtimePaths)
 {
     CreateCommandObjects();
     QueryMsaaSupport();
@@ -456,23 +456,20 @@ XMMATRIX Renderer::ComputeShadowViewProj(const LightingData& lighting,
 // explicit lines rather than becoming a separate copy of the whole PSO.
 void Renderer::CreatePipelineStates()
 {
-    // Compile once, then bake the same shader programs into immutable 1x and
+    // Load once, then bake the same shader programs into immutable 1x and
     // 4x PSOs. Sample count/quality is pipeline state in D3D12, not a dynamic
     // setting that can be changed at draw time.
-    const std::filesystem::path shaderFile = GetShaderDir() / L"Basic.hlsl";
-    ComPtr<ID3DBlob> vs = m_resources.LoadShader(shaderFile, "VSMain", "vs_5_0");
-    ComPtr<ID3DBlob> ps = m_resources.LoadShader(shaderFile, "PSMain", "ps_5_0");
-
-    const std::filesystem::path skyFile = GetShaderDir() / L"Skybox.hlsl";
-    ComPtr<ID3DBlob> skyVs = m_resources.LoadShader(skyFile, "VSMain", "vs_5_0");
-    ComPtr<ID3DBlob> skyPs = m_resources.LoadShader(skyFile, "PSMain", "ps_5_0");
+    const ShaderBytecode& vs    = m_resources.LoadShader(L"Basic.VS.cso");
+    const ShaderBytecode& ps    = m_resources.LoadShader(L"Basic.PS.cso");
+    const ShaderBytecode& skyVs = m_resources.LoadShader(L"Skybox.VS.cso");
+    const ShaderBytecode& skyPs = m_resources.LoadShader(L"Skybox.PS.cso");
 
     auto createSceneVariants = [&](size_t variantIndex,
                                    UINT sampleCount, UINT sampleQuality) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque =
             SceneShadedPsoTemplate(sampleCount, sampleQuality);
-        opaque.VS = { vs->GetBufferPointer(), vs->GetBufferSize() };
-        opaque.PS = { ps->GetBufferPointer(), ps->GetBufferSize() };
+        opaque.VS = { vs.Data(), vs.Size() };
+        opaque.PS = { ps.Data(), ps.Size() };
 
         ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                           &opaque,
@@ -499,8 +496,8 @@ void Renderer::CreatePipelineStates()
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC skybox =
             SceneShadedPsoTemplate(sampleCount, sampleQuality);
-        skybox.VS = { skyVs->GetBufferPointer(), skyVs->GetBufferSize() };
-        skybox.PS = { skyPs->GetBufferPointer(), skyPs->GetBufferSize() };
+        skybox.VS = { skyVs.Data(), skyVs.Size() };
+        skybox.PS = { skyPs.Data(), skyPs.Size() };
         // The camera sees the cube's back faces. Its forced far-plane depth
         // must pass the clear value without overwriting scene depth.
         skybox.RasterizerState.CullMode = D3D12_CULL_MODE_FRONT;
@@ -521,11 +518,10 @@ void Renderer::CreatePipelineStates()
     }
 
     // --- shadow depth: the template with the COLOUR half removed ---
-    const std::filesystem::path shadowFile = GetShaderDir() / L"ShadowDepth.hlsl";
-    ComPtr<ID3DBlob> shadowVs = m_resources.LoadShader(shadowFile, "VSMain", "vs_5_0");
+    const ShaderBytecode& shadowVs = m_resources.LoadShader(L"ShadowDepth.VS.cso");
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow = SceneShadedPsoTemplate(1, 0);
-    shadow.VS = { shadowVs->GetBufferPointer(), shadowVs->GetBufferSize() };
+    shadow.VS = { shadowVs.Data(), shadowVs.Size() };
 
     // NO pixel shader. Depth is written by the rasterizer whether or not one
     // runs, so a pass that only wants depth should not pay for one - and this
