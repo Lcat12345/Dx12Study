@@ -193,7 +193,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 |------|------|------|-----------|-----------|------|
 | 12.0 | 완료 | 메모리 씬 직렬화 + EditorSession | 영속 상태와 임시 상태, stream 경계 | 중 | - |
 | 12.1 | 완료 | 실행 컨텍스트 + 카메라/시스템 3분류 | 모드별 업데이트, 시간·입력 소유권 | 대 | - |
-| 12.2 | 대기 | Play/Stop 스냅샷 | transactional restore, 시뮬레이션 수명 | 중 | - |
+| 12.2 | 완료 | Play/Stop 스냅샷 | transactional restore, 시뮬레이션 수명 | 중 | - |
 | 12.3 | 대기 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
 | 12.4 | 대기 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
 | 12.5 | 대기 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
@@ -339,16 +339,16 @@ Edit
 
 #### 작업 항목
 
-- [ ] `EnterPlay()`에서 현재 World를 메모리 snapshot으로 직렬화
-- [ ] snapshot 실패 시 World와 mode를 건드리지 않고 오류 표시
-- [ ] Play 전환과 동시에 play elapsed/input edge 초기화
-- [ ] Play 중 Inspector 편집 허용 여부 확정. 기본 사양은 허용하되 Stop 시 폐기
-- [ ] `StopPlay()`에서 snapshot을 임시 World로 읽고 성공 시 교체
-- [ ] 복원 실패 시 현재 Play World를 보존하고 오류를 보여 데이터 손실 방지
-- [ ] 복원 후 `EditorSession::OnWorldReplaced()` 호출
-- [ ] File > New/Open은 Play 중 비활성화하거나 먼저 Stop할지 정책 고정
-- [ ] 창 종료 시 Play snapshot을 자동으로 저장 파일에 쓰지 않음
-- [ ] toolbar/menu에 Play/Stop 상태와 오류 표시
+- [x] `EnterPlay()`에서 현재 World를 메모리 snapshot으로 직렬화
+- [x] snapshot 실패 시 World와 mode를 건드리지 않고 오류 표시
+- [x] Play 전환과 동시에 play elapsed/input edge 초기화
+- [x] Play 중 Inspector 편집 허용 여부 확정. 기본 사양은 허용하되 Stop 시 폐기
+- [x] `StopPlay()`에서 snapshot을 임시 World로 읽고 성공 시 교체
+- [x] 복원 실패 시 현재 Play World를 보존하고 오류를 보여 데이터 손실 방지
+- [x] 복원 후 `EditorSession::OnWorldReplaced()` 호출
+- [x] File > New/Open은 Play 중 비활성화하거나 먼저 Stop할지 정책 고정
+- [x] 창 종료 시 Play snapshot을 자동으로 저장 파일에 쓰지 않음
+- [x] toolbar/menu에 Play/Stop 상태와 오류 표시
 
 #### 설계 결정
 
@@ -359,6 +359,8 @@ Edit
   필요한 별도 에디터 기능이므로 이번 범위가 아니다.
 - scene path는 편집 문서의 정체성이므로 Play/Stop으로 바뀌지 않는다.
 - snapshot은 메모리에만 있고 autosave가 아니다. crash recovery와 혼동하지 않는다.
+- ActiveCamera가 없는 Scene은 Play 진입을 거부하지 않고 마지막 유효 `CameraView`를
+  유지한다. Player에서도 같은 fallback을 쓸지는 12.6에서 최종 확정한다.
 
 #### 함정
 
@@ -366,8 +368,8 @@ Edit
   논리 Entity라는 보장이 없으므로 선택을 유효성 검사만 해서는 부족하다.
 - Play 중 Save를 허용하면 사용자가 임시 상태를 영구 상태로 오해할 수 있다. 이번 단계는
   Save/Save As를 비활성화하고 명확한 tooltip을 제공하는 쪽을 권장한다.
-- ActiveCamera가 없는 Scene은 Play 진입을 거부하거나 명시적인 fallback을 사용해야 한다.
-  Player와 같은 정책을 공유하도록 12.6 전에 결정한다.
+- ActiveCamera 조회 실패 때 미초기화 Camera로 덮어쓰면 안 된다. Editor host는 마지막
+  유효 Camera를 보존하고, Stop 성공 시 즉시 EditorCamera로 되돌린다.
 
 #### 검증
 
@@ -379,6 +381,10 @@ Edit
 
 **완료 기준**: Play는 게임 상태를 실제로 진행하고, Stop은 디스크 I/O 없이 시작 직전
 Scene을 정확히 복원한다.
+
+구현은 `EditorSession::EnterPlay()`/`StopPlay()`가 snapshot과 mode를 함께 소유하며,
+`DemoGame`은 전환 성공 뒤에만 해당 모드의 Camera를 선택한다. 자동 테스트는 snapshot
+실패 원자성, Entity/Component/선택/대기 명령 복원, 100회 반복 안정성을 검증한다.
 
 ---
 
