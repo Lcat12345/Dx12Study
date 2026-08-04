@@ -194,7 +194,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 | 12.0 | 완료 | 메모리 씬 직렬화 + EditorSession | 영속 상태와 임시 상태, stream 경계 | 중 | - |
 | 12.1 | 완료 | 실행 컨텍스트 + 카메라/시스템 3분류 | 모드별 업데이트, 시간·입력 소유권 | 대 | - |
 | 12.2 | 완료 | Play/Stop 스냅샷 | transactional restore, 시뮬레이션 수명 | 중 | - |
-| 12.3 | 대기 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
+| 12.3 | 완료 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
 | 12.4 | 대기 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
 | 12.5 | 대기 | 컴파일된 셰이더 + 런타임 리소스 경로 | build-time content pipeline, 배포 root | 대 | - |
 | 12.6 | 대기 | Player 시작 Scene + 데모 게임 | CLI, runtime bootstrap, 상호작용 | 중 | - |
@@ -395,19 +395,19 @@ offscreen 또는 swap-chain으로 선택하고, Engine/Renderer가 ImGui 타입�
 
 #### 작업 항목
 
-- [ ] `Renderer.h`에서 `ImGuiLayer.h` include와 `unique_ptr<ImGuiLayer>` 제거
-- [ ] `Renderer::InitializeOverlay`, `Overlay`, ImGui 전용 메시지 처리 제거
-- [ ] `Engine` 생성자와 loop에서 ImGui 초기화/NewFrame 호출 제거
-- [ ] ImGui frame 시작과 Window message hook 등록을 Editor host로 이동
-- [ ] Editor가 소유하는 `ImGuiLayer` 또는 `EditorOverlay` 작성
-- [ ] scene pass 기록과 presentation 기록을 함수 경계로 분리
-- [ ] generic overlay recording callback 또는 동등한 ImGui 비의존 확장 지점 제공
-- [ ] Editor offscreen target 경로 유지: scene resolve texture를 ImGui SRV로 전달
-- [ ] Player 1x 경로: current back buffer를 scene colour target으로 직접 사용
-- [ ] Player 4x 경로: multisample colour/depth에 렌더한 뒤 current back buffer로 resolve
-- [ ] swap-chain resize 시 Player depth/MSAA attachment를 함께 재생성
-- [ ] Editor panel resize는 기존 offscreen colour/depth/resolve만 재생성
-- [ ] 두 presentation 모두 같은 `BuildDrawQueues`, pass constants, PSO, pass 순서 사용
+- [x] `Renderer.h`에서 `ImGuiLayer.h` include와 `unique_ptr<ImGuiLayer>` 제거
+- [x] `Renderer::InitializeOverlay`, `Overlay`, ImGui 전용 메시지 처리 제거
+- [x] `Engine` 생성자와 loop에서 ImGui 초기화/NewFrame 호출 제거
+- [x] ImGui frame 시작과 Window message hook 등록을 Editor host로 이동
+- [x] Editor가 소유하는 `ImGuiLayer` 또는 `EditorOverlay` 작성
+- [x] scene pass 기록과 presentation 기록을 함수 경계로 분리
+- [x] generic overlay recording callback 또는 동등한 ImGui 비의존 확장 지점 제공
+- [x] Editor offscreen target 경로 유지: scene resolve texture를 ImGui SRV로 전달
+- [x] Player 1x 경로: current back buffer를 scene colour target으로 직접 사용
+- [x] Player 4x 경로: multisample colour/depth에 렌더한 뒤 current back buffer로 resolve
+- [x] swap-chain resize 시 Player depth/MSAA attachment를 함께 재생성
+- [x] Editor panel resize는 기존 offscreen colour/depth/resolve만 재생성
+- [x] 두 presentation 모두 같은 `BuildDrawQueues`, pass constants, PSO, pass 순서 사용
 
 #### API 방향
 
@@ -488,6 +488,30 @@ back buffer:      PRESENT → RESOLVE_DEST → PRESENT
 
 **완료 기준**: Renderer는 ImGui 없이 한 프레임을 완성할 수 있고, Editor와 Player
 presentation이 scene pass 코드를 복제하지 않는다.
+
+#### 구현 결과 (2026-08-04)
+
+- 커밋: `2d024f1 refactor: renderer presentation과 overlay 분리`
+- `Renderer::RenderFrame`이 `SceneOutput::OffscreenTexture`와
+  `SceneOutput::SwapChain`을 받고, 선택적인 `OverlayRecorder` callback을 호출한다.
+- shadow → opaque → skybox → transparent는 `RecordScenePasses` 한 곳에서 기록하고,
+  출력별 attachment와 마지막 transition/resolve만 presentation 함수가 담당한다.
+- Editor host인 `DemoGame`이 `ImGuiLayer` 생성, `NewFrame`, Window message hook,
+  overlay recording과 종료 전 GPU drain을 소유한다. `Engine`과 `Renderer`에는 ImGui
+  include, 타입, 호출이 남지 않는다.
+- `RenderTarget`은 SRV가 선택 사항이 되었고, swap-chain 출력은 Editor offscreen
+  attachment와 별도의 window-sized depth/MSAA colour attachment를 사용한다.
+- Player 1x는 current back buffer를 scene RTV로 직접 사용하며, Player 4x는 별도
+  multisample colour에서 `RESOLVE_DEST` 상태의 current back buffer로 resolve한다.
+- `functional/presentation-paths`가 WARP hidden window에서 overlay 없는 offscreen과
+  swap-chain 출력, 1x/4x 전환, resize를 실행한다. Debug Layer 메시지는 0이었다.
+- Debug/Release x64 빌드는 모두 경고 0, 오류 0이었고 전체 테스트는 두 구성에서
+  22/22 통과했다.
+
+세부 소유권과 상태 전이 계약은
+[`Engine/Docs/Phase12.3-PresentationBoundary.md`](../Engine/Docs/Phase12.3-PresentationBoundary.md)에
+기록했다. 실제 `Player.exe` bootstrap과 프로젝트 링크 분리는 12.4에서 이
+`SceneOutput::SwapChain` 경로를 연결해 검증한다.
 
 ---
 
@@ -862,11 +886,11 @@ Phase 12는 실행 파일과 배포 경계를 만들지만, 아래 주제를 자
 
 ### 렌더링
 
-- [ ] Editor는 offscreen Scene texture를 ImGui viewport에 표시
-- [ ] Player 1x는 back buffer에 직접 scene 렌더
-- [ ] Player 4x는 MSAA colour/depth에서 back buffer로 resolve
-- [ ] shadow → opaque → skybox → transparent 순서가 Editor/Player에서 공유
-- [ ] resize와 1x↔4x 전환 후 Debug Layer 경고·오류 0
+- [x] Editor는 offscreen Scene texture를 ImGui viewport에 표시
+- [x] Player 1x용 경로는 back buffer에 직접 scene 렌더
+- [x] Player 4x용 경로는 MSAA colour/depth에서 back buffer로 resolve
+- [x] shadow → opaque → skybox → transparent 순서가 두 presentation에서 공유
+- [x] resize와 1x↔4x 전환 후 Debug Layer 경고·오류 0
 - [ ] Phase 11 skybox, normal mapping, shadow, transparency가 Player에서도 유지
 
 ### 빌드·링크 경계
