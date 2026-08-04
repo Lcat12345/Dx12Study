@@ -158,6 +158,7 @@
     <ClCompile Include="Source\Game\DebugUI.cpp" />
     <ClCompile Include="Source\Game\DemoGame.cpp" />
     <ClCompile Include="Source\Game\EditorSession.cpp" />
+    <ClCompile Include="Source\Game\ExecutionContext.cpp" />
     <ClCompile Include="Source\Game\Main.cpp" />
     <ClCompile Include="Source\Game\AssetBrowser.cpp" />
     <ClCompile Include="Source\Game\Picking.cpp" />
@@ -194,6 +195,7 @@
     <ClInclude Include="Source\Game\DebugUI.h" />
     <ClInclude Include="Source\Game\DemoGame.h" />
     <ClInclude Include="Source\Game\EditorSession.h" />
+    <ClInclude Include="Source\Game\ExecutionContext.h" />
     <ClInclude Include="Source\Game\Picking.h" />
     <ClInclude Include="Source\Game\Scene.h" />
     <ClInclude Include="Source\Game\Systems.h" />
@@ -212,6 +214,7 @@
     <ClInclude Include="Source\Loaders\ObjLoader.h" />
   </ItemGroup>
   <ItemGroup>
+    <None Include="Docs\Phase12.1-ExecutionBoundary.md" />
     <None Include="Shaders\Basic.hlsl">
       <ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">false</ExcludedFromBuild>
     </None>

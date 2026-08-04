@@ -39,6 +39,53 @@ namespace
         });
         return found;
     }
+
+    CameraView CameraViewOf(const Transform& transform, const CameraComponent& lens)
+    {
+        CameraView camera;
+        camera.position = transform.position;
+        XMStoreFloat3(&camera.forward, ForwardFrom(transform));
+        camera.up    = { 0.0f, 1.0f, 0.0f };
+        camera.fovY  = lens.fovY;
+        camera.nearZ = lens.nearZ;
+        camera.farZ  = lens.farZ;
+        return camera;
+    }
+
+    void ApplyCameraInput(Transform& transform, const InputContext& input, float dt)
+    {
+        transform.rotation.y += input.mouseDeltaX * kMouseSpeed;
+        transform.rotation.x -= input.mouseDeltaY * kMouseSpeed;
+
+        constexpr float kPitchLimit = XM_PIDIV2 - 0.01f;
+        transform.rotation.x = std::clamp(transform.rotation.x,
+                                         -kPitchLimit, kPitchLimit);
+
+        const XMVECTOR forward = ForwardFrom(transform);
+        const XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
+        const XMVECTOR right = XMVector3Normalize(XMVector3Cross(worldUp, forward));
+
+        XMVECTOR move = XMVectorZero();
+        if (input.IsDown('W')) move = XMVectorAdd(move, forward);
+        if (input.IsDown('S')) move = XMVectorSubtract(move, forward);
+        if (input.IsDown('D')) move = XMVectorAdd(move, right);
+        if (input.IsDown('A')) move = XMVectorSubtract(move, right);
+        if (input.IsDown('E')) move = XMVectorAdd(move, worldUp);
+        if (input.IsDown('Q')) move = XMVectorSubtract(move, worldUp);
+
+        if (XMVectorGetX(XMVector3LengthSq(move)) > 0.0f)
+        {
+            float speed = kMoveSpeed;
+            if (input.IsDown(VK_SHIFT))
+            {
+                speed *= kFastMultiplier;
+            }
+            move = XMVectorScale(XMVector3Normalize(move), speed * dt);
+
+            XMVECTOR position = XMLoadFloat3(&transform.position);
+            XMStoreFloat3(&transform.position, XMVectorAdd(position, move));
+        }
+    }
 }
 
 XMMATRIX WorldMatrixOf(const Transform& t)
@@ -58,52 +105,38 @@ void SpinSystem(World& world, float dt)
     });
 }
 
-void CameraSystem(World& world, float mouseDeltaX, float mouseDeltaY, float dt)
+bool InitializeEditorCamera(World& world, EditorCamera& outCamera)
 {
     const Entity camera = FindActiveCamera(world);
-    Transform* transform = world.Get<Transform>(camera);
+    const Transform* transform = world.Get<Transform>(camera);
     if (!transform)
     {
-        return;
+        return false;
     }
 
-    transform->rotation.y += mouseDeltaX * kMouseSpeed;
-    transform->rotation.x -= mouseDeltaY * kMouseSpeed;
-
-    // Clamp just short of straight up/down, where the camera would flip.
-    constexpr float kPitchLimit = XM_PIDIV2 - 0.01f;
-    transform->rotation.x = std::clamp(transform->rotation.x, -kPitchLimit, kPitchLimit);
-
-    const XMVECTOR forward = ForwardFrom(*transform);
-    const XMVECTOR worldUp = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-    // Left-handed: cross(up, forward) points right.
-    const XMVECTOR right = XMVector3Normalize(XMVector3Cross(worldUp, forward));
-
-    // GetAsyncKeyState polls the physical key state - good enough here;
-    // WM_INPUT (raw input) is the upgrade path for precise handling.
-    auto down = [](int vk) { return (GetAsyncKeyState(vk) & 0x8000) != 0; };
-
-    XMVECTOR move = XMVectorZero();
-    if (down('W')) move = XMVectorAdd(move, forward);
-    if (down('S')) move = XMVectorSubtract(move, forward);
-    if (down('D')) move = XMVectorAdd(move, right);
-    if (down('A')) move = XMVectorSubtract(move, right);
-    if (down('E')) move = XMVectorAdd(move, worldUp);
-    if (down('Q')) move = XMVectorSubtract(move, worldUp);
-
-    if (XMVectorGetX(XMVector3LengthSq(move)) > 0.0f)
+    outCamera.transform = *transform;
+    if (const CameraComponent* lens = world.Get<CameraComponent>(camera))
     {
-        float speed = kMoveSpeed;
-        if (down(VK_SHIFT))
-        {
-            speed *= kFastMultiplier;
-        }
-        // Normalize first: otherwise diagonal movement would be faster.
-        // Multiplying by dt is what makes speed frame-rate independent.
-        move = XMVectorScale(XMVector3Normalize(move), speed * dt);
+        outCamera.lens = *lens;
+    }
+    else
+    {
+        outCamera.lens = CameraComponent{};
+    }
+    return true;
+}
 
-        XMVECTOR position = XMLoadFloat3(&transform->position);
-        XMStoreFloat3(&transform->position, XMVectorAdd(position, move));
+CameraView GetEditorCameraView(const EditorCamera& camera)
+{
+    return CameraViewOf(camera.transform, camera.lens);
+}
+
+void GameCameraSystem(World& world, const InputContext& input, float dt)
+{
+    const Entity camera = FindActiveCamera(world);
+    if (Transform* transform = world.Get<Transform>(camera))
+    {
+        ApplyCameraInput(*transform, input, dt);
     }
 }
 
@@ -139,10 +172,6 @@ bool GetActiveCameraView(World& world, CameraView& outCamera)
         return false;
     }
 
-    outCamera.position = transform->position;
-    XMStoreFloat3(&outCamera.forward, ForwardFrom(*transform));
-    outCamera.up = { 0.0f, 1.0f, 0.0f };
-
     // EVERY field is written, including when there is no lens. Leaving the
     // lens fields alone would make the answer depend on what the caller's
     // struct already held - and the two callers seed it differently: the
@@ -159,17 +188,30 @@ bool GetActiveCameraView(World& world, CameraView& outCamera)
     {
         lens = *found;
     }
-    outCamera.fovY  = lens.fovY;
-    outCamera.nearZ = lens.nearZ;
-    outCamera.farZ  = lens.farZ;
+    outCamera = CameraViewOf(*transform, lens);
 
     return true;
+}
+
+void RunEditorSystems(EditorCamera& camera, const FrameContext& frame)
+{
+    ApplyCameraInput(camera.transform, frame.input, frame.deltaSeconds);
+}
+
+void RunPlaySystems(World& world, const PlaySession& session)
+{
+    if (!session.IsActive())
+    {
+        return;
+    }
+    GameCameraSystem(world, session.Input(), session.DeltaSeconds());
+    SpinSystem(world, session.DeltaSeconds());
+    LightOrbitSystem(world, session.ElapsedSeconds());
 }
 
 void BuildRenderData(World& world,
                      const ResourceManager& resources,
                      std::vector<DrawItem>& outItems,
-                     CameraView& outCamera,
                      LightingData& outLighting)
 {
     // --- what to draw ---
@@ -222,11 +264,6 @@ void BuildRenderData(World& world,
             outItems.push_back(item);
         }
     });
-
-    // --- where to draw it from ---
-    // Leaves outCamera untouched when there is no camera, so the last good
-    // view is kept rather than snapping to the origin.
-    GetActiveCameraView(world, outCamera);
 
     // --- how it is lit ---
     outLighting = LightingData{};

@@ -192,7 +192,7 @@ Component 타입을 모르는 ECS 컨테이너이므로 `Engine.lib`에 남는�
 | 단계 | 상태 | 주제 | 핵심 학습 | 규모(예상) | 태그 |
 |------|------|------|-----------|-----------|------|
 | 12.0 | 완료 | 메모리 씬 직렬화 + EditorSession | 영속 상태와 임시 상태, stream 경계 | 중 | - |
-| 12.1 | 대기 | 실행 컨텍스트 + 카메라/시스템 3분류 | 모드별 업데이트, 시간·입력 소유권 | 대 | - |
+| 12.1 | 완료 | 실행 컨텍스트 + 카메라/시스템 3분류 | 모드별 업데이트, 시간·입력 소유권 | 대 | - |
 | 12.2 | 대기 | Play/Stop 스냅샷 | transactional restore, 시뮬레이션 수명 | 중 | - |
 | 12.3 | 대기 | presentation 분리 + ImGui 결합 제거 | 렌더와 표시의 분리, callback 경계 | 대 | - |
 | 12.4 | 대기 | Engine/Game/Editor/Player 프로젝트 분리 | 정적 라이브러리, 링크 단위 의존성 | 대 | - |
@@ -271,17 +271,17 @@ Player 링크에 다시 끌고 들어온다.
 
 #### 작업 항목
 
-- [ ] Editor 상태 `RunMode { Edit, Play }` 정의
-- [ ] `FrameContext`: frame dt, host input, 렌더에 공통인 프레임 정보
-- [ ] `PlaySession`: play elapsed time, 필요한 input edge/state 소유
-- [ ] Always / Editor-only / Play-only 함수 묶음 정의
-- [ ] `SpinSystem`, `LightOrbitSystem`, 게임 카메라 입력을 Play-only로 이동
-- [ ] `LightOrbitSystem`이 Engine 전체 `TotalSeconds()` 대신 play elapsed time 사용
-- [ ] World 밖 `EditorCamera` 도입
-- [ ] Edit 렌더와 뷰포트 picking이 `EditorCamera`에서 같은 `CameraView`를 사용
-- [ ] Play 렌더는 World의 `ActiveCamera` 사용
-- [ ] Player용 입력 컨텍스트는 viewport hover나 ImGui capture 개념을 갖지 않음
-- [ ] Editor-only 구현 파일 목록과 향후 Editor 프로젝트 소유권을 문서화
+- [x] Editor 상태 `RunMode { Edit, Play }` 정의
+- [x] `FrameContext`: frame dt, host input, 렌더에 공통인 프레임 정보
+- [x] `PlaySession`: play elapsed time, 필요한 input edge/state 소유
+- [x] Always / Editor-only / Play-only 함수 묶음 정의
+- [x] `SpinSystem`, `LightOrbitSystem`, 게임 카메라 입력을 Play-only로 이동
+- [x] `LightOrbitSystem`이 Engine 전체 `TotalSeconds()` 대신 play elapsed time 사용
+- [x] World 밖 `EditorCamera` 도입
+- [x] Edit 렌더와 뷰포트 picking이 `EditorCamera`에서 같은 `CameraView`를 사용
+- [x] Play 렌더는 World의 `ActiveCamera` 사용
+- [x] Player용 입력 컨텍스트는 viewport hover나 ImGui capture 개념을 갖지 않음
+- [x] Editor-only 구현 파일 목록과 향후 Editor 프로젝트 소유권을 문서화
 
 #### 설계 결정
 
@@ -313,6 +313,10 @@ Player 링크에 다시 끌고 들어온다.
 
 **완료 기준**: 세 시스템 분류와 두 카메라가 코드 호출 경계로 드러나며,
 Edit 중에는 Scene의 게임 상태가 진행되지 않는다.
+
+구현 파일의 향후 프로젝트 소유권은
+[`Engine/Docs/Phase12.1-ExecutionBoundary.md`](../Engine/Docs/Phase12.1-ExecutionBoundary.md)에
+기록했다.
 
 ---
 

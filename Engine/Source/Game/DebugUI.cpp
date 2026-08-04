@@ -6,8 +6,6 @@
 #include "Game/EditorSession.h"
 #include "Game/Picking.h"
 #include "Game/Scene.h"
-#include "Game/Systems.h"
-
 #include "Core/Common.h"
 #include "Core/TextEncoding.h"
 
@@ -728,7 +726,7 @@ namespace
     }
 
     void DrawMainMenuBar(World& world, ResourceManager& resources,
-                         EditorSession& session)
+                         EditorSession& session, DebugUIContext& ui)
     {
         if (!ImGui::BeginMainMenuBar())
         {
@@ -786,6 +784,23 @@ namespace
             if (ImGui::MenuItem("Save As..."))
             {
                 session.openSaveAs = true;
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Run"))
+        {
+            const bool editing = ui.runMode == RunMode::Edit;
+            const bool playing = ui.runMode == RunMode::Play;
+            if (ImGui::MenuItem("Edit", nullptr, editing, !editing))
+            {
+                ui.runModeChangeRequested = true;
+                ui.requestedRunMode = RunMode::Edit;
+            }
+            if (ImGui::MenuItem("Play", nullptr, playing, !playing))
+            {
+                ui.runModeChangeRequested = true;
+                ui.requestedRunMode = RunMode::Play;
             }
             ImGui::EndMenu();
         }
@@ -897,12 +912,11 @@ namespace
         const float ndcX = ((mouse.x - imageMin.x) / imageSize.x) * 2.0f - 1.0f;
         const float ndcY = 1.0f - ((mouse.y - imageMin.y) / imageSize.y) * 2.0f;
 
-        CameraView camera;
-        if (!GetActiveCameraView(world, camera))
+        if (!ui.viewportCamera)
         {
             return;
         }
-        const Ray ray = RayFromNdc(camera, ui.sceneAspect, ndcX, ndcY);
+        const Ray ray = RayFromNdc(*ui.viewportCamera, ui.sceneAspect, ndcX, ndcY);
 
         // Two jobs on one button, split by the arming toggle. Without the
         // mode, placing would make the viewport unclickable for anything
@@ -1031,6 +1045,12 @@ namespace
         }
 
         ImGui::Text("%d fps   %.3f ms", ui.fps, ui.dt * 1000.0f);
+        ImGui::Text("Mode: %s", ui.runMode == RunMode::Edit ? "Edit" : "Play");
+        if (ui.runMode == RunMode::Play)
+        {
+            ImGui::SameLine();
+            ImGui::TextDisabled("%.2f s", ui.playElapsed);
+        }
 
         // A rolling history so a stutter is visible rather than averaged away.
         static float history[120] = {};
@@ -1102,7 +1122,7 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
                  EditorSession& session, DebugUIContext& ui)
 {
     // Before the dock space, which sizes itself around the menu bar.
-    DrawMainMenuBar(world, resources, session);
+    DrawMainMenuBar(world, resources, session, ui);
     DrawSaveAsPopup(world, resources, session);
 
     // A full-window dock space so the panels can be rearranged and docked.

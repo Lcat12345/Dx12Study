@@ -1,7 +1,9 @@
 #include "Core/Common.h"
 #include "Game/Components.h"
 #include "Game/EditorSession.h"
+#include "Game/ExecutionContext.h"
 #include "Game/Scene.h"
+#include "Game/Systems.h"
 #include "Graphics/DescriptorAllocator.h"
 #include "Graphics/GraphicsDevice.h"
 #include "Graphics/ResourceManager.h"
@@ -266,6 +268,126 @@ namespace
               "scene status did not survive replacement");
     }
 
+    void InputContextsRespectHostBoundaries()
+    {
+        FrameContext host;
+        host.deltaSeconds = 0.25f;
+        host.renderAspect = 16.0f / 9.0f;
+        host.input.mouseDeltaX = 7.0f;
+        host.input.mouseDeltaY = -3.0f;
+        host.input.keyDown['W'] = true;
+        host.input.keyPressed['V'] = true;
+
+        const FrameContext blocked = MakeEditorFrameContext(host, false, true);
+        CheckNear(blocked.input.mouseDeltaX, 0.0f, "editor accepted mouse off viewport");
+        CheckNear(blocked.input.mouseDeltaY, 0.0f, "editor accepted mouse off viewport");
+        Check(!blocked.input.IsDown('W'), "editor ignored ImGui keyboard capture");
+        Check(!blocked.input.WasPressed('V'), "captured edge leaked into editor frame");
+
+        const FrameContext editor = MakeEditorFrameContext(host, true, false);
+        CheckNear(editor.input.mouseDeltaX, 7.0f, "editor lost viewport mouse input");
+        Check(editor.input.IsDown('W'), "editor lost held keyboard state");
+        Check(editor.input.WasPressed('V'), "editor lost keyboard edge");
+
+        const FrameContext player = MakePlayerFrameContext(host);
+        CheckNear(player.input.mouseDeltaX, 7.0f, "Player input was viewport-masked");
+        Check(player.input.IsDown('W'), "Player input was ImGui-masked");
+    }
+
+    void EditorCameraDoesNotMutateSceneCamera()
+    {
+        World world;
+        const Entity cameraEntity = world.Create();
+        Transform gameTransform;
+        gameTransform.position = { 2.0f, 3.0f, -4.0f };
+        gameTransform.rotation = { 0.1f, 0.2f, 0.0f };
+        world.Add<Transform>(cameraEntity, gameTransform);
+        world.Add<CameraComponent>(cameraEntity, { 0.8f, 0.2f, 300.0f });
+        world.Add<ActiveCamera>(cameraEntity);
+
+        EditorCamera editorCamera;
+        Check(InitializeEditorCamera(world, editorCamera),
+              "editor camera did not initialize from ActiveCamera");
+
+        FrameContext frame;
+        frame.deltaSeconds = 0.5f;
+        frame.input.mouseDeltaX = 20.0f;
+        frame.input.keyDown['W'] = true;
+        RunEditorSystems(editorCamera, frame);
+
+        const Transform* unchanged = world.Get<Transform>(cameraEntity);
+        Check(unchanged != nullptr, "game camera disappeared");
+        CheckNear(unchanged->position.x, gameTransform.position.x,
+                  "editor camera movement changed scene camera X");
+        CheckNear(unchanged->position.y, gameTransform.position.y,
+                  "editor camera movement changed scene camera Y");
+        CheckNear(unchanged->position.z, gameTransform.position.z,
+                  "editor camera movement changed scene camera Z");
+        CheckNear(unchanged->rotation.y, gameTransform.rotation.y,
+                  "editor mouse look changed scene camera rotation");
+        Check(std::fabs(editorCamera.transform.position.z - gameTransform.position.z) > 0.1f,
+              "editor camera did not move independently");
+
+        const CameraView view = GetEditorCameraView(editorCamera);
+        CheckNear(view.fovY, 0.8f, "editor camera lost copied lens");
+        CheckNear(view.nearZ, 0.2f, "editor camera lost copied near plane");
+        CheckNear(view.farZ, 300.0f, "editor camera lost copied far plane");
+    }
+
+    void PlaySystemsUseSessionTimeAndInput()
+    {
+        World world;
+
+        const Entity camera = world.Create();
+        world.Add<Transform>(camera);
+        world.Add<CameraComponent>(camera);
+        world.Add<ActiveCamera>(camera);
+
+        const Entity spinner = world.Create();
+        world.Add<Transform>(spinner);
+        world.Add<Spin>(spinner, { 2.0f });
+
+        const Entity orbit = world.Create();
+        world.Add<Transform>(orbit);
+        world.Add<Light>(orbit, { Light::Type::Point, { 1.0f, 1.0f, 1.0f }, 30.0f });
+        world.Add<Spin>(orbit, { 0.5f });
+
+        FrameContext frame;
+        frame.deltaSeconds = 0.5f;
+        frame.input.keyDown['W'] = true;
+
+        PlaySession play;
+        play.Begin();
+        play.BeginFrame(frame);
+        RunPlaySystems(world, play);
+        play.EndFrame();
+
+        CheckNear(world.Get<Transform>(camera)->position.z, 4.0f,
+                  "Play camera did not consume flattened held input");
+        CheckNear(world.Get<Transform>(spinner)->rotation.y, 1.0f,
+                  "Spin did not run in Play group");
+        CheckNear(world.Get<Transform>(orbit)->position.x, 14.0f,
+                  "orbit did not start at play elapsed zero");
+        CheckNear(world.Get<Transform>(orbit)->position.z, 0.0f,
+                  "orbit start depended on Engine total time");
+        CheckNear(play.ElapsedSeconds(), 0.5f, "play clock did not advance by frame dt");
+
+        play.End();
+        CheckNear(play.ElapsedSeconds(), 0.0f, "play clock survived Stop");
+        Check(!play.Input().IsDown('W'), "held input survived Stop");
+
+        // Waiting in Edit means no BeginFrame/EndFrame calls. A new Play
+        // starts the absolute orbit system from the exact same point.
+        play.Begin();
+        play.BeginFrame(frame);
+        RunPlaySystems(world, play);
+        CheckNear(world.Get<Transform>(orbit)->position.x, 14.0f,
+                  "re-Play orbit did not restart from the same point");
+        CheckNear(world.Get<Transform>(orbit)->position.z, 0.0f,
+                  "Edit wait leaked into play elapsed time");
+        play.EndFrame();
+    }
+
     void Version1Defaults(TestContext& context)
     {
         const std::string fixture =
@@ -415,19 +537,35 @@ namespace
 
     bool RunCpuTests(int& passed, int& total)
     {
-        ++total;
-        try
+        struct CpuTestCase
         {
-            EditorSessionResetPolicy();
-            ++passed;
-            std::cout << "[PASS] functional/editor-session-reset\n";
-            return true;
-        }
-        catch (const std::exception& e)
+            const char* name;
+            void (*run)();
+        };
+        const CpuTestCase tests[] = {
+            { "functional/editor-session-reset", EditorSessionResetPolicy },
+            { "functional/input-host-boundaries", InputContextsRespectHostBoundaries },
+            { "functional/editor-camera-isolation", EditorCameraDoesNotMutateSceneCamera },
+            { "functional/play-system-context", PlaySystemsUseSessionTimeAndInput },
+        };
+
+        bool allPassed = true;
+        for (const CpuTestCase& test : tests)
         {
-            std::cerr << "[FAIL] functional/editor-session-reset: " << e.what() << '\n';
-            return false;
+            ++total;
+            try
+            {
+                test.run();
+                ++passed;
+                std::cout << "[PASS] " << test.name << '\n';
+            }
+            catch (const std::exception& e)
+            {
+                allPassed = false;
+                std::cerr << "[FAIL] " << test.name << ": " << e.what() << '\n';
+            }
         }
+        return allPassed;
     }
 }
 

@@ -86,7 +86,9 @@
     <ClCompile Include="..\Source\Core\Common.cpp" />
     <ClCompile Include="..\Source\Core\TextEncoding.cpp" />
     <ClCompile Include="..\Source\Game\EditorSession.cpp" />
+    <ClCompile Include="..\Source\Game\ExecutionContext.cpp" />
     <ClCompile Include="..\Source\Game\Scene.cpp" />
+    <ClCompile Include="..\Source\Game\Systems.cpp" />
     <ClCompile Include="..\Source\Graphics\DescriptorAllocator.cpp" />
     <ClCompile Include="..\Source\Graphics\GraphicsDevice.cpp" />
     <ClCompile Include="..\Source\Graphics\Image.cpp" />

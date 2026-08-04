@@ -19,6 +19,9 @@
     <Filter Include="ThirdParty">
       <UniqueIdentifier>{5BE3BF77-B65F-4BB2-B206-4829634536AA}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Docs">
+      <UniqueIdentifier>{4F214970-882F-4C67-A978-E8EE49C7D3C1}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Source\Core\Common.cpp">
@@ -43,6 +46,9 @@
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Source\Game\EditorSession.cpp">
+      <Filter>Game</Filter>
+    </ClCompile>
+    <ClCompile Include="Source\Game\ExecutionContext.cpp">
       <Filter>Game</Filter>
     </ClCompile>
     <ClCompile Include="Source\Game\Main.cpp">
@@ -149,6 +155,9 @@
     <ClInclude Include="Source\Game\EditorSession.h">
       <Filter>Game</Filter>
     </ClInclude>
+    <ClInclude Include="Source\Game\ExecutionContext.h">
+      <Filter>Game</Filter>
+    </ClInclude>
     <ClInclude Include="Source\Game\Picking.h">
       <Filter>Game</Filter>
     </ClInclude>
@@ -199,6 +208,9 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
+    <None Include="Docs\Phase12.1-ExecutionBoundary.md">
+      <Filter>Docs</Filter>
+    </None>
     <None Include="Shaders\Basic.hlsl">
       <Filter>Shaders</Filter>
     </None>

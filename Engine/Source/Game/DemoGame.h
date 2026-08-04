@@ -5,6 +5,8 @@
 #include "Core/World.h"
 #include "Game/AssetBrowser.h"
 #include "Game/EditorSession.h"
+#include "Game/ExecutionContext.h"
+#include "Game/Systems.h"
 #include "Graphics/RenderData.h"
 
 #include <memory>
@@ -23,8 +25,16 @@ protected:
     void OnRender() override;
 
 private:
+    FrameContext CaptureHostFrame(float dt);
+    void RunAlways(const FrameContext& frame);
+    void RunEditorOnly(const FrameContext& frame);
+    void RunPlayOnly(const FrameContext& frame);
+    void SetRunMode(RunMode mode);
+
     World m_world;
     EditorSession m_editor;
+    PlaySession   m_play;
+    EditorCamera  m_editorCamera;
 
     // Created in OnInit, not the constructor: it needs the renderer's
     // ResourceManager, which does not exist until the base class has
@@ -34,6 +44,7 @@ private:
     // Rebuilt every frame by the render system. Kept as a member so the
     // vector's storage is reused instead of reallocated 5000 times a second.
     std::vector<DrawItem> m_drawItems;
+    // Selected once in OnUpdate and shared by render + viewport picking.
     CameraView            m_camera;
     LightingData          m_lighting;
 

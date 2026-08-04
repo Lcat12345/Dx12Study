@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Core/World.h"
+#include "Game/ExecutionContext.h"
 #include "Graphics/Handles.h"
 
 #include <DirectXMath.h>
@@ -54,6 +55,9 @@ struct EditorCommand
 class EditorSession
 {
 public:
+    // Execution mode belongs to the editor host and is never serialized.
+    RunMode runMode = RunMode::Edit;
+
     // Invalidated whenever the World is replaced.
     Entity                     selected;
     std::vector<EditorCommand> commands;

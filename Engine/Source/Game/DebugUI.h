@@ -5,6 +5,8 @@
 #pragma once
 
 #include "Core/World.h"
+#include "Game/ExecutionContext.h"
+#include "Graphics/RenderData.h"
 
 #include <cstdint>
 
@@ -49,6 +51,10 @@ struct DebugUIContext
     // The aspect the scene was drawn with. Unprojecting a click needs the
     // render target's shape, not the window's.
     float sceneAspect = 1.0f;
+    // Picking uses the exact camera selected for this frame's render.
+    const CameraView* viewportCamera = nullptr;
+    RunMode           runMode        = RunMode::Edit;
+    float             playElapsed    = 0.0f;
 
     // --- out ---
     bool vsyncToggled = false;
@@ -60,6 +66,8 @@ struct DebugUIContext
     // Camera input is allowed only while the cursor is over the scene, so
     // dragging a slider no longer spins the view.
     bool viewportHovered = false;
+    bool    runModeChangeRequested = false;
+    RunMode requestedRunMode       = RunMode::Edit;
 };
 
 // Builds this frame's UI. Call between ImGuiLayer::NewFrame and Render.

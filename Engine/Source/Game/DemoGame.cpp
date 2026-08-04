@@ -22,6 +22,8 @@ void DemoGame::OnInit()
 {
     // The renderer already exists, so its resource manager can load assets.
     BuildWorld(GetRenderer().Resources(), m_world);
+    InitializeEditorCamera(m_world, m_editorCamera);
+    m_camera = GetEditorCameraView(m_editorCamera);
 
     // Scans Assets/ once here; the panel's Refresh button does it again.
     m_assets = std::make_unique<AssetBrowser>(GetRenderer().Resources());
@@ -30,36 +32,59 @@ void DemoGame::OnInit()
 void DemoGame::OnUpdate(float dt)
 {
     ImGuiLayer* overlay = GetRenderer().Overlay();
+    const FrameContext hostFrame = CaptureHostFrame(dt);
+    const FrameContext frame = MakeEditorFrameContext(
+        hostFrame, m_viewportHovered, overlay && overlay->WantsKeyboard());
 
-    // The scene lives inside a window now, so "is the UI using the mouse" is
-    // the wrong question - the UI is ALWAYS using it. The right one is
-    // whether the cursor is over the scene viewport.
-    const bool cameraHasMouse = m_viewportHovered;
-    // Keyboard still asks ImGui: a text field must swallow WASD wherever it
-    // is, and unlike the mouse there is no "over the viewport" to test.
-    const bool uiHasKeyboard  = overlay && overlay->WantsKeyboard();
-
-    float mouseDeltaX = 0.0f;
-    float mouseDeltaY = 0.0f;
-    // Consumed unconditionally: leaving the delta in the window would apply
-    // it in one lump the moment the cursor re-enters the viewport.
-    GetWindow().ConsumeMouseDelta(mouseDeltaX, mouseDeltaY);
-    if (!cameraHasMouse)
+    if (m_editor.runMode == RunMode::Edit)
     {
-        mouseDeltaX = 0.0f;
-        mouseDeltaY = 0.0f;
+        RunEditorOnly(frame);
     }
+    else
+    {
+        RunPlayOnly(frame);
+    }
+    RunAlways(frame);
+}
 
-    // Systems, in order. Each one reads and writes components; none of them
-    // owns state of its own.
-    CameraSystem(m_world, mouseDeltaX, mouseDeltaY, uiHasKeyboard ? 0.0f : dt);
-    SpinSystem(m_world, dt);
-    LightOrbitSystem(m_world, TotalSeconds());
+FrameContext DemoGame::CaptureHostFrame(float dt)
+{
+    FrameContext frame;
+    frame.deltaSeconds = dt;
+    frame.renderAspect = GetRenderer().SceneAspectRatio();
 
+    GetWindow().ConsumeMouseDelta(frame.input.mouseDeltaX, frame.input.mouseDeltaY);
+    for (int key = 0; key < InputContext::kKeyCount; ++key)
+    {
+        frame.input.keyDown[key] = (GetAsyncKeyState(key) & 0x8000) != 0;
+        frame.input.keyPressed[key] = GetWindow().ConsumeKeyPress(key);
+    }
+    return frame;
+}
+
+void DemoGame::RunEditorOnly(const FrameContext& frame)
+{
+    RunEditorSystems(m_editorCamera, frame);
+    m_camera = GetEditorCameraView(m_editorCamera);
+}
+
+void DemoGame::RunPlayOnly(const FrameContext& frame)
+{
+    m_play.BeginFrame(frame);
+    RunPlaySystems(m_world, m_play);
+    m_play.EndFrame();
+
+    // Play presentation is scene-owned. Failure leaves the last valid game
+    // camera in place instead of silently falling back to EditorCamera.
+    GetActiveCameraView(m_world, m_camera);
+}
+
+void DemoGame::RunAlways(const FrameContext& frame)
+{
     // The panels read and WRITE components directly - editing a Transform in
     // the inspector is the same operation a system performs.
     DebugUIContext ui;
-    ui.dt               = dt;
+    ui.dt               = frame.deltaSeconds;
     ui.fps              = CurrentFps();
     ui.vsync            = GetRenderer().IsVSync();
     ui.tearingSupported = GetRenderer().IsTearingSupported();
@@ -78,7 +103,10 @@ void DemoGame::OnUpdate(float dt)
     ui.maxDrawItems     = GetRenderer().MaxDrawItems();
     // Last frame's list: OnRender rebuilds it after this runs.
     ui.drawItemCount    = unsigned(m_drawItems.size());
-    ui.sceneAspect      = GetRenderer().SceneAspectRatio();
+    ui.sceneAspect      = frame.renderAspect;
+    ui.viewportCamera   = &m_camera;
+    ui.runMode          = m_editor.runMode;
+    ui.playElapsed      = m_play.ElapsedSeconds();
 
     DrawDebugUI(m_world, GetRenderer().Resources(), *m_assets, m_editor, ui);
 
@@ -91,7 +119,7 @@ void DemoGame::OnUpdate(float dt)
         GetRenderer().SetSceneViewportSize(ui.viewportWidth, ui.viewportHeight);
     }
 
-    if (ui.vsyncToggled || GetWindow().ConsumeKeyPress('V'))
+    if (ui.vsyncToggled || frame.input.WasPressed('V'))
     {
         GetRenderer().SetVSync(!GetRenderer().IsVSync());
     }
@@ -99,12 +127,35 @@ void DemoGame::OnUpdate(float dt)
     {
         GetRenderer().SetMsaaEnabled(!GetRenderer().IsMsaaEnabled());
     }
+
+    if (ui.runModeChangeRequested)
+    {
+        SetRunMode(ui.requestedRunMode);
+    }
+}
+
+void DemoGame::SetRunMode(RunMode mode)
+{
+    if (mode == m_editor.runMode)
+    {
+        return;
+    }
+
+    if (mode == RunMode::Play)
+    {
+        m_play.Begin();
+    }
+    else
+    {
+        m_play.End();
+    }
+    m_editor.runMode = mode;
 }
 
 void DemoGame::OnRender()
 {
     // The one place the two halves meet: the world is flattened into plain
     // arrays, and the renderer takes it from there.
-    BuildRenderData(m_world, GetRenderer().Resources(), m_drawItems, m_camera, m_lighting);
+    BuildRenderData(m_world, GetRenderer().Resources(), m_drawItems, m_lighting);
     GetRenderer().Render(m_camera, m_lighting, m_drawItems);
 }
