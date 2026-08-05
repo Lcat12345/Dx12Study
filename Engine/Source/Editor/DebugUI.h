@@ -42,8 +42,8 @@ struct DebugUIContext
     // anything - 0 with no layer is "unknown", not "clean".
     std::uint64_t debugMessages   = 0;
     bool          hasDebugLayer   = false;
-    // How many draw items the object constant buffer holds. Shown next to
-    // the live count, because exceeding it throws rather than degrades.
+    // How many draw items the current object constant buffers hold. Shown
+    // next to the live count so runtime growth is directly observable.
     unsigned maxDrawItems = 0;
     // What the renderer actually received last frame - NOT "entities with a
     // MeshRenderer". One with no mesh assigned yet is skipped, and a counter

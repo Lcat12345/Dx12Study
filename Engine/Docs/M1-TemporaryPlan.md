@@ -156,12 +156,12 @@ DrawItem으로 통과하고, 적 253마리는 257 DrawItem으로 최초 실패�
 
 ### 4. Object CB 동적화
 
-- [ ] `kMaxObjects`를 런타임 capacity로 바꾸고 최초 capacity는 256을 유지한다.
-- [ ] 필요량이 capacity를 넘으면 다음 2의 거듭제곱으로 증가를 요청한다.
-- [ ] `RenderFrame`의 fence wait 뒤, viewport deferred resize와 같은 안전 지점에서 모든
+- [x] `kMaxObjects`를 런타임 capacity로 바꾸고 최초 capacity는 256을 유지한다.
+- [x] 필요량이 capacity를 넘으면 다음 2의 거듭제곱으로 증가를 요청한다.
+- [x] `RenderFrame`의 fence wait 뒤, viewport deferred resize와 같은 안전 지점에서 모든
   `FrameResource`의 object CB를 다시 만든다.
-- [ ] 증가 frame에서만 `WaitForGpu()`를 허용하고 평상시 full flush가 없음을 센다.
-- [ ] map pointer와 `MaxDrawItems()` 같은 Editor 통계를 새 capacity와 동기화한다.
+- [x] 증가 frame에서만 `WaitForGpu()`를 허용하고 평상시 full flush가 없음을 센다.
+- [x] map pointer와 `MaxDrawItems()` 같은 Editor 통계를 새 capacity와 동기화한다.
 
 종료 조건:
 

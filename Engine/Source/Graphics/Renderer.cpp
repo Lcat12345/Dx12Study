@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <limits>
 #include <stdexcept>
 
 using Microsoft::WRL::ComPtr;
@@ -139,6 +140,26 @@ void Renderer::CreateCommandObjects()
     ThrowIfFailed(m_commandList->Close(), "Close command list");
 }
 
+UINT Renderer::ObjectCapacityForDrawItems(size_t drawItemCount)
+{
+    size_t capacity = kInitialObjectCapacity;
+    while (capacity < drawItemCount)
+    {
+        if (capacity > (std::numeric_limits<UINT>::max)() / 2u)
+        {
+            throw std::length_error("object constant buffer capacity overflow");
+        }
+        capacity *= 2u;
+    }
+    return static_cast<UINT>(capacity);
+}
+
+void Renderer::RequestObjectCapacity(size_t drawItemCount)
+{
+    m_requestedObjectCapacity = (std::max)(
+        m_requestedObjectCapacity, ObjectCapacityForDrawItems(drawItemCount));
+}
+
 // Two constant buffers, one per update frequency - duplicated per frame.
 void Renderer::CreateConstantBuffers()
 {
@@ -147,16 +168,6 @@ void Renderer::CreateConstantBuffers()
     D3D12_RANGE readRange = {};
     for (FrameResource& frame : m_frames)
     {
-        frame.objectCB = CreateUploadBuffer(m_device.Device(), nullptr,
-                                            UINT64(kObjectCBSize) * kMaxObjects,
-                                            "CreateCommittedResource(ObjectCB)");
-        // Map once and keep the pointer: Map/Unmap every frame would be pure
-        // overhead for an upload-heap resource.
-        ThrowIfFailed(frame.objectCB->Map(
-                          0, &readRange,
-                          reinterpret_cast<void**>(&frame.objectCBMapped)),
-                      "ObjectCB Map");
-
         frame.passCB = CreateUploadBuffer(m_device.Device(), nullptr, kPassCBSize,
                                           "CreateCommittedResource(PassCB)");
         ThrowIfFailed(frame.passCB->Map(
@@ -164,6 +175,43 @@ void Renderer::CreateConstantBuffers()
                           reinterpret_cast<void**>(&frame.passCBMapped)),
                       "PassCB Map");
     }
+
+    RecreateObjectConstantBuffers(m_objectCapacity);
+}
+
+void Renderer::RecreateObjectConstantBuffers(UINT capacity)
+{
+    // Build and map every replacement before touching the live frame sets.
+    // An allocation failure therefore leaves all old resources and pointers
+    // intact instead of producing a ring with mixed capacities.
+    ComPtr<ID3D12Resource> replacements[kFramesInFlight];
+    uint8_t* mapped[kFramesInFlight] = {};
+    D3D12_RANGE readRange = {};
+
+    for (UINT index = 0; index < kFramesInFlight; ++index)
+    {
+        replacements[index] = CreateUploadBuffer(
+            m_device.Device(), nullptr, UINT64(kObjectCBSize) * capacity,
+            "CreateCommittedResource(ObjectCB)");
+        ThrowIfFailed(replacements[index]->Map(
+                          0, &readRange,
+                          reinterpret_cast<void**>(&mapped[index])),
+                      "ObjectCB Map");
+    }
+
+    for (UINT index = 0; index < kFramesInFlight; ++index)
+    {
+        FrameResource& frame = m_frames[index];
+        if (frame.objectCB && frame.objectCBMapped)
+        {
+            frame.objectCB->Unmap(0, nullptr);
+        }
+        frame.objectCB = std::move(replacements[index]);
+        frame.objectCBMapped = mapped[index];
+        frame.objectCapacity = capacity;
+    }
+
+    m_objectCapacity = capacity;
 }
 
 // The "function signature" of the pipeline:
@@ -694,12 +742,10 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
 void Renderer::UpdateObjectConstants(FrameResource& frame,
                                      const std::vector<DrawItem>& items)
 {
-    if (ExceedsInitialObjectCapacity(items.size()))
+    if (items.size() > frame.objectCapacity)
     {
-        throw std::runtime_error(
-            "object constant buffer exhausted: draw_items=" +
-            std::to_string(items.size()) + " capacity=" +
-            std::to_string(kMaxObjects));
+        throw std::logic_error(
+            "object constant buffer growth was not applied at the frame boundary");
     }
 
     for (size_t i = 0; i < items.size(); ++i)
@@ -1244,9 +1290,10 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
 {
     m_lastFrameStats = {};
     m_lastFrameStats.submittedItems = items.size();
-    m_lastFrameStats.objectCapacity = kMaxObjects;
     m_lastFrameStats.srvUsed = m_srvAllocator.UsedCount();
     m_lastFrameStats.srvCapacity = m_srvAllocator.Capacity();
+
+    RequestObjectCapacity(items.size());
 
     FrameResource& frame = m_frames[m_currentFrame];
 
@@ -1261,16 +1308,35 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     // sampling the old texture. Recreating a texture needs the whole GPU
     // idle, so this costs a full flush - but only on frames where the panel
     // actually changed size, i.e. while the user is dragging a splitter.
-    if (m_requestedViewportWidth  != 0 &&
-        (m_requestedViewportWidth  != m_sceneColor->Width() ||
-         m_requestedViewportHeight != m_sceneColor->Height()))
+    const bool resizeViewport =
+        m_requestedViewportWidth != 0 &&
+        (m_requestedViewportWidth != m_sceneColor->Width() ||
+         m_requestedViewportHeight != m_sceneColor->Height());
+    const bool growObjectBuffers =
+        m_requestedObjectCapacity > m_objectCapacity;
+
+    // Both operations replace resources that any frame in flight may still
+    // reference. Coalescing them keeps even a resize+growth frame to one full
+    // drain, while the normal path performs neither Signal nor full wait.
+    if (resizeViewport || growObjectBuffers)
     {
         m_device.WaitForGpu();
+        ++m_lastFrameStats.fullGpuWaits;
+
+        if (growObjectBuffers)
+        {
+            RecreateObjectConstantBuffers(m_requestedObjectCapacity);
+        }
+
         // Both halves of the attachment, together - a colour and depth pair
         // of different sizes is an invalid render target.
-        m_sceneColor->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
-        m_sceneDepth->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
+        if (resizeViewport)
+        {
+            m_sceneColor->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
+            m_sceneDepth->Resize(m_requestedViewportWidth, m_requestedViewportHeight);
+        }
     }
+    m_lastFrameStats.objectCapacity = m_objectCapacity;
 
     // Queues contain source indices, so transparent sorting never changes
     // the item-to-Object-CB mapping established below.

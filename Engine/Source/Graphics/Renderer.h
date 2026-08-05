@@ -29,6 +29,9 @@ public:
         uint64_t mainVisible      = 0;
         uint64_t shadowVisible    = 0;
         uint64_t submittedItems   = 0;
+        // Full queue drains performed inside this RenderFrame. Per-frame
+        // fence waits are intentionally not counted here.
+        uint64_t fullGpuWaits     = 0;
         UINT     objectCapacity   = 0;
         UINT     srvUsed           = 0;
         UINT     srvCapacity       = 0;
@@ -99,15 +102,15 @@ public:
     DirectX::XMFLOAT3 ShadowSceneCenter() const { return m_shadowSceneCenter; }
     float             ShadowSceneRadius() const { return m_shadowSceneRadius; }
 
-    // How many DrawItems Render() will accept before throwing. The editor
-    // shows it next to the live count so the ceiling is visible before it
-    // is hit.
-    UINT MaxDrawItems() const { return kMaxObjects; }
-    static constexpr UINT InitialObjectCapacity() { return kMaxObjects; }
-    static constexpr bool ExceedsInitialObjectCapacity(size_t drawItemCount)
+    // Current number of object slots. It starts small and grows to the next
+    // power of two, so the editor and benchmark output report the allocation
+    // actually backing every FrameResource.
+    UINT MaxDrawItems() const { return m_objectCapacity; }
+    static constexpr UINT InitialObjectCapacity()
     {
-        return drawItemCount > kMaxObjects;
+        return kInitialObjectCapacity;
     }
+    static UINT ObjectCapacityForDrawItems(size_t drawItemCount);
 
     // Takes flattened data, not a scene graph. Scene passes are shared by
     // both outputs; only the final presentation path differs. The optional
@@ -166,6 +169,8 @@ private:
 
     void CreateCommandObjects();
     void CreateConstantBuffers();
+    void RequestObjectCapacity(size_t drawItemCount);
+    void RecreateObjectConstantBuffers(UINT capacity);
     void CreateRootSignature();
     void CreatePipelineStates();
     void QueryMsaaSupport();
@@ -285,6 +290,8 @@ private:
     // ring, the other is chosen by the swap chain.
     FrameResource m_frames[kFramesInFlight];
     UINT          m_currentFrame = 0;
+    UINT          m_objectCapacity = kInitialObjectCapacity;
+    UINT          m_requestedObjectCapacity = kInitialObjectCapacity;
 
     // Shared by the scene passes for as long as they need the same inputs.
     // Not a rule: a pass whose contract genuinely differs - shadow depth

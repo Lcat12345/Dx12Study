@@ -1353,8 +1353,8 @@ namespace
         // for anything that unprojects a click (10.4).
         ImGui::Separator();
         ImGui::Text("viewport %ux%u", ui.viewportWidth, ui.viewportHeight);
-        // Draw items, not entities: placing by hand is what will eventually
-        // hit the object constant buffer's ceiling.
+        // Draw items, not entities. The capacity beside the live count grows
+        // with the object constant buffers at a safe frame boundary.
         ImGui::Text("%d entities, %u drawn / %u",
                     entityCount, ui.drawItemCount, ui.maxDrawItems);
 

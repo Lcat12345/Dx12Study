@@ -94,6 +94,7 @@ void Engine::RecordFrameSample(float dt)
         << " main_visible=" << frame.mainVisible
         << " shadow_visible=" << frame.shadowVisible
         << " object_capacity=" << frame.objectCapacity
+        << " full_gpu_waits=" << frame.fullGpuWaits
         << " srv_used=" << frame.srvUsed
         << " srv_capacity=" << frame.srvCapacity;
     ProcessLog::Info(row.str());

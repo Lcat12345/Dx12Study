@@ -65,12 +65,9 @@ struct PassConstants // b1 - written once per frame
 static_assert(sizeof(PassConstants) == 304,
               "PassConstants C++ layout must match the three scene shaders");
 
-// The object CB holds one 256-byte slot each, so 256 objects cost 64 KB per
-// frame set - not worth being clever about. Placing entities by hand blew
-// past 32 immediately; a genuinely dynamic buffer waits until a scene needs
-// more than this, because resizing it means the same deferred-recreation
-// dance the render target needs.
-constexpr UINT kMaxObjects   = 256;
+// Start with 64 KB per frame set, then let Renderer grow every set together
+// at a GPU-idle frame boundary when a scene needs more slots.
+constexpr UINT kInitialObjectCapacity = 256;
 constexpr UINT kObjectCBSize = Align(sizeof(ObjectConstants), 256);
 constexpr UINT kPassCBSize   = Align(sizeof(PassConstants), 256);
 
@@ -92,6 +89,7 @@ struct FrameResource
     Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
     Microsoft::WRL::ComPtr<ID3D12Resource>         objectCB;
     uint8_t*                                       objectCBMapped = nullptr;
+    UINT                                           objectCapacity = 0;
     Microsoft::WRL::ComPtr<ID3D12Resource>         passCB;
     uint8_t*                                       passCBMapped   = nullptr;
     // Fence value signalled when the GPU finishes the frame that used this

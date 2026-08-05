@@ -835,7 +835,7 @@ namespace
               "100-enemy arena did not flatten to the expected draw items");
     }
 
-    void FixedResourceCeilingsAreReproducible(TestContext& context)
+    void ObjectCapacityGrowthPolicyAndSrvCeiling(TestContext& context)
     {
         auto arenaDrawItemCount = [&](uint32_t enemyCount) {
             World world;
@@ -856,11 +856,15 @@ namespace
         const size_t lastPassingCount = arenaDrawItemCount(252);
         const size_t firstFailingCount = arenaDrawItemCount(253);
         Check(lastPassingCount == 256 &&
-                  !Renderer::ExceedsInitialObjectCapacity(lastPassingCount),
-              "252 enemies no longer reproduce the last passing Object CB load");
+                  Renderer::ObjectCapacityForDrawItems(lastPassingCount) == 256,
+              "252 enemies no longer fit the initial Object CB capacity");
         Check(firstFailingCount == 257 &&
-                  Renderer::ExceedsInitialObjectCapacity(firstFailingCount),
-              "253 enemies no longer reproduce the first Object CB overflow");
+                  Renderer::ObjectCapacityForDrawItems(firstFailingCount) == 512,
+              "253 enemies did not request the first Object CB growth");
+        Check(Renderer::ObjectCapacityForDrawItems(1000) == 1024,
+              "1000 draw items did not round Object CB capacity to 1024");
+        Check(Renderer::ObjectCapacityForDrawItems(2000) == 2048,
+              "2000 draw items did not round Object CB capacity to 2048");
 
         DescriptorAllocator descriptors{
             context.device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
@@ -1175,7 +1179,7 @@ namespace
         }
     }
 
-    void PresentationPathsStayClean(TestContext&)
+    void PresentationPathsAndDynamicObjectBuffersStayClean(TestContext&)
     {
         constexpr wchar_t className[] = L"Dx12EnginePhase12PresentationTest";
         WNDCLASSEXW windowClass = {};
@@ -1220,10 +1224,58 @@ namespace
             renderer.Resize(400, 240);
             renderer.RenderFrame(camera, lighting, items,
                                  Renderer::SceneOutput::SwapChain);
+
+            // Grow through every M1 acceptance boundary. One-index draws keep
+            // the WARP test cheap while still exercising all CBV addresses.
+            const MeshHandle mesh = renderer.Resources().ResolveMesh(L"#cube");
+            lighting.shadowsEnabled = false;
+            auto makeItems = [&](size_t count, float xOffset) {
+                std::vector<DrawItem> result(count);
+                for (size_t index = 0; index < count; ++index)
+                {
+                    DrawItem& item = result[index];
+                    item.mesh = mesh;
+                    item.indexCount = 1;
+                    item.layer = RenderLayer::Transparent;
+                    const float x = xOffset + float(index % 32u) * 0.01f;
+                    const float z = 1.0f + float(index / 32u) * 0.01f;
+                    DirectX::XMStoreFloat4x4(
+                        &item.world, DirectX::XMMatrixTranslation(x, 0.0f, z));
+                    item.worldBoundsCenter = { x, 0.0f, z };
+                }
+                return result;
+            };
+            auto renderAndCheckGrowth = [&](size_t count, UINT expectedCapacity) {
+                items = makeItems(count, 0.0f);
+                renderer.RenderFrame(camera, lighting, items,
+                                     Renderer::SceneOutput::OffscreenTexture);
+                const Renderer::FrameStats& stats = renderer.LastFrameStats();
+                Check(renderer.MaxDrawItems() == expectedCapacity &&
+                          stats.objectCapacity == expectedCapacity,
+                      "Object CB runtime capacity did not match its allocation");
+                Check(stats.submittedItems == count,
+                      "Object CB growth frame lost submitted draw items");
+                Check(stats.fullGpuWaits == 1,
+                      "Object CB growth did not perform exactly one full GPU wait");
+            };
+
+            renderAndCheckGrowth(257, 512);
+            renderAndCheckGrowth(1000, 1024);
+            renderAndCheckGrowth(2000, 2048);
+
+            // The previous draw used one frame set. Change every transform
+            // and draw on the other set without another growth or full flush.
+            items = makeItems(2000, 0.5f);
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            Check(renderer.LastFrameStats().objectCapacity == 2048,
+                  "stable frame lost the grown Object CB capacity");
+            Check(renderer.LastFrameStats().fullGpuWaits == 0,
+                  "stable Object CB frame performed an unnecessary full GPU wait");
             if (renderer.HasDebugLayer())
             {
                 Check(renderer.DebugMessageCount() == 0,
-                      "presentation paths recorded a D3D12 debug message");
+                      "presentation or Object CB growth recorded a D3D12 debug message");
             }
         }
         catch (...)
@@ -1308,7 +1360,8 @@ int main()
         const TestCase tests[] = {
             { "functional/play-stop-rollback", PlayStopRestoresExactEditWorld },
             { "functional/arena-play-stop-rollback", ArenaScenePlayStopRestoresSnapshot },
-            { "regression/fixed-resource-ceilings", FixedResourceCeilingsAreReproducible },
+            { "functional/object-capacity-growth-policy",
+              ObjectCapacityGrowthPolicyAndSrvCeiling },
             { "functional/demo-scene-interaction", DemoSceneAndSpinInteraction },
             { "functional/play-capture-failure", FailedPlayCaptureIsAtomic },
             { "regression/repeated-play-stop", RepeatedPlayStopIsStable },
@@ -1325,7 +1378,8 @@ int main()
             { "regression/existing-fixtures", ExistingFixturesStillRoundTrip },
             { "regression/future-version-and-bom", FutureVersionAndBomPolicy },
             { "regression/classic-locale", SerializationForcesClassicLocale },
-            { "functional/presentation-paths", PresentationPathsStayClean },
+            { "functional/presentation-and-dynamic-object-buffers",
+              PresentationPathsAndDynamicObjectBuffersStayClean },
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
             { "functional/runtime-paths-and-compiled-shaders",
               RuntimePathsAndCompiledShaderCache },
