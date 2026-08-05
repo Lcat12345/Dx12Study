@@ -24,6 +24,23 @@ public:
     // Call once per frame before any UI is built.
     void NewFrame();
 
+    // Point the backend at a replaced SRV heap.
+    //
+    // The backend caches the heap POINTER at init and binds it itself in
+    // RenderDrawData, and each texture it owns caches a GPU handle into that
+    // heap. Growing the heap invalidates both. Upstream has no API for this,
+    // so ImGui_ImplDX12_RebindDescriptorHeap is a small local patch - see the
+    // comment on its declaration.
+    //
+    // Shutting the backend down and re-initialising it was tried first and
+    // does not work: Shutdown marks the font texture Destroyed and the next
+    // ImGui::NewFrame walks into it. Rebinding leaves textures, the font
+    // atlas, and every status untouched.
+    //
+    // Call at a frame boundary, with the GPU drained and the new heap already
+    // holding the same slot indices as the old one.
+    void RebindDescriptorHeap();
+
     // Records the UI into the command list. Must come AFTER the scene and
     // BEFORE the back buffer transitions to PRESENT.
     void Render(ID3D12GraphicsCommandList* commandList);
@@ -54,5 +71,16 @@ public:
     static bool HandleMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
 
 private:
+    bool InitBackend();
+
+    // Everything ImGui_ImplDX12_Init needs, kept so the backend can be built
+    // a second time without the editor having to hand it all over again.
+    ID3D12Device*        m_device       = nullptr;
+    ID3D12CommandQueue*  m_commandQueue = nullptr;
+    DescriptorAllocator* m_srvAllocator = nullptr;
+    DXGI_FORMAT          m_rtvFormat    = DXGI_FORMAT_UNKNOWN;
+    DXGI_FORMAT          m_dsvFormat    = DXGI_FORMAT_UNKNOWN;
+    int                  m_framesInFlight = 1;
+
     bool m_hadSavedLayout = false;
 };

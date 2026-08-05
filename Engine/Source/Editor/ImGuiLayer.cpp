@@ -27,8 +27,16 @@ namespace
     {
         auto* allocator = static_cast<DescriptorAllocator*>(info->UserData);
         const DescriptorHandle handle = allocator->Allocate();
-        *outCpu = handle.cpu;
-        *outGpu = handle.gpu;
+        // The CPU handle is a staging address, which is where the backend
+        // writes its view; the GPU handle is into the live heap. They are
+        // different heaps now, and that is the point - the staging one can
+        // grow without disturbing anything the GPU is reading.
+        //
+        // This runs from inside RenderDrawData, i.e. mid-recording. It is
+        // allowed to because Allocate() never replaces a heap, and the slot
+        // it hands back is published before the list is submitted.
+        *outCpu = allocator->CpuHandle(handle);
+        *outGpu = allocator->GpuHandle(handle);
     }
 
     void SrvDescriptorFree(ImGui_ImplDX12_InitInfo* info,
@@ -84,25 +92,45 @@ ImGuiLayer::ImGuiLayer(HWND hwnd, ID3D12Device* device,
         throw std::runtime_error("ImGui_ImplWin32_Init failed");
     }
 
-    ImGui_ImplDX12_InitInfo info = {};
-    info.Device            = device;
-    info.CommandQueue      = commandQueue;
-    // MUST match kFramesInFlight. The backend keeps one vertex/index buffer
-    // per frame for exactly the same reason our FrameResources exist.
-    info.NumFramesInFlight = framesInFlight;
-    info.RTVFormat         = rtvFormat;
-    info.DSVFormat         = dsvFormat;
-    info.SrvDescriptorHeap = srvAllocator.Heap();
-    info.SrvDescriptorAllocFn = SrvDescriptorAlloc;
-    info.SrvDescriptorFreeFn  = SrvDescriptorFree;
-    info.UserData          = &srvAllocator;
+    m_device         = device;
+    m_commandQueue   = commandQueue;
+    m_srvAllocator   = &srvAllocator;
+    m_rtvFormat      = rtvFormat;
+    m_dsvFormat      = dsvFormat;
+    m_framesInFlight = framesInFlight;
 
-    if (!ImGui_ImplDX12_Init(&info))
+    if (!InitBackend())
     {
         ImGui_ImplWin32_Shutdown();
         ImGui::DestroyContext();
         throw std::runtime_error("ImGui_ImplDX12_Init failed");
     }
+}
+
+bool ImGuiLayer::InitBackend()
+{
+    ImGui_ImplDX12_InitInfo info = {};
+    info.Device            = m_device;
+    info.CommandQueue      = m_commandQueue;
+    // MUST match kFramesInFlight. The backend keeps one vertex/index buffer
+    // per frame for exactly the same reason our FrameResources exist.
+    info.NumFramesInFlight = m_framesInFlight;
+    info.RTVFormat         = m_rtvFormat;
+    info.DSVFormat         = m_dsvFormat;
+    // Captured by the backend and bound by it in RenderDrawData. When the heap
+    // is replaced, RebindDescriptorHeap updates this copy rather than the
+    // backend being torn down.
+    info.SrvDescriptorHeap = m_srvAllocator->Heap();
+    info.SrvDescriptorAllocFn = SrvDescriptorAlloc;
+    info.SrvDescriptorFreeFn  = SrvDescriptorFree;
+    info.UserData          = m_srvAllocator;
+
+    return ImGui_ImplDX12_Init(&info);
+}
+
+void ImGuiLayer::RebindDescriptorHeap()
+{
+    ImGui_ImplDX12_RebindDescriptorHeap(m_srvAllocator->Heap());
 }
 
 ImGuiLayer::~ImGuiLayer()

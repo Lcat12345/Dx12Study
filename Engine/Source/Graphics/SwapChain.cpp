@@ -60,8 +60,9 @@ void SwapChain::CreateRenderTargetViews()
     {
         ThrowIfFailed(m_swapChain->GetBuffer(i, IID_PPV_ARGS(&m_backBuffers[i])),
                       "SwapChain GetBuffer");
-        m_device.Device()->CreateRenderTargetView(m_backBuffers[i].Get(), nullptr,
-                                                  m_backBufferRTVs[i].cpu);
+        m_device.Device()->CreateRenderTargetView(
+            m_backBuffers[i].Get(), nullptr,
+            m_rtvAllocator.CpuHandle(m_backBufferRTVs[i]));
     }
 }
 

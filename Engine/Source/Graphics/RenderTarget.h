@@ -61,9 +61,12 @@ public:
     bool HasShaderResource() const { return m_srv.IsValid(); }
     DXGI_FORMAT     ColorFormat()   const { return m_colorFormat; }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE RTV() const { return m_rtv.cpu; }
+    // Resolved on every call rather than cached. The SRV heap is replaced
+    // when it grows, which moves every GPU address - a stored handle would
+    // survive as a number and stop meaning anything.
+    D3D12_CPU_DESCRIPTOR_HANDLE RTV() const;
     // For ImGui::Image - the shader-visible handle of the colour texture.
-    D3D12_GPU_DESCRIPTOR_HANDLE SRV() const { return m_srv.gpu; }
+    D3D12_GPU_DESCRIPTOR_HANDLE SRV() const;
 
     const float* ClearColor() const { return m_clearColor; }
 
@@ -74,6 +77,10 @@ private:
     void CreateResources();
 
     GraphicsDevice& m_device;
+    // Kept for the lifetime of the target: an index means nothing without the
+    // allocator that issued it.
+    DescriptorAllocator& m_rtvAllocator;
+    DescriptorAllocator* m_srvAllocator = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> m_color;
     Microsoft::WRL::ComPtr<ID3D12Resource> m_resolve;

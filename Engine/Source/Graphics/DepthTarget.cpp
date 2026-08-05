@@ -27,6 +27,8 @@ DepthTarget::DepthTarget(GraphicsDevice& device,
                          UINT sampleCount,
                          UINT sampleQuality)
     : m_device(device)
+    , m_dsvAllocator(dsvAllocator)
+    , m_srvAllocator(srvAllocator)
     , m_width(std::max(width, 1u))
     , m_height(std::max(height, 1u))
     , m_sampleCount(std::max(sampleCount, 1u))
@@ -85,7 +87,8 @@ void DepthTarget::CreateResources()
     dsvDesc.Format        = kDepthView;
     dsvDesc.ViewDimension = m_sampleCount > 1 ? D3D12_DSV_DIMENSION_TEXTURE2DMS
                                               : D3D12_DSV_DIMENSION_TEXTURE2D;
-    m_device.Device()->CreateDepthStencilView(m_resource.Get(), &dsvDesc, m_dsv.cpu);
+    m_device.Device()->CreateDepthStencilView(m_resource.Get(), &dsvDesc,
+                                              m_dsvAllocator.CpuHandle(m_dsv));
 
     if (m_readable)
     {
@@ -114,8 +117,24 @@ void DepthTarget::CreateResources()
                                         ? D3D12_SRV_DIMENSION_TEXTURE2DMS
                                         : D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels     = 1;
-        m_device.Device()->CreateShaderResourceView(m_resource.Get(), &srvDesc, m_srv.cpu);
+        m_device.Device()->CreateShaderResourceView(
+            m_resource.Get(), &srvDesc, m_srvAllocator->CpuHandle(m_srv));
+        // Rewritten in place, so the shader-visible copy is now behind. Safe
+        // here only because every caller of CreateResources has drained the
+        // GPU first - the slot cannot be under a command list that is running.
+        m_srvAllocator->MarkWritten(m_srv);
     }
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE DepthTarget::DSV() const
+{
+    return m_dsvAllocator.CpuHandle(m_dsv);
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE DepthTarget::SRV() const
+{
+    return m_srvAllocator ? m_srvAllocator->GpuHandle(m_srv)
+                          : D3D12_GPU_DESCRIPTOR_HANDLE{};
 }
 
 void DepthTarget::Resize(UINT width, UINT height)

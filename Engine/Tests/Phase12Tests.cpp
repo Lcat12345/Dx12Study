@@ -9,6 +9,7 @@
 #include "Game/Systems.h"
 #include "Graphics/DescriptorAllocator.h"
 #include "Graphics/Frustum.h"
+#include "Graphics/Image.h"
 #include "Graphics/GraphicsDevice.h"
 #include "Graphics/Renderer.h"
 #include "Graphics/ResourceManager.h"
@@ -887,27 +888,59 @@ namespace
         Check(Renderer::ObjectCapacityForDrawItems(2000) == 2048,
               "2000 draw items did not round Object CB capacity to 2048");
 
+        // The 64-slot SRV ceiling this test used to pin down is gone: the
+        // allocator adds a staging page instead of throwing, and the
+        // shader-visible heap catches up at a frame boundary.
         DescriptorAllocator descriptors{
             context.device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
             64, true
         };
-        for (UINT index = 0; index < 64; ++index)
+        std::vector<DescriptorHandle> slots;
+        for (UINT index = 0; index < 200; ++index)
         {
-            Check(descriptors.Allocate().index == index,
-                  "SRV ceiling fixture did not allocate sequential slots");
+            const DescriptorHandle handle = descriptors.Allocate();
+            Check(handle.index == index,
+                  "SRV allocation did not hand out sequential slots");
+            Check(descriptors.CpuHandle(handle).ptr != 0,
+                  "an allocated slot had no staging address");
+            slots.push_back(handle);
         }
-        try
+        Check(descriptors.Capacity() >= 200 && descriptors.UsedCount() == 200,
+              "the SRV allocator did not grow past its initial page");
+
+        // Every staging address handed out before growth must still resolve to
+        // the same place: pages are appended, never moved, which is what lets
+        // ImGui hand a years-old CPU handle back to FreeByCpuHandle.
+        for (const DescriptorHandle& handle : slots)
         {
-            descriptors.Allocate();
-            throw std::runtime_error("65th SRV allocation unexpectedly succeeded");
+            Check(descriptors.CpuHandle(handle).ptr != 0,
+                  "a staging address stopped resolving after growth");
         }
-        catch (const std::runtime_error& allocationError)
-        {
-            const std::string message = allocationError.what();
-            Check(message.find("used=64") != std::string::npos &&
-                      message.find("capacity=64") != std::string::npos,
-                  "SRV overflow omitted the last resource usage");
-        }
+        Check(descriptors.CpuHandle(slots[0]).ptr !=
+                  descriptors.CpuHandle(slots[64]).ptr,
+              "slots either side of a page boundary shared an address");
+
+        // A returned slot is reused before a new one is taken, and it is found
+        // by the CPU handle rather than by the handle we issued.
+        descriptors.FreeByCpuHandle(descriptors.CpuHandle(slots[70]));
+        Check(descriptors.Allocate().index == 70,
+              "FreeByCpuHandle did not recover the slot behind an address");
+
+        // Growth replaces the shader-visible heap, and every live slot has to
+        // survive that with a NEW address - identity is the index now.
+        const uint64_t generation = descriptors.Generation();
+        ID3D12DescriptorHeap* before = descriptors.Heap();
+        const D3D12_GPU_DESCRIPTOR_HANDLE gpuBefore =
+            descriptors.GpuHandle(slots[0]);
+        descriptors.GrowShaderVisibleHeap();
+        Check(descriptors.Generation() == generation + 1,
+              "growing the shader-visible heap did not bump the generation");
+        Check(descriptors.Heap() != before,
+              "growing the shader-visible heap kept the same heap object");
+        Check(descriptors.GpuHandle(slots[0]).ptr != gpuBefore.ptr,
+              "a GPU address survived a heap replacement, so it was stale");
+        Check(descriptors.GpuHandle(slots[199]).ptr != 0,
+              "the last live slot has no address in the grown heap");
     }
 
     void DemoSceneAndSpinInteraction(TestContext& context)
@@ -1578,6 +1611,139 @@ namespace
         UnregisterClassW(className, windowClass.hInstance);
     }
 
+    // Past the old 64-slot ceiling, with the scene actually drawing through
+    // the frame that replaces the heap.
+    //
+    // The interesting part is not that 200 textures can be created - it is
+    // that the ones created BEFORE the heap grew still draw afterwards. Their
+    // GPU addresses all moved; only the index survived.
+    void SrvHeapGrowsPastItsInitialCapacity(TestContext&)
+    {
+        constexpr wchar_t className[] = L"Dx12EngineM17SrvGrowthTest";
+        WNDCLASSEXW windowClass = {};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = className;
+        const ATOM atom = RegisterClassExW(&windowClass);
+        Check(atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS,
+              "could not register SRV growth test window");
+
+        HWND hwnd = CreateWindowExW(0, className, L"M1.7 SRV Growth Test",
+                                    WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                    320, 200, nullptr, nullptr,
+                                    windowClass.hInstance, nullptr);
+        Check(hwnd != nullptr, "could not create SRV growth test window");
+
+        try
+        {
+            Renderer renderer(hwnd, 320, 200,
+                              RuntimePaths::FromRoot(GetExecutableDir()),
+                              GraphicsDevice::AdapterPolicy::SoftwareOnly);
+            renderer.SetMsaaEnabled(false);
+            ResourceManager& resources = renderer.Resources();
+            DescriptorAllocator& descriptors = renderer.ShaderVisibleDescriptors();
+
+            CameraView camera;
+            LightingData lighting;
+            const MeshHandle mesh = resources.ResolveMesh(L"#cube");
+
+            // Taken before any texture exists, because the recording-time
+            // reserve means the very first frames already grow the heap once.
+            const uint64_t generationBefore = descriptors.Generation();
+            Check(descriptors.Capacity() == Renderer::InitialSrvCapacity(),
+                  "the SRV allocator did not start at its initial capacity");
+
+            // Textures created before any growth. The scene colour target and
+            // the shadow map already hold slots of their own by now.
+            std::vector<TextureHandle> early;
+            for (int index = 0; index < 8; ++index)
+            {
+                ImageData image;
+                image.width = 1;
+                image.height = 1;
+                image.pixels = { uint8_t(index * 8), 64, 128, 255 };
+                early.push_back(resources.AddTexture(
+                    L"#m17-early-" + std::to_wstring(index), image));
+            }
+
+            auto drawWith = [&](const std::vector<TextureHandle>& textures) {
+                std::vector<DrawItem> items;
+                items.reserve(textures.size());
+                for (size_t i = 0; i < textures.size(); ++i)
+                {
+                    DrawItem item;
+                    item.mesh = mesh;
+                    item.layer = RenderLayer::Opaque;
+                    item.material.texture = textures[i];
+                    const float x = float(i % 8) * 0.05f;
+                    DirectX::XMStoreFloat4x4(
+                        &item.world, DirectX::XMMatrixTranslation(x, 0.0f, 6.0f));
+                    item.worldBoundsCenter = { x, 0.0f, 6.0f };
+                    items.push_back(item);
+                }
+                renderer.RenderFrame(camera, lighting, items,
+                                     Renderer::SceneOutput::OffscreenTexture);
+            };
+
+            drawWith(early);
+
+            // Far past the initial 64-slot page and past the reserve, so both
+            // the staging pages and the shader-visible heap grow more than
+            // once while frames are being drawn between the steps.
+            std::vector<TextureHandle> all = early;
+            for (int index = 0; index < 400; ++index)
+            {
+                ImageData image;
+                image.width = 1;
+                image.height = 1;
+                image.pixels = { 200, uint8_t(index), 32, 255 };
+                all.push_back(resources.AddTexture(
+                    L"#m17-late-" + std::to_wstring(index), image));
+                // Draw as we go: growth then happens between frames, and the
+                // frames on either side of it both have to be valid.
+                if (index % 32 == 0)
+                {
+                    drawWith(all);
+                }
+            }
+            drawWith(all);
+
+            Check(descriptors.UsedCount() > 400,
+                  "408 textures plus the render targets did not exceed 400 slots");
+            Check(descriptors.Capacity() > Renderer::InitialSrvCapacity(),
+                  "the staging pages never grew past the first page");
+            Check(descriptors.Generation() > generationBefore + 1,
+                  "the shader-visible heap did not grow more than once");
+
+            // The whole point: slots handed out before the growth still
+            // resolve, and still draw.
+            drawWith(early);
+            Check(renderer.LastFrameStats().mainVisible == early.size(),
+                  "textures created before the heap grew stopped drawing");
+
+            // The renderer's own long-lived views are in the same heap and
+            // moved with it.
+            Check(renderer.SceneTextureId() != 0 && renderer.ShadowTextureId() != 0,
+                  "the scene colour or shadow map SRV was lost in the growth");
+
+            if (renderer.HasDebugLayer())
+            {
+                Check(renderer.DebugMessageCount() == 0,
+                      "growing the SRV heap recorded a D3D12 debug message");
+            }
+        }
+        catch (...)
+        {
+            DestroyWindow(hwnd);
+            UnregisterClassW(className, windowClass.hInstance);
+            throw;
+        }
+
+        DestroyWindow(hwnd);
+        UnregisterClassW(className, windowClass.hInstance);
+    }
+
     struct TestCase
     {
         const char* name;
@@ -1673,6 +1839,7 @@ int main()
               PresentationPathsAndDynamicObjectBuffersStayClean },
             { "functional/main-shadow-culling-queues",
               CullingSplitsMainAndShadowQueues },
+            { "functional/srv-heap-growth", SrvHeapGrowsPastItsInitialCapacity },
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
             { "functional/runtime-paths-and-compiled-shaders",
               RuntimePathsAndCompiledShaderCache },

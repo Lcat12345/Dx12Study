@@ -74,6 +74,24 @@ IMGUI_IMPL_API void     ImGui_ImplDX12_InvalidateDeviceObjects();
 // (Advanced) Use e.g. if you need to precisely control the timing of texture updates (e.g. for staged rendering), by setting ImDrawData::Textures = nullptr to handle this manually.
 IMGUI_IMPL_API void     ImGui_ImplDX12_UpdateTexture(ImTextureData* tex);
 
+// [Dx12Engine LOCAL PATCH - not upstream. Re-check on every Dear ImGui update.]
+// Point the backend at a different shader-visible SRV heap.
+//
+// A D3D12 descriptor heap cannot be resized, so an engine whose SRV heap grows
+// must replace the heap object. The backend caches that pointer at Init and
+// binds it itself in RenderDrawData, and each backend-owned texture caches a
+// GPU handle into it, so both go stale on a replacement. Upstream exposes no
+// way to update them; Init/Shutdown is the only lever, and tearing the backend
+// down mid-run marks the font texture Destroyed, which the core does not
+// recover from.
+//
+// Call this at a frame boundary, after the GPU is idle and after the new heap
+// has been populated with the SAME slot indices as the old one. CPU descriptor
+// handles are untouched - they must remain valid, which they are when the
+// engine stages descriptors in heaps it never moves. Texture resources, the
+// font atlas, and every ImTextureData::Status are left alone.
+IMGUI_IMPL_API void     ImGui_ImplDX12_RebindDescriptorHeap(ID3D12DescriptorHeap* new_heap);
+
 // [BETA] Selected render state data shared with callbacks.
 // This is temporarily stored in GetPlatformIO().Renderer_RenderState during the ImGui_ImplDX12_RenderDrawData() call.
 // (Please open an issue if you feel you need access to more data)

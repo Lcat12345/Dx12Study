@@ -427,7 +427,7 @@ void AssetBrowser::DrawDetails()
 
     // Textures are free to preview: the SRV the renderer samples is the same
     // one ImGui draws with.
-    const D3D12_GPU_DESCRIPTOR_HANDLE srv = m_resources.TextureSRV(entry->texture).gpu;
+    const D3D12_GPU_DESCRIPTOR_HANDLE srv = m_resources.TextureSRV(entry->texture);
 
     // Fit inside a square box while KEEPING the aspect ratio - drawing every
     // image square would squash anything that is not.

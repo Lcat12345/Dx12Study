@@ -17,6 +17,10 @@ EditorApp::EditorApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
     , m_packageBuilder(runtimePaths)
 {
     Renderer& renderer = GetRenderer();
+    // The overlay caches the heap and binds it itself, so the editor - not
+    // RenderFrame - decides when it may be replaced. See
+    // SyncOverlayToDescriptorHeap.
+    renderer.SetHostManagesDescriptorHeapGrowth(true);
     m_overlay = std::make_unique<ImGuiLayer>(
         GetWindow().Handle(), renderer.Device(), renderer.CommandQueue(),
         renderer.ShaderVisibleDescriptors(), renderer.OutputFormat(),
@@ -27,11 +31,40 @@ EditorApp::EditorApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
     // the user's, not ours, and must be left alone. Only the layer can tell
     // the two apart, and only before ImGui loads the file.
     m_applyDefaultLayout = !m_overlay->HadSavedLayout();
+    // The overlay was just built against the heap as it stands, so the first
+    // frame has nothing to rebuild.
+    m_descriptorHeapGeneration = renderer.ShaderVisibleDescriptors().Generation();
 
     GetWindow().SetMessageHook(
         [](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
             return ImGuiLayer::HandleMessage(hwnd, message, wParam, lParam);
         });
+}
+
+// Keep the overlay's view of the descriptor heap current.
+//
+// Two things can replace it: this call, which grows it on purpose at the one
+// moment of the frame where doing so is safe for ImGui, and RenderFrame's own
+// backstop, which may have grown it after a texture load late in the previous
+// frame. Comparing the generation covers both without caring which happened.
+void EditorApp::SyncOverlayToDescriptorHeap()
+{
+    GetRenderer().EnsureShaderVisibleDescriptorCapacity();
+
+    const uint64_t generation =
+        GetRenderer().ShaderVisibleDescriptors().Generation();
+    if (generation == m_descriptorHeapGeneration)
+    {
+        return;
+    }
+    m_descriptorHeapGeneration = generation;
+
+    // The growth itself already drained the GPU. Drain again anyway for the
+    // case where RenderFrame's backstop grew the heap late in the previous
+    // frame: the overlay may have recorded draws against the old heap, and
+    // those must be finished before its handles are moved off it.
+    GetRenderer().WaitForGpu();
+    m_overlay->RebindDescriptorHeap();
 }
 
 void EditorApp::OnInit()
@@ -44,6 +77,11 @@ void EditorApp::OnInit()
 
 void EditorApp::OnUpdate(float dt)
 {
+    // Before NewFrame, deliberately. The DX12 backend caches the SRV heap
+    // pointer and binds it itself, so the heap has to settle for this frame
+    // before any ImGui work starts - growing it halfway through would leave
+    // the overlay drawing from a heap nobody is publishing into any more.
+    SyncOverlayToDescriptorHeap();
     m_overlay->NewFrame();
     const FrameContext hostFrame = CaptureHostFrame(dt);
     const FrameContext frame = MakeEditorFrameContext(

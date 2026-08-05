@@ -349,8 +349,8 @@ TextureHandle ResourceManager::AddTexture(const std::wstring& name, const ImageD
     srvDesc.Format                  = SwapChain::kFormat;
     srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
     srvDesc.Texture2D.MipLevels     = 1;
-    m_device.Device()->CreateShaderResourceView(texture.resource.Get(), &srvDesc,
-                                                texture.srv.cpu);
+    m_device.Device()->CreateShaderResourceView(
+        texture.resource.Get(), &srvDesc, m_srvAllocator.CpuHandle(texture.srv));
 
     const TextureHandle handle{ uint32_t(m_textures.size()) };
     m_textures.push_back(std::move(texture));
@@ -504,8 +504,8 @@ CubeTextureHandle ResourceManager::LoadCubeTexture(const std::wstring& name)
     srvDesc.Format                    = SwapChain::kFormat;
     srvDesc.ViewDimension             = D3D12_SRV_DIMENSION_TEXTURECUBE;
     srvDesc.TextureCube.MipLevels     = 1;
-    m_device.Device()->CreateShaderResourceView(texture.resource.Get(), &srvDesc,
-                                                texture.srv.cpu);
+    m_device.Device()->CreateShaderResourceView(
+        texture.resource.Get(), &srvDesc, m_srvAllocator.CpuHandle(texture.srv));
 
     const CubeTextureHandle handle{ uint32_t(m_cubeTextures.size()) };
     m_cubeTextures.push_back(std::move(texture));
@@ -520,13 +520,14 @@ CubeTextureHandle ResourceManager::FindCubeTexture(const std::wstring& name) con
     return it == m_cubeTextureCache.end() ? CubeTextureHandle{} : it->second;
 }
 
-DescriptorHandle ResourceManager::CubeTextureSRV(CubeTextureHandle handle) const
+D3D12_GPU_DESCRIPTOR_HANDLE
+ResourceManager::CubeTextureSRV(CubeTextureHandle handle) const
 {
     if (!handle.IsValid() || handle.index >= m_cubeTextures.size())
     {
         throw std::runtime_error("CubeTextureSRV called with an invalid handle");
     }
-    return m_cubeTextures[handle.index].srv;
+    return m_srvAllocator.GpuHandle(m_cubeTextures[handle.index].srv);
 }
 
 const std::wstring& ResourceManager::CubeTextureName(CubeTextureHandle handle) const
@@ -539,13 +540,16 @@ const std::wstring& ResourceManager::CubeTextureName(CubeTextureHandle handle) c
     return m_cubeTextureNames[handle.index];
 }
 
-DescriptorHandle ResourceManager::TextureSRV(TextureHandle handle) const
+// The shader-visible address, resolved now rather than stored. Growing the
+// heap moves every one of these, so a cached value would outlive its meaning.
+D3D12_GPU_DESCRIPTOR_HANDLE
+ResourceManager::TextureSRV(TextureHandle handle) const
 {
     if (!handle.IsValid() || handle.index >= m_textures.size())
     {
         throw std::runtime_error("TextureSRV called with an invalid handle");
     }
-    return m_textures[handle.index].srv;
+    return m_srvAllocator.GpuHandle(m_textures[handle.index].srv);
 }
 
 // ---------------------------------------------------------------- shaders

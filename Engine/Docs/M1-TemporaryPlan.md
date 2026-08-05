@@ -292,20 +292,100 @@ forward는 약 `(0, -0.659, 0.752)`, Arena Sun의 방향은 약 `(-0.325, -0.783
 D3D12 descriptor heap 자체는 resize할 수 없으므로 단순 `64 -> 큰 수` 변경으로 끝내지
 않는다. 이 작업은 별도 변경으로 유지한다.
 
-- [ ] `DescriptorHandle`의 장기 식별자는 heap 주소가 아니라 slot index가 되게 한다.
-- [ ] descriptor 작성/바인딩 시 allocator가 현재 heap의 CPU/GPU 주소를 resolve한다.
-- [ ] capacity 부족 시 더 큰 heap을 만들고 live descriptor를 같은 index로 복사한다.
-- [ ] 교체는 GPU idle인 frame 경계에서만 수행하며 heap generation을 증가시킨다.
-- [ ] RenderTarget, DepthTarget, ResourceManager의 저장 handle을 index 기반으로 전환한다.
-- [ ] ImGui DX12 backend의 heap pointer와 font descriptor를 안전한 frame 경계에서
-  재생성한다. 중간 frame의 stale `ImTextureID` 사용을 막는다.
-- [ ] free-list 재사용과 `FreeByCpuHandle`의 새 heap generation 동작을 검증한다.
+- [x] `DescriptorHandle`의 장기 식별자는 heap 주소가 아니라 slot index가 되게 한다.
+- [x] descriptor 작성/바인딩 시 allocator가 현재 heap의 CPU/GPU 주소를 resolve한다.
+- [x] capacity 부족 시 더 큰 heap을 만들고 live descriptor를 같은 index로 복사한다.
+- [x] 교체는 GPU idle인 frame 경계에서만 수행하며 heap generation을 증가시킨다.
+- [x] RenderTarget, DepthTarget, ResourceManager의 저장 handle을 index 기반으로 전환한다.
+- [x] ImGui DX12 backend의 heap pointer와 font descriptor를 안전한 frame 경계에서
+  **rebind**한다. 중간 frame의 stale `ImTextureID` 사용을 막는다.
+  (원래 계획의 "재생성"은 불가능하다. 아래 참조.)
+- [x] free-list 재사용과 `FreeByCpuHandle`의 새 heap generation 동작을 검증한다.
 
 종료 조건:
 
-- 64 경계를 넘겨 128개 이상의 texture/SRV를 생성해도 Editor와 Player가 동작한다.
-- heap 증가 전 생성된 texture, scene color, shadow map, ImGui font가 모두 유효하다.
-- 증가 frame을 포함해 Debug Layer 메시지가 0이다.
+- [x] 64 경계를 넘겨 128개 이상의 texture/SRV를 생성해도 Editor와 Player가 동작한다.
+- [x] heap 증가 전 생성된 texture, scene color, shadow map, ImGui font가 모두 유효하다.
+- [x] 증가 frame을 포함해 Debug Layer 메시지가 0이다.
+
+#### 구현 결정
+
+**shader-visible heap은 복사원이 될 수 없다.** 이것이 설계 전체를 결정했다. 실측한
+Debug Layer 메시지는 다음과 같다.
+
+```
+ID3D12Device::CopyDescriptorsSimple: SrcDescriptorRangeStart points to a
+descriptor heap type that is CPU write only, so reading it (in this case a
+copy source) is invalid.
+```
+
+그래서 저장소를 둘로 나눴다.
+
+- **staging**: CPU 전용 heap을 **page 단위로 append**한다. 절대 옮기거나 교체하지
+  않으므로 예전에 넘겨준 CPU handle이 영원히 유효하다. `FreeByCpuHandle`이 heap 성장
+  이후에도 동작하는 이유가 이것이다. 성장에 GPU 개입이 전혀 없어 command list 기록
+  도중에도 `Allocate()`를 부를 수 있다 — ImGui backend가 `RenderDrawData` 안에서
+  descriptor를 할당하므로 이건 선택이 아니라 요구사항이다.
+- **shader-visible**: `SetDescriptorHeaps`가 type당 하나만 받으므로 단일 heap이어야
+  하고, 따라서 성장은 곧 교체다. GPU idle인 frame 경계에서만 바꾸고 generation을
+  올린다. 내용은 staging에서 **같은 index로** 복사한다.
+
+descriptor 기록은 프레임 중 아무 때나 일어나므로, 기록이 끝나고 **제출 직전**에
+`PublishPendingWrites()`로 staging→visible 복사를 한다. 기록 중은 안전하다: descriptor는
+GPU가 list를 *실행*할 때 읽히기 때문이다.
+
+교체된 heap은 곧바로 버리지 않고 한 세대 더 살려둔다. 포인터를 캐시한 host layer가
+그 프레임 안에서 아직 바인딩할 수 있기 때문이다.
+
+**heap 교체 권한은 host당 정확히 한 곳만 가진다.** `RenderFrame`은 아무것도 하지 않는
+host(Player, 모든 테스트)를 위해 스스로 성장시키지만, 캐싱 layer를 가진 host는
+`SetHostManagesDescriptorHeapGrowth(true)`로 이를 가져가야 한다. 둘 다 성장시키면
+host가 이미 handle을 resolve해 둔 프레임 도중에 heap이 또 바뀌고, 그러면
+`SetGraphicsRootDescriptorTable`이 바인딩되지 않은 heap의 handle을 받는다. 실제로
+이 상태를 만들어 Debug Layer 메시지 63개를 재현했고, 소유권을 배타적으로 바꾼 뒤 0이
+됐다.
+
+reserve는 256 slot이다. heap은 frame 경계에서만 바뀌는데 descriptor 할당은 아무 때나
+일어나므로(scene 로드가 material마다 texture를 만들고 같은 프레임에 그린다), 경계 이후
+할당분은 이미 사용 중인 heap에 들어가야 한다. descriptor 하나가 32바이트라 256칸은
+8 KB이고, 모자라면 조용한 오작동이 아니라 예외다.
+
+#### ImGui: 재생성이 아니라 rebind
+
+계획의 "backend 재생성"은 ImGui 1.92에서 **동작하지 않는다**. `ImGui_ImplDX12_Shutdown()`
++ `Init()`을 두 시점에서 시도해 둘 다 ImGui **core**의 `NewFrame()`에서 access violation을
+확인했다.
+
+- 첫 frame 이전
+- font texture 생성 후 약 1000 frame 경과 시점
+
+`Shutdown`이 `InvalidateDeviceObjects`를 통해 font texture를 `ImTextureStatus_Destroyed`로
+표시하는데 core가 여기서 복구하지 못한다. upstream에는 heap 포인터를 갱신하는 API가
+없다.
+
+그래서 vendor에 최소 확장 하나를 추가했다.
+
+```cpp
+IMGUI_IMPL_API void ImGui_ImplDX12_RebindDescriptorHeap(ID3D12DescriptorHeap* new_heap);
+```
+
+`bd->pd3dSrvDescHeap`과 복사본인 `bd->InitInfo.SrvDescriptorHeap`을 새 heap으로 바꾸고,
+`ImGui::GetPlatformIO().Textures`를 순회하며 backend가 소유한 texture의 GPU handle을
+같은 slot index로 rebase한 뒤 `SetTexID()`까지 갱신한다. CPU handle은 staging page가
+고정이라 그대로 두고, texture resource와 font atlas와 status는 건드리지 않는다. 그래서
+font를 `Destroyed`로 만드는 문제 자체가 발생하지 않는다.
+
+- 위치: `ThirdParty/imgui/backends/imgui_impl_dx12.{h,cpp}`
+- 두 곳 모두 `[Dx12Engine LOCAL PATCH - not upstream. Re-check on every Dear ImGui update.]`
+  주석으로 표시했다. ImGui 갱신 시 확인할 diff는 이 두 블록이다.
+- Editor의 scene/shadow/asset `ImTextureID`는 매 frame allocator에서 다시 resolve하므로
+  persistent rebase가 필요한 것은 backend 소유 텍스처뿐이다.
+
+검증: page size를 4로 낮추고 성장을 강제해 Editor를 약 2400 frame 돌렸다. rebind가 13회
+발생했고 첫 회는 font 생성 전(텍스처 없음), 이후 12회는 모두 font가 **slot 6에 고정된 채**
+새 heap 범위 안으로 재계산됐다. `debug_messages=0`, 정상 종료. `frame_summary` 로그에
+`debug_messages`와 `has_debug_layer`를 추가해 이 조건을 Editor와 Player 양쪽에서 로그로
+확인할 수 있게 했다.
 
 ### 8. M1 통합과 정리
 

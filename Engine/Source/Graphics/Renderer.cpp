@@ -171,6 +171,20 @@ void Renderer::RequestObjectCapacity(size_t drawItemCount)
         m_requestedObjectCapacity, ObjectCapacityForDrawItems(drawItemCount));
 }
 
+bool Renderer::EnsureShaderVisibleDescriptorCapacity()
+{
+    if (!m_srvAllocator.NeedsShaderVisibleGrowth())
+    {
+        return false;
+    }
+
+    // The heap being replaced may be bound by a command list that is still
+    // running, so nothing may be released until the queue is empty.
+    m_device.WaitForGpu();
+    m_srvAllocator.GrowShaderVisibleHeap();
+    return true;
+}
+
 void Renderer::RequestInstanceCapacity(size_t instanceCount)
 {
     m_requestedInstanceCapacity = (std::max)(
@@ -1335,7 +1349,7 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
                                     ? item.material.texture
                                     : m_resources.DefaultTexture();
         m_commandList->SetGraphicsRootDescriptorTable(
-            2, m_resources.TextureSRV(texture).gpu);
+            2, m_resources.TextureSRV(texture));
 
         // Same idea for the normal map, and the same reason it is never left
         // unbound: a descriptor table the shader reads but nobody filled is
@@ -1346,7 +1360,7 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
                                       ? item.material.normalTexture
                                       : m_resources.DefaultNormalTexture();
         m_commandList->SetGraphicsRootDescriptorTable(
-            3, m_resources.TextureSRV(normalMap).gpu);
+            3, m_resources.TextureSRV(normalMap));
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
@@ -1503,10 +1517,10 @@ void Renderer::DrawOpaquePass(FrameResource& frame,
             0, objectCBBase + UINT64(batch.representativeItem) * kObjectCBSize);
         ++m_lastFrameStats.rootCbvBinds;
         m_commandList->SetGraphicsRootDescriptorTable(
-            2, m_resources.TextureSRV(TextureHandle{ batch.key.texture }).gpu);
+            2, m_resources.TextureSRV(TextureHandle{ batch.key.texture }));
         m_commandList->SetGraphicsRootDescriptorTable(
             3, m_resources.TextureSRV(
-                   TextureHandle{ batch.key.normalTexture }).gpu);
+                   TextureHandle{ batch.key.normalTexture }));
 
         const D3D12_VERTEX_BUFFER_VIEW buffers[] = {
             mesh.vbv, frame.instanceBufferView
@@ -1540,7 +1554,7 @@ void Renderer::DrawSkyboxPass(FrameResource& frame,
         0, frame.objectCB->GetGPUVirtualAddress());
     ++m_lastFrameStats.rootCbvBinds;
     m_commandList->SetGraphicsRootDescriptorTable(
-        2, m_resources.CubeTextureSRV(skybox).gpu);
+        2, m_resources.CubeTextureSRV(skybox));
 
     const Mesh& mesh = m_resources.GetMesh(m_skyboxMesh);
     m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
@@ -1830,14 +1844,27 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
         m_requestedObjectCapacity > m_objectCapacity;
     const bool growInstanceBuffers =
         m_requestedInstanceCapacity > m_instanceCapacity;
+    // The backstop for a host that does nothing - the Player, and every test
+    // - so the ceiling is gone either way. A host with a caching layer takes
+    // this over completely: replacing the heap here, after that host has
+    // already resolved handles for this frame, is what leaves a root
+    // descriptor table pointing at a heap that is no longer bound.
+    const bool growDescriptorHeap = !m_hostManagesDescriptorHeapGrowth &&
+                                    m_srvAllocator.NeedsShaderVisibleGrowth();
 
-    // All three operations replace resources that any frame in flight may
+    // All four operations replace resources that any frame in flight may
     // still reference. Coalescing them keeps even a resize+growth frame to one
     // full drain, while the normal path performs neither Signal nor full wait.
-    if (resizeViewport || growObjectBuffers || growInstanceBuffers)
+    if (resizeViewport || growObjectBuffers || growInstanceBuffers ||
+        growDescriptorHeap)
     {
         m_device.WaitForGpu();
         ++m_lastFrameStats.fullGpuWaits;
+
+        if (growDescriptorHeap)
+        {
+            m_srvAllocator.GrowShaderVisibleHeap();
+        }
 
         if (growObjectBuffers)
         {
@@ -1889,6 +1916,15 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     }
 
     ThrowIfFailed(m_commandList->Close(), "CommandList Close");
+
+    // Descriptors written since the last frame reach the shader-visible heap
+    // HERE, after recording and before submission.
+    //
+    // After, because the overlay recorder may allocate while it records -
+    // ImGui creates its font texture from inside RenderDrawData. Before,
+    // because a descriptor is only fetched when the GPU runs the list, so a
+    // slot that no SUBMITTED list references is still free to write.
+    m_srvAllocator.PublishPendingWrites();
 
     // Everything so far was only RECORDED. This hands it to the GPU.
     ID3D12CommandList* lists[] = { m_commandList.Get() };

@@ -49,10 +49,12 @@ public:
 
     ID3D12Resource* Resource() const { return m_resource.Get(); }
 
-    D3D12_CPU_DESCRIPTOR_HANDLE DSV() const { return m_dsv.cpu; }
+    // Resolved on every call rather than cached: growing the SRV heap
+    // replaces it, and every GPU address with it.
+    D3D12_CPU_DESCRIPTOR_HANDLE DSV() const;
     // Only valid when this target was created with an SRV allocator.
     bool                        HasSrv() const { return m_srv.IsValid(); }
-    D3D12_GPU_DESCRIPTOR_HANDLE SRV()    const { return m_srv.gpu; }
+    D3D12_GPU_DESCRIPTOR_HANDLE SRV()    const;
 
     D3D12_VIEWPORT Viewport() const;
     D3D12_RECT     ScissorRect() const;
@@ -61,6 +63,10 @@ private:
     void CreateResources();
 
     GraphicsDevice& m_device;
+    // Kept for the lifetime of the target: an index means nothing without the
+    // allocator that issued it.
+    DescriptorAllocator& m_dsvAllocator;
+    DescriptorAllocator* m_srvAllocator = nullptr;
 
     Microsoft::WRL::ComPtr<ID3D12Resource> m_resource;
 

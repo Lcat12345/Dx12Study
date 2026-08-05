@@ -39,7 +39,7 @@ public:
     }
     D3D12_CPU_DESCRIPTOR_HANDLE CurrentBackBufferRTV() const
     {
-        return m_backBufferRTVs[m_backBufferIndex].cpu;
+        return m_rtvAllocator.CpuHandle(m_backBufferRTVs[m_backBufferIndex]);
     }
 
 private:

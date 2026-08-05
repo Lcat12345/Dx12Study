@@ -91,13 +91,16 @@ public:
     CubeTextureHandle LoadCubeTexture(const std::wstring& name);
     CubeTextureHandle FindCubeTexture(const std::wstring& name) const;
 
-    DescriptorHandle     CubeTextureSRV(CubeTextureHandle handle) const;
-    const std::wstring&  CubeTextureName(CubeTextureHandle handle) const;
+    D3D12_GPU_DESCRIPTOR_HANDLE CubeTextureSRV(CubeTextureHandle handle) const;
+    const std::wstring&         CubeTextureName(CubeTextureHandle handle) const;
 
     // The face order D3D12 expects, as subresource indices 0..5.
     static const wchar_t* const kCubeFaceSuffixes[6];
 
-    DescriptorHandle TextureSRV(TextureHandle handle) const;
+    // The shader-visible address to bind. Deliberately not a stored handle:
+    // the SRV heap is replaced when it grows, so this has to be asked for
+    // again every time it is used.
+    D3D12_GPU_DESCRIPTOR_HANDLE TextureSRV(TextureHandle handle) const;
 
     // Pixel dimensions of a loaded texture. Anything laying one out needs
     // them - a preview drawn square would squash a 16:9 image. Zero for an

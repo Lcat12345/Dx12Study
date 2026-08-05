@@ -31,6 +31,7 @@ private:
     void RunEditorOnly(const FrameContext& frame);
     void RunPlayOnly(const FrameContext& frame);
     void SetRunMode(RunMode mode);
+    void SyncOverlayToDescriptorHeap();
     uint64_t MeasurementEnemyCount() override;
     std::wstring MeasurementTitleStatus() override;
 
@@ -45,6 +46,9 @@ private:
     // Rebuild the panel arrangement on the next frame: set for a first run
     // with no saved layout, and by View > Reset layout.
     bool                          m_applyDefaultLayout = false;
+    // Which SRV heap the overlay's backend was built against. A change means
+    // the heap grew and the backend is holding a pointer to the old one.
+    uint64_t                      m_descriptorHeapGeneration = 0;
 
     std::vector<DrawItem> m_drawItems;
     CameraView            m_camera;

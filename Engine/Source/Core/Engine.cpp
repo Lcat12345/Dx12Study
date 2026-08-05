@@ -101,7 +101,11 @@ void Engine::RecordFrameSample(float dt)
         << " instance_capacity=" << frame.instanceCapacity
         << " full_gpu_waits=" << frame.fullGpuWaits
         << " srv_used=" << frame.srvUsed
-        << " srv_capacity=" << frame.srvCapacity;
+        << " srv_capacity=" << frame.srvCapacity
+        // The only place a descriptor-heap growth would show up as a problem
+        // from outside a test. Always 0 in Release, where there is no layer.
+        << " debug_messages=" << m_renderer->DebugMessageCount()
+        << " has_debug_layer=" << (m_renderer->HasDebugLayer() ? 1 : 0);
     ProcessLog::Info(row.str());
     OnFrameSampleSummary(*summary, frame);
 }

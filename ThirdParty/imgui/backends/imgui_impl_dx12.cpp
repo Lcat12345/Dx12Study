@@ -463,6 +463,54 @@ static void ImGui_ImplDX12_DestroyTexture(ImTextureData* tex)
     tex->SetStatus(ImTextureStatus_Destroyed);
 }
 
+// [Dx12Engine LOCAL PATCH - not upstream. Re-check on every Dear ImGui update.]
+// See the comment on the declaration in imgui_impl_dx12.h for why this exists.
+//
+// Every backend-owned texture keeps a GPU handle into the heap that was
+// current when it was created. The slot INDEX is what survives a replacement,
+// so each handle is turned back into an index against the old heap's start and
+// rebuilt against the new one. Nothing else is touched: the CPU handle still
+// points at the engine's staging descriptor, the resource is unchanged, and
+// the status stays whatever it was, so no texture is re-uploaded.
+void ImGui_ImplDX12_RebindDescriptorHeap(ID3D12DescriptorHeap* new_heap)
+{
+    ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();
+    IM_ASSERT(bd != nullptr && "Backend not initialized!");
+    IM_ASSERT(new_heap != nullptr);
+    if (bd->pd3dSrvDescHeap == new_heap)
+        return;
+
+    const UINT descriptor_size = bd->pd3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
+    const D3D12_GPU_DESCRIPTOR_HANDLE old_start = bd->pd3dSrvDescHeap ? bd->pd3dSrvDescHeap->GetGPUDescriptorHandleForHeapStart() : D3D12_GPU_DESCRIPTOR_HANDLE{};
+    const D3D12_GPU_DESCRIPTOR_HANDLE new_start = new_heap->GetGPUDescriptorHandleForHeapStart();
+
+    // Both the bound heap and the copy inside InitInfo, because the allocator
+    // callbacks are handed &bd->InitInfo and may read it back.
+    bd->pd3dSrvDescHeap = new_heap;
+    bd->InitInfo.SrvDescriptorHeap = new_heap;
+
+    if (descriptor_size == 0 || old_start.ptr == 0)
+        return;
+
+    for (ImTextureData* tex : ImGui::GetPlatformIO().Textures)
+    {
+        ImGui_ImplDX12_Texture* backend_tex = (ImGui_ImplDX12_Texture*)tex->BackendUserData;
+        if (backend_tex == nullptr || backend_tex->hFontSrvGpuDescHandle.ptr == 0)
+            continue;
+        if (backend_tex->hFontSrvGpuDescHandle.ptr < old_start.ptr)
+            continue; // not from the heap being replaced - leave it alone
+
+        const UINT64 slot = (backend_tex->hFontSrvGpuDescHandle.ptr - old_start.ptr) / descriptor_size;
+        // The new heap must actually have that slot. If it does not, the
+        // engine grew the heap without carrying this descriptor across, and
+        // sampling would quietly read whatever is there instead.
+        IM_ASSERT(slot < new_heap->GetDesc().NumDescriptors && "SRV heap grew without preserving slot indices");
+        backend_tex->hFontSrvGpuDescHandle.ptr = new_start.ptr + slot * descriptor_size;
+        // TexID is what the draw lists carry, so it has to move with it.
+        tex->SetTexID((ImTextureID)backend_tex->hFontSrvGpuDescHandle.ptr);
+    }
+}
+
 void ImGui_ImplDX12_UpdateTexture(ImTextureData* tex)
 {
     ImGui_ImplDX12_Data* bd = ImGui_ImplDX12_GetBackendData();

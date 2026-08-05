@@ -16,6 +16,8 @@ RenderTarget::RenderTarget(GraphicsDevice& device,
                            UINT sampleCount,
     UINT sampleQuality)
     : m_device(device)
+    , m_rtvAllocator(rtvAllocator)
+    , m_srvAllocator(srvAllocator)
     , m_sampled(srvAllocator != nullptr)
     , m_width(std::max(width, 1u))
     , m_height(std::max(height, 1u))
@@ -79,7 +81,8 @@ void RenderTarget::CreateResources()
     rtvDesc.Format        = m_colorFormat;
     rtvDesc.ViewDimension = IsMultisampled() ? D3D12_RTV_DIMENSION_TEXTURE2DMS
                                              : D3D12_RTV_DIMENSION_TEXTURE2D;
-    m_device.Device()->CreateRenderTargetView(m_color.Get(), &rtvDesc, m_rtv.cpu);
+    m_device.Device()->CreateRenderTargetView(m_color.Get(), &rtvDesc,
+                                              m_rtvAllocator.CpuHandle(m_rtv));
 
     if (IsMultisampled() && m_sampled)
     {
@@ -103,8 +106,24 @@ void RenderTarget::CreateResources()
         srvDesc.Format                  = m_colorFormat;
         srvDesc.ViewDimension           = D3D12_SRV_DIMENSION_TEXTURE2D;
         srvDesc.Texture2D.MipLevels     = 1;
-        m_device.Device()->CreateShaderResourceView(ShaderResource(), &srvDesc, m_srv.cpu);
+        m_device.Device()->CreateShaderResourceView(
+            ShaderResource(), &srvDesc, m_srvAllocator->CpuHandle(m_srv));
+        // Rewritten in place, so the shader-visible copy is now behind. Safe
+        // here only because every caller of CreateResources has drained the
+        // GPU first - the slot cannot be under a command list that is running.
+        m_srvAllocator->MarkWritten(m_srv);
     }
+}
+
+D3D12_CPU_DESCRIPTOR_HANDLE RenderTarget::RTV() const
+{
+    return m_rtvAllocator.CpuHandle(m_rtv);
+}
+
+D3D12_GPU_DESCRIPTOR_HANDLE RenderTarget::SRV() const
+{
+    return m_srvAllocator ? m_srvAllocator->GpuHandle(m_srv)
+                          : D3D12_GPU_DESCRIPTOR_HANDLE{};
 }
 
 void RenderTarget::Resize(UINT width, UINT height)

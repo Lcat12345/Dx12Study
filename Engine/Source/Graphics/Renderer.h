@@ -83,6 +83,27 @@ public:
     // resources. Normal frame rendering remains asynchronous.
     void WaitForGpu() { m_device.WaitForGpu(); }
 
+    // Replace the shader-visible descriptor heap now, if it has run short.
+    //
+    // RenderFrame does this on its own, but a host with a layer that CACHES
+    // the heap - ImGui's DX12 backend keeps the pointer and binds it itself -
+    // wants the replacement to happen at a moment of its choosing, before it
+    // starts building a frame against the old one. Returns true when the heap
+    // was replaced, i.e. when such a layer has to rebuild.
+    bool EnsureShaderVisibleDescriptorCapacity();
+
+    // Hand ownership of WHEN the heap is replaced to the host.
+    //
+    // Exactly one place per host may decide this. RenderFrame grows the heap
+    // by itself for hosts that do nothing, but a host with a caching layer
+    // must also switch this on: otherwise the heap can change again in the
+    // middle of the frame the host already prepared, and the overlay ends up
+    // setting root descriptor tables from a heap that is no longer bound.
+    void SetHostManagesDescriptorHeapGrowth(bool hostManages)
+    {
+        m_hostManagesDescriptorHeapGrowth = hostManages;
+    }
+
     // The window changed size. Only the swap chain cares - the scene now
     // lives in its own target, sized by the viewport panel instead.
     void Resize(UINT width, UINT height);
@@ -123,6 +144,9 @@ public:
         return kInitialObjectCapacity;
     }
     static UINT ObjectCapacityForDrawItems(size_t drawItemCount);
+    // The SRV heap's starting size, and the page it grows by. No longer a
+    // ceiling - kept nameable so a test can say where growth begins.
+    static constexpr UINT InitialSrvCapacity() { return kSrvHeapCapacity; }
 
     // Frustum culling off submits every item to both passes, which is what
     // the pre-M1.6 renderer did. Kept as a switch rather than a build flag so
@@ -361,7 +385,9 @@ private:
     // Room to spare for the offscreen and Player presentation targets.
     static constexpr UINT kRtvHeapCapacity = 8;
     static constexpr UINT kDsvHeapCapacity = 8;
-    // Host layers, scene textures, and loaded textures share this heap.
+    // Host layers, scene textures, and loaded textures share this heap. This
+    // is where it STARTS and the page it grows by - not a limit. See
+    // DescriptorAllocator.
     static constexpr UINT kSrvHeapCapacity = 64;
 
     DescriptorAllocator m_rtvAllocator;
@@ -409,6 +435,7 @@ private:
     UINT          m_instanceCapacity = kInitialObjectCapacity;
     UINT          m_requestedInstanceCapacity = kInitialObjectCapacity;
     bool          m_frustumCullingEnabled = true;
+    bool          m_hostManagesDescriptorHeapGrowth = false;
 
     // Shared by the scene passes for as long as they need the same inputs.
     // Not a rule: a pass whose contract genuinely differs - shadow depth
