@@ -101,6 +101,10 @@ public:
     // the SRV heap is replaced when it grows, so this has to be asked for
     // again every time it is used.
     D3D12_GPU_DESCRIPTOR_HANDLE TextureSRV(TextureHandle handle) const;
+    // The same descriptor named by slot INDEX. An overlay that records ids
+    // into a draw list stores this instead, because a slot index survives the
+    // heap being replaced and an address does not.
+    UINT TextureSrvIndex(TextureHandle handle) const;
 
     // Pixel dimensions of a loaded texture. Anything laying one out needs
     // them - a preview drawn square would squash a 16:9 image. Zero for an

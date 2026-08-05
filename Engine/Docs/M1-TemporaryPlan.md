@@ -345,10 +345,21 @@ host가 이미 handle을 resolve해 둔 프레임 도중에 heap이 또 바뀌�
 이 상태를 만들어 Debug Layer 메시지 63개를 재현했고, 소유권을 배타적으로 바꾼 뒤 0이
 됐다.
 
-reserve는 256 slot이다. heap은 frame 경계에서만 바뀌는데 descriptor 할당은 아무 때나
-일어나므로(scene 로드가 material마다 texture를 만들고 같은 프레임에 그린다), 경계 이후
-할당분은 이미 사용 중인 heap에 들어가야 한다. descriptor 하나가 32바이트라 256칸은
-8 KB이고, 모자라면 조용한 오작동이 아니라 예외다.
+**성장 시점은 `RenderFrame` 안, host 업데이트가 끝난 뒤다.** 한 프레임이 로드하는 것
+— scene 하나 분량의 texture, asset preview — 은 그 시점에 이미 전부 할당돼 있으므로,
+기록 직전인 여기가 그것을 감당해야 하는 마지막 지점이다. host가 성장 시점을 따로
+고르게 하면 그 host가 이미 handle을 resolve해 둔 프레임 도중에 heap이 또 바뀔 수 있어,
+`SetGraphicsRootDescriptorTable`이 바인딩되지 않은 heap의 handle을 받는다(실제로 이
+상태에서 Debug Layer 메시지 63개를 재현했다). 그래서 성장은 renderer 한 곳에서만 하고,
+heap이 바뀌면 `SetDescriptorHeapChangedCallback`으로 host에 알린다.
+
+reserve는 256 slot이다. 경계 이후에도 할당은 일어나므로(ImGui backend가 `RenderDrawData`
+안에서 할당한다) 그만큼은 이미 사용 중인 heap에 들어가야 한다. descriptor 하나가
+32바이트라 256칸은 8 KB이고, 모자라면 조용한 오작동이 아니라 예외다.
+
+성장 용량은 `D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1`(1,000,000)으로
+clamp한다. 2의 거듭제곱으로만 올리면 524,288을 넘는 순간 1,048,576을 요청해 실제 한계의
+절반쯤에서 먼저 실패한다. 그 위는 명확한 hardware-limit 예외로 처리한다.
 
 #### ImGui: 재생성이 아니라 rebind
 
@@ -363,29 +374,37 @@ reserve는 256 slot이다. heap은 frame 경계에서만 바뀌는데 descriptor
 표시하는데 core가 여기서 복구하지 못한다. upstream에는 heap 포인터를 갱신하는 API가
 없다.
 
-그래서 vendor에 최소 확장 하나를 추가했다.
+그래서 vendor에 최소 확장 두 개를 추가했다. 위치는 모두
+`ThirdParty/imgui/backends/imgui_impl_dx12.{h,cpp}`이고,
+`[Dx12Engine LOCAL PATCH - not upstream. Re-check on every Dear ImGui update.]`
+주석으로 표시했다. ImGui 갱신 시 확인할 diff는 이 블록들이다.
 
-```cpp
-IMGUI_IMPL_API void ImGui_ImplDX12_RebindDescriptorHeap(ID3D12DescriptorHeap* new_heap);
-```
+**1. 논리 texture id (`SrvDescriptorResolveFn`).** 기본적으로 `ImTextureID`는 raw GPU
+주소라서, draw list에 기록된 뒤 heap이 바뀌면 죽는다. resolve 콜백을 설정하면 id는
+불투명한 **slot index**가 되고 draw 시점에 현재 heap 기준으로 주소로 바뀐다. bind 지점은
+`RenderDrawData` 안 한 곳뿐이라 패치는 그 한 줄이다. 이것이 프레임 중 아무 때나 성장해도
+안전하게 만드는 핵심이다.
 
-`bd->pd3dSrvDescHeap`과 복사본인 `bd->InitInfo.SrvDescriptorHeap`을 새 heap으로 바꾸고,
-`ImGui::GetPlatformIO().Textures`를 순회하며 backend가 소유한 texture의 GPU handle을
-같은 slot index로 rebase한 뒤 `SetTexID()`까지 갱신한다. CPU handle은 staging page가
-고정이라 그대로 두고, texture resource와 font atlas와 status는 건드리지 않는다. 그래서
-font를 `Destroyed`로 만드는 문제 자체가 발생하지 않는다.
+engine 쪽도 같은 계약을 따른다. `SceneTextureId()`, `ShadowTextureId()`,
+`ResourceManager::TextureSrvIndex()`가 주소가 아니라 slot index를 돌려준다. 반면 scene
+pass가 직접 바인딩할 때 쓰는 `TextureSRV()`는 여전히 주소이고, 기록 시점에 resolve된다.
 
-- 위치: `ThirdParty/imgui/backends/imgui_impl_dx12.{h,cpp}`
-- 두 곳 모두 `[Dx12Engine LOCAL PATCH - not upstream. Re-check on every Dear ImGui update.]`
-  주석으로 표시했다. ImGui 갱신 시 확인할 diff는 이 두 블록이다.
-- Editor의 scene/shadow/asset `ImTextureID`는 매 frame allocator에서 다시 resolve하므로
-  persistent rebase가 필요한 것은 backend 소유 텍스처뿐이다.
+**2. `ImGui_ImplDX12_RebindDescriptorHeap()`.** backend가 `SetDescriptorHeaps`로 직접
+바인딩하는 `bd->pd3dSrvDescHeap`과 복사본 `InitInfo.SrvDescriptorHeap`을 새 heap으로
+바꾼다. 논리 id 계약 아래에서는 캐시된 주소가 하나도 없으므로 이것으로 끝이다(계약을
+쓰지 않는 경우를 위해 texture handle을 같은 index로 rebase하는 경로도 남겨 뒀다).
+texture resource와 font atlas와 status는 건드리지 않으므로 font를 `Destroyed`로 만드는
+문제가 발생하지 않는다.
 
-검증: page size를 4로 낮추고 성장을 강제해 Editor를 약 2400 frame 돌렸다. rebind가 13회
-발생했고 첫 회는 font 생성 전(텍스처 없음), 이후 12회는 모두 font가 **slot 6에 고정된 채**
-새 heap 범위 안으로 재계산됐다. `debug_messages=0`, 정상 종료. `frame_summary` 로그에
-`debug_messages`와 `has_debug_layer`를 추가해 이 조건을 Editor와 Player 양쪽에서 로그로
-확인할 수 있게 했다.
+검증:
+
+- 자동 테스트 `functional/imgui-overlay-srv-heap-growth`가 실제 `ImGuiLayer`를 만들어
+  font가 생성될 때까지 frame을 돌린 뒤, **reserve보다 큰 512개 burst**를 프레임 경계
+  이후에 할당하고 다시 그린다. heap generation이 올라가는 것, 성장 이후에도 계속 그려지는
+  것, Debug Layer 메시지 0을 확인한다. 이를 위해 EngineTests가 ImGui를 직접 컴파일한다.
+- Editor 실측: page size를 4로 낮추고 성장을 강제해 약 2400 frame 돌렸다. `debug_messages=0`,
+  정상 종료. `frame_summary` 로그에 `debug_messages`와 `has_debug_layer`를 추가해 이
+  조건을 Editor와 Player 양쪽에서 로그로 확인할 수 있게 했다.
 
 ### 8. M1 통합과 정리
 

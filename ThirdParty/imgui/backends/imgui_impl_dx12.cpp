@@ -432,8 +432,14 @@ void ImGui_ImplDX12_RenderDrawData(ImDrawData* draw_data, ID3D12GraphicsCommandL
                 command_list->RSSetScissorRects(1, &r);
 
                 // Bind texture, Draw
+                // [Dx12Engine LOCAL PATCH] Resolve the id if the application
+                // asked for logical ids; otherwise it is a GPU address as
+                // upstream expects.
                 D3D12_GPU_DESCRIPTOR_HANDLE texture_handle = {};
-                texture_handle.ptr = (UINT64)pcmd->GetTexID();
+                if (bd->InitInfo.SrvDescriptorResolveFn != nullptr)
+                    texture_handle = bd->InitInfo.SrvDescriptorResolveFn(&bd->InitInfo, pcmd->GetTexID());
+                else
+                    texture_handle.ptr = (UINT64)pcmd->GetTexID();
                 command_list->SetGraphicsRootDescriptorTable(1, texture_handle);
                 command_list->DrawIndexedInstanced(pcmd->ElemCount, 1, pcmd->IdxOffset + global_idx_offset, pcmd->VtxOffset + global_vtx_offset, 0);
             }
@@ -488,6 +494,12 @@ void ImGui_ImplDX12_RebindDescriptorHeap(ID3D12DescriptorHeap* new_heap)
     // callbacks are handed &bd->InitInfo and may read it back.
     bd->pd3dSrvDescHeap = new_heap;
     bd->InitInfo.SrvDescriptorHeap = new_heap;
+
+    // Under the logical-id contract there is nothing else to do: no cached
+    // handle is an address, so none of them went stale. This is also why a
+    // rebind is then safe mid-frame, even after draw lists have been built.
+    if (bd->InitInfo.SrvDescriptorResolveFn != nullptr)
+        return;
 
     if (descriptor_size == 0 || old_start.ptr == 0)
         return;

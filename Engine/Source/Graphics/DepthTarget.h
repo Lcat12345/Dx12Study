@@ -55,6 +55,8 @@ public:
     // Only valid when this target was created with an SRV allocator.
     bool                        HasSrv() const { return m_srv.IsValid(); }
     D3D12_GPU_DESCRIPTOR_HANDLE SRV()    const;
+    // The SRV's slot INDEX, for an overlay that must survive heap growth.
+    UINT                        SrvIndex() const { return m_srv.index; }
 
     D3D12_VIEWPORT Viewport() const;
     D3D12_RECT     ScissorRect() const;

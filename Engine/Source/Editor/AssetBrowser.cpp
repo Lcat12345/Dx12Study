@@ -427,7 +427,8 @@ void AssetBrowser::DrawDetails()
 
     // Textures are free to preview: the SRV the renderer samples is the same
     // one ImGui draws with.
-    const D3D12_GPU_DESCRIPTOR_HANDLE srv = m_resources.TextureSRV(entry->texture);
+    // The logical id, not the address - see Renderer::SceneTextureId.
+    const UINT srvIndex = m_resources.TextureSrvIndex(entry->texture);
 
     // Fit inside a square box while KEEPING the aspect ratio - drawing every
     // image square would squash anything that is not.
@@ -439,7 +440,7 @@ void AssetBrowser::DrawDetails()
         if (aspect >= 1.0f) { preview.y = box / aspect; } // wider than tall
         else                { preview.x = box * aspect; }
     }
-    ImGui::Image(ImTextureID(srv.ptr), preview);
+    ImGui::Image(ImTextureID(srvIndex), preview);
 }
 
 void AssetBrowser::Draw()

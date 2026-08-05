@@ -83,25 +83,20 @@ public:
     // resources. Normal frame rendering remains asynchronous.
     void WaitForGpu() { m_device.WaitForGpu(); }
 
-    // Replace the shader-visible descriptor heap now, if it has run short.
+    // Told when the shader-visible heap has been replaced by a bigger one.
     //
-    // RenderFrame does this on its own, but a host with a layer that CACHES
-    // the heap - ImGui's DX12 backend keeps the pointer and binds it itself -
-    // wants the replacement to happen at a moment of its choosing, before it
-    // starts building a frame against the old one. Returns true when the heap
-    // was replaced, i.e. when such a layer has to rebuild.
-    bool EnsureShaderVisibleDescriptorCapacity();
-
-    // Hand ownership of WHEN the heap is replaced to the host.
+    // Runs inside RenderFrame, after the GPU has been drained and before any
+    // command is recorded - the only moment where a host layer that binds the
+    // heap ITSELF, as ImGui's DX12 backend does, can be pointed at the new one
+    // without any of this frame's work having been built against the old.
     //
-    // Exactly one place per host may decide this. RenderFrame grows the heap
-    // by itself for hosts that do nothing, but a host with a caching layer
-    // must also switch this on: otherwise the heap can change again in the
-    // middle of the frame the host already prepared, and the overlay ends up
-    // setting root descriptor tables from a heap that is no longer bound.
-    void SetHostManagesDescriptorHeapGrowth(bool hostManages)
+    // Anything the host recorded EARLIER in the frame must therefore not name
+    // the heap by address. ImGui does not: it is given logical slot ids that
+    // are resolved at draw time.
+    using DescriptorHeapChangedCallback = std::function<void()>;
+    void SetDescriptorHeapChangedCallback(DescriptorHeapChangedCallback callback)
     {
-        m_hostManagesDescriptorHeapGrowth = hostManages;
+        m_descriptorHeapChanged = std::move(callback);
     }
 
     // The window changed size. Only the swap chain cares - the scene now
@@ -113,8 +108,12 @@ public:
     // next frame, once the GPU is known to be finished with the old texture.
     void SetSceneViewportSize(UINT width, UINT height);
 
-    // The offscreen output texture as a plain descriptor-handle integer.
-    uint64_t SceneTextureId() const { return m_sceneColor->SRV().ptr; }
+    // The offscreen output texture, as the overlay's LOGICAL texture id.
+    //
+    // A slot index, not an address: the overlay records these into draw lists
+    // and the heap they live in may be replaced before those lists are
+    // submitted. See DescriptorAllocator.
+    uint64_t SceneTextureId() const { return m_sceneColor->SrvIndex(); }
 
     // The aspect the scene was last drawn with. Picking has to unproject
     // through the same projection the renderer built, so it needs this
@@ -125,7 +124,7 @@ public:
     // R32_FLOAT, so it displays as near-white: most of the map is the far
     // plane (1.0) and casters only pull it down by their share of the light's
     // depth range. Faint is CORRECT here, not a bug.
-    uint64_t ShadowTextureId() const { return m_shadowMap->SRV().ptr; }
+    uint64_t ShadowTextureId() const { return m_shadowMap->SrvIndex(); }
     UINT     ShadowMapSize()   const { return m_shadowMap->Width(); }
 
     // The sphere the light's orthographic volume was sized to this frame.
@@ -435,7 +434,7 @@ private:
     UINT          m_instanceCapacity = kInitialObjectCapacity;
     UINT          m_requestedInstanceCapacity = kInitialObjectCapacity;
     bool          m_frustumCullingEnabled = true;
-    bool          m_hostManagesDescriptorHeapGrowth = false;
+    DescriptorHeapChangedCallback m_descriptorHeapChanged;
 
     // Shared by the scene passes for as long as they need the same inputs.
     // Not a rule: a pass whose contract genuinely differs - shadow depth

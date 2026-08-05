@@ -27,18 +27,32 @@ namespace
     {
         auto* allocator = static_cast<DescriptorAllocator*>(info->UserData);
         const DescriptorHandle handle = allocator->Allocate();
-        // The CPU handle is a staging address, which is where the backend
-        // writes its view; the GPU handle is into the live heap. They are
-        // different heaps now, and that is the point - the staging one can
-        // grow without disturbing anything the GPU is reading.
+        // The CPU handle is a staging address - where the backend writes its
+        // view - and it stays valid forever because staging pages are never
+        // moved.
         //
-        // This runs from inside RenderDrawData, i.e. mid-recording. It is
-        // allowed to because Allocate() never replaces a heap, and the slot
-        // it hands back is published before the list is submitted.
+        // The "GPU handle" is deliberately NOT an address: under the resolve
+        // contract it carries the slot INDEX, and SrvDescriptorResolve turns
+        // it into an address at draw time. That is what lets this run from
+        // inside RenderDrawData, mid-recording, without caring whether the
+        // heap is about to be replaced.
         *outCpu = allocator->CpuHandle(handle);
-        *outGpu = allocator->GpuHandle(handle);
+        outGpu->ptr = handle.index;
     }
 
+    // Called once per draw command, against whatever heap is current.
+    D3D12_GPU_DESCRIPTOR_HANDLE SrvDescriptorResolve(ImGui_ImplDX12_InitInfo* info,
+                                                     ImTextureID logicalId)
+    {
+        auto* allocator = static_cast<DescriptorAllocator*>(info->UserData);
+        DescriptorHandle handle;
+        handle.index = UINT(logicalId);
+        return allocator->GpuHandle(handle);
+    }
+
+    // Resolved by CPU handle, not by the "GPU handle", because the latter is
+    // a slot index under the resolve contract and the CPU address is the one
+    // thing that is stable across every heap replacement.
     void SrvDescriptorFree(ImGui_ImplDX12_InitInfo* info,
                            D3D12_CPU_DESCRIPTOR_HANDLE cpu,
                            D3D12_GPU_DESCRIPTOR_HANDLE)
@@ -123,6 +137,10 @@ bool ImGuiLayer::InitBackend()
     info.SrvDescriptorHeap = m_srvAllocator->Heap();
     info.SrvDescriptorAllocFn = SrvDescriptorAlloc;
     info.SrvDescriptorFreeFn  = SrvDescriptorFree;
+    // Opts into logical texture ids. Without this the backend would treat
+    // every ImTextureID as a raw GPU address, which stops being valid the
+    // moment the heap grows - see the patch note in imgui_impl_dx12.h.
+    info.SrvDescriptorResolveFn = SrvDescriptorResolve;
     info.UserData          = m_srvAllocator;
 
     return ImGui_ImplDX12_Init(&info);

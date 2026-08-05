@@ -171,20 +171,6 @@ void Renderer::RequestObjectCapacity(size_t drawItemCount)
         m_requestedObjectCapacity, ObjectCapacityForDrawItems(drawItemCount));
 }
 
-bool Renderer::EnsureShaderVisibleDescriptorCapacity()
-{
-    if (!m_srvAllocator.NeedsShaderVisibleGrowth())
-    {
-        return false;
-    }
-
-    // The heap being replaced may be bound by a command list that is still
-    // running, so nothing may be released until the queue is empty.
-    m_device.WaitForGpu();
-    m_srvAllocator.GrowShaderVisibleHeap();
-    return true;
-}
-
 void Renderer::RequestInstanceCapacity(size_t instanceCount)
 {
     m_requestedInstanceCapacity = (std::max)(
@@ -1844,13 +1830,11 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
         m_requestedObjectCapacity > m_objectCapacity;
     const bool growInstanceBuffers =
         m_requestedInstanceCapacity > m_instanceCapacity;
-    // The backstop for a host that does nothing - the Player, and every test
-    // - so the ceiling is gone either way. A host with a caching layer takes
-    // this over completely: replacing the heap here, after that host has
-    // already resolved handles for this frame, is what leaves a root
-    // descriptor table pointing at a heap that is no longer bound.
-    const bool growDescriptorHeap = !m_hostManagesDescriptorHeapGrowth &&
-                                    m_srvAllocator.NeedsShaderVisibleGrowth();
+    // Here, not at some point the host chooses, and deliberately AFTER the
+    // host's update: everything a frame loads - a scene's worth of textures,
+    // an asset preview - has already been allocated by now, so this is the
+    // last moment before recording and the one that has to cover it.
+    const bool growDescriptorHeap = m_srvAllocator.NeedsShaderVisibleGrowth();
 
     // All four operations replace resources that any frame in flight may
     // still reference. Coalescing them keeps even a resize+growth frame to one
@@ -1864,6 +1848,10 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
         if (growDescriptorHeap)
         {
             m_srvAllocator.GrowShaderVisibleHeap();
+            if (m_descriptorHeapChanged)
+            {
+                m_descriptorHeapChanged();
+            }
         }
 
         if (growObjectBuffers)

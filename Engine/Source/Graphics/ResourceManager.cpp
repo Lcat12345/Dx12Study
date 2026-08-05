@@ -552,6 +552,15 @@ ResourceManager::TextureSRV(TextureHandle handle) const
     return m_srvAllocator.GpuHandle(m_textures[handle.index].srv);
 }
 
+UINT ResourceManager::TextureSrvIndex(TextureHandle handle) const
+{
+    if (!handle.IsValid() || handle.index >= m_textures.size())
+    {
+        throw std::runtime_error("TextureSrvIndex called with an invalid handle");
+    }
+    return m_textures[handle.index].srv.index;
+}
+
 // ---------------------------------------------------------------- shaders
 
 const ShaderBytecode& ResourceManager::LoadShader(

@@ -41,6 +41,11 @@
     <IntDir>$([MSBuild]::NormalizeDirectory('$(ProjectDir)..\..\Output\Intermediate\$(ProjectName)\$(Platform)\$(Configuration)'))</IntDir>
   </PropertyGroup>
   <ItemDefinitionGroup>
+    <ClCompile>
+      <!-- Dear ImGui is compiled into the tests so the overlay's descriptor
+           contract can be exercised without launching the Editor. -->
+      <AdditionalIncludeDirectories>$(ProjectDir)..\..\ThirdParty\imgui;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -50,6 +55,13 @@
     <ClCompile Include="Phase12Tests.cpp" />
     <ClCompile Include="..\Source\Editor\EditorSession.cpp" />
     <ClCompile Include="..\Source\Player\PlayerStartup.cpp" />
+    <ClCompile Include="..\Source\Editor\ImGuiLayer.cpp" />
+    <ClCompile Include="..\..\ThirdParty\imgui\imgui.cpp" />
+    <ClCompile Include="..\..\ThirdParty\imgui\imgui_draw.cpp" />
+    <ClCompile Include="..\..\ThirdParty\imgui\imgui_tables.cpp" />
+    <ClCompile Include="..\..\ThirdParty\imgui\imgui_widgets.cpp" />
+    <ClCompile Include="..\..\ThirdParty\imgui\backends\imgui_impl_win32.cpp" />
+    <ClCompile Include="..\..\ThirdParty\imgui\backends\imgui_impl_dx12.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Engine.vcxproj">

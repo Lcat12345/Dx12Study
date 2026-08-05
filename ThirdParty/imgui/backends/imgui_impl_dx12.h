@@ -46,6 +46,23 @@ struct ImGui_ImplDX12_InitInfo
     ID3D12DescriptorHeap*       SrvDescriptorHeap;
     void                        (*SrvDescriptorAllocFn)(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE* out_cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE* out_gpu_desc_handle);
     void                        (*SrvDescriptorFreeFn)(ImGui_ImplDX12_InitInfo* info, D3D12_CPU_DESCRIPTOR_HANDLE cpu_desc_handle, D3D12_GPU_DESCRIPTOR_HANDLE gpu_desc_handle);
+
+    // [Dx12Engine LOCAL PATCH - not upstream. Re-check on every Dear ImGui update.]
+    // Optional. When set, every ImTextureID is treated as an opaque LOGICAL id
+    // rather than a GPU address, and is turned into an address here at draw
+    // time - once per draw command, against whatever heap is current.
+    //
+    // Without it an ImTextureID is a raw D3D12_GPU_DESCRIPTOR_HANDLE::ptr, so
+    // it is only valid in the heap that was live when it was produced. That
+    // makes replacing the heap - which is the only way to grow one - unsafe
+    // for any id already recorded into a draw list, and it forces the whole
+    // application to allocate no descriptors between the heap's last safe
+    // replacement point and the end of the frame.
+    //
+    // With it set, SrvDescriptorAllocFn should report the slot index in
+    // out_gpu_desc_handle->ptr and this resolves it. Slot indices survive a
+    // heap replacement, so nothing recorded goes stale.
+    D3D12_GPU_DESCRIPTOR_HANDLE (*SrvDescriptorResolveFn)(ImGui_ImplDX12_InitInfo* info, ImTextureID logical_id);
 #ifndef IMGUI_DISABLE_OBSOLETE_FUNCTIONS
     D3D12_CPU_DESCRIPTOR_HANDLE LegacySingleSrvCpuDescriptor; // To facilitate transition from single descriptor to allocator callback, you may use those.
     D3D12_GPU_DESCRIPTOR_HANDLE LegacySingleSrvGpuDescriptor;

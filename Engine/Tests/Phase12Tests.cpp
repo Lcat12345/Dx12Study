@@ -4,6 +4,7 @@
 #include "Game/Arena.h"
 #include "Game/Components.h"
 #include "Editor/EditorSession.h"
+#include "Editor/ImGuiLayer.h"
 #include "Game/ExecutionContext.h"
 #include "Game/Scene.h"
 #include "Game/Systems.h"
@@ -14,6 +15,8 @@
 #include "Graphics/Renderer.h"
 #include "Graphics/ResourceManager.h"
 #include "Player/PlayerStartup.h"
+
+#include "imgui.h"
 
 #include <Windows.h>
 
@@ -1744,6 +1747,122 @@ namespace
         UnregisterClassW(className, windowClass.hInstance);
     }
 
+    // The overlay's half of the SRV heap contract, driven for real.
+    //
+    // Two things this pins down that the renderer-only growth test cannot:
+    // the font texture the DX12 backend creates for itself has to keep
+    // working across a heap replacement, and a burst of allocations bigger
+    // than the recording-time reserve must not be able to outrun the heap.
+    void ImGuiOverlaySurvivesSrvHeapGrowth(TestContext&)
+    {
+        constexpr wchar_t className[] = L"Dx12EngineM17OverlayGrowthTest";
+        WNDCLASSEXW windowClass = {};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = className;
+        const ATOM atom = RegisterClassExW(&windowClass);
+        Check(atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS,
+              "could not register overlay growth test window");
+
+        HWND hwnd = CreateWindowExW(0, className, L"M1.7 Overlay Growth Test",
+                                    WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                    640, 480, nullptr, nullptr,
+                                    windowClass.hInstance, nullptr);
+        Check(hwnd != nullptr, "could not create overlay growth test window");
+
+        try
+        {
+            Renderer renderer(hwnd, 640, 480,
+                              RuntimePaths::FromRoot(GetExecutableDir()),
+                              GraphicsDevice::AdapterPolicy::SoftwareOnly);
+            renderer.SetMsaaEnabled(false);
+            ResourceManager& resources = renderer.Resources();
+            DescriptorAllocator& descriptors = renderer.ShaderVisibleDescriptors();
+
+            ImGuiLayer overlay(hwnd, renderer.Device(), renderer.CommandQueue(),
+                               descriptors, Renderer::OutputFormat(),
+                               DXGI_FORMAT_UNKNOWN, Renderer::FramesInFlight());
+            renderer.SetDescriptorHeapChangedCallback(
+                [&overlay]() { overlay.RebindDescriptorHeap(); });
+
+            CameraView camera;
+            LightingData lighting;
+            std::vector<DrawItem> items;
+
+            // One overlay frame: build a window that shows an engine texture
+            // through ImGui, then let the renderer record both passes.
+            auto overlayFrame = [&]() {
+                overlay.NewFrame();
+                ImGui::Begin("growth");
+                ImGui::Image(ImTextureID(renderer.SceneTextureId()),
+                             ImVec2(64.0f, 64.0f));
+                ImGui::Image(ImTextureID(renderer.ShadowTextureId()),
+                             ImVec2(64.0f, 64.0f));
+                ImGui::End();
+                renderer.RenderFrame(
+                    camera, lighting, items,
+                    Renderer::SceneOutput::OffscreenTexture,
+                    [&overlay](ID3D12GraphicsCommandList* commandList) {
+                        overlay.Render(commandList);
+                    });
+            };
+
+            // Two frames so the backend has created and uploaded its font.
+            overlayFrame();
+            overlayFrame();
+            const uint64_t generationWithFont = descriptors.Generation();
+            const UINT usedWithFont = descriptors.UsedCount();
+            Check(usedWithFont > 0, "the overlay never took a descriptor slot");
+
+            // A burst bigger than the recording-time reserve, allocated where
+            // a scene load would do it: after the frame boundary, before the
+            // next frame is recorded. This is what used to turn the old total
+            // ceiling into a per-frame one.
+            for (int index = 0; index < 512; ++index)
+            {
+                ImageData image;
+                image.width = 1;
+                image.height = 1;
+                image.pixels = { 12, uint8_t(index), 200, 255 };
+                resources.AddTexture(L"#m17-overlay-" + std::to_wstring(index),
+                                     image);
+            }
+            overlayFrame();
+
+            Check(descriptors.Generation() > generationWithFont,
+                  "a burst past the reserve did not grow the heap");
+            Check(descriptors.UsedCount() >= usedWithFont + 512,
+                  "the burst did not actually take 512 slots");
+
+            // Still drawing after the heap moved under it. The font's id was
+            // recorded before the growth and has to still resolve.
+            overlayFrame();
+            overlayFrame();
+
+            if (renderer.HasDebugLayer())
+            {
+                Check(renderer.DebugMessageCount() == 0,
+                      "the overlay recorded a D3D12 debug message across growth");
+            }
+
+            // The overlay is destroyed before the renderer, and its shutdown
+            // releases the font texture and per-frame buffers the last
+            // submitted frame may still be reading. Same drain the editor does
+            // in its destructor, for the same reason.
+            renderer.WaitForGpu();
+        }
+        catch (...)
+        {
+            DestroyWindow(hwnd);
+            UnregisterClassW(className, windowClass.hInstance);
+            throw;
+        }
+
+        DestroyWindow(hwnd);
+        UnregisterClassW(className, windowClass.hInstance);
+    }
+
     struct TestCase
     {
         const char* name;
@@ -1840,6 +1959,8 @@ int main()
             { "functional/main-shadow-culling-queues",
               CullingSplitsMainAndShadowQueues },
             { "functional/srv-heap-growth", SrvHeapGrowsPastItsInitialCapacity },
+            { "functional/imgui-overlay-srv-heap-growth",
+              ImGuiOverlaySurvivesSrvHeapGrowth },
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
             { "functional/runtime-paths-and-compiled-shaders",
               RuntimePathsAndCompiledShaderCache },

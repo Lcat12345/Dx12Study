@@ -19,6 +19,12 @@ namespace
     // frame.
     constexpr UINT kShaderVisibleReserve = 256;
 
+    // The most descriptors a shader-visible CBV/SRV/UAV heap may hold. Both
+    // resource binding tiers cap at the same number, so there is nothing to
+    // query - the constant IS the limit.
+    constexpr UINT kMaxShaderVisibleDescriptors =
+        D3D12_MAX_SHADER_VISIBLE_DESCRIPTOR_HEAP_SIZE_TIER_1;
+
     UINT RoundUpToPowerOfTwo(UINT value)
     {
         UINT result = 1;
@@ -226,7 +232,19 @@ void DescriptorAllocator::GrowShaderVisibleHeap()
     }
 
     const UINT required = (std::max)(m_bump + kShaderVisibleReserve, m_pageSize);
-    const UINT capacity = RoundUpToPowerOfTwo(required);
+    if (required > kMaxShaderVisibleDescriptors)
+    {
+        throw std::length_error(
+            "shader-visible descriptor heap needs " + std::to_string(required) +
+            " descriptors, past the D3D12 hardware limit of " +
+            std::to_string(kMaxShaderVisibleDescriptors));
+    }
+    // Powers of two keep growth to O(log n) replacements, but the last step
+    // before the limit would ask for 1,048,576 - more than any tier allows.
+    // Clamping there means the heap reaches the real hardware ceiling instead
+    // of failing at roughly half of it.
+    const UINT capacity =
+        (std::min)(RoundUpToPowerOfTwo(required), kMaxShaderVisibleDescriptors);
 
     D3D12_DESCRIPTOR_HEAP_DESC desc = {};
     desc.Type           = m_type;

@@ -67,6 +67,9 @@ public:
     D3D12_CPU_DESCRIPTOR_HANDLE RTV() const;
     // For ImGui::Image - the shader-visible handle of the colour texture.
     D3D12_GPU_DESCRIPTOR_HANDLE SRV() const;
+    // The SRV's slot INDEX. What an overlay stores when it has to survive the
+    // heap being replaced - see DescriptorAllocator.
+    UINT SrvIndex() const { return m_srv.index; }
 
     const float* ClearColor() const { return m_clearColor; }
 
