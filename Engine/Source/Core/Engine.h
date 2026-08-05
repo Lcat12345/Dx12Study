@@ -4,6 +4,7 @@
 #include "Core/Window.h"
 #include "Core/Timer.h"
 #include "Core/RuntimePaths.h"
+#include "Core/FrameStatistics.h"
 #include "Graphics/Renderer.h"
 
 #include <memory>
@@ -42,8 +43,13 @@ protected:
     // Whole-second average, so the UI and the title bar agree.
     int       CurrentFps() const { return m_lastFps; }
 
+    // Arena gameplay can override this once enemies exist; keeping the host
+    // count separate preserves Engine's independence from game components.
+    virtual uint64_t MeasurementEnemyCount() const { return 0; }
+
 private:
     void UpdateTitleFps(float dt);
+    void RecordFrameSample(float dt);
 
     const wchar_t* m_title = nullptr;
 
@@ -57,4 +63,5 @@ private:
     float m_fpsAccumulator = 0.0f;
     int   m_fpsFrames      = 0;
     int   m_lastFps        = 0;
+    FrameSampleCollector m_frameSamples{ 120, 600 };
 };

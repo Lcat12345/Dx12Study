@@ -22,6 +22,15 @@
 class Renderer
 {
 public:
+    struct FrameStats
+    {
+        uint64_t drawCalls     = 0;
+        uint64_t mainVisible   = 0;
+        uint64_t shadowVisible = 0;
+        UINT     renderWidth   = 0;
+        UINT     renderHeight  = 0;
+    };
+
     enum class SceneOutput
     {
         OffscreenTexture,
@@ -108,6 +117,9 @@ public:
     void SetMsaaEnabled(bool enabled);
     bool IsMsaaEnabled() const    { return m_msaaEnabled; }
     bool Is4xMsaaSupported() const { return m_4xMsaaSupported; }
+    UINT MsaaSampleCount() const { return m_msaaEnabled ? 4u : 1u; }
+    const std::wstring& AdapterName() const { return m_device.AdapterName(); }
+    const FrameStats& LastFrameStats() const { return m_lastFrameStats; }
 
     // Debug layer message count, for the stats panel. See GraphicsDevice.
     uint64_t DebugMessageCount() const { return m_device.DebugMessageCount(); }
@@ -289,4 +301,5 @@ private:
     MeshHandle m_skyboxMesh;
 
     bool m_vsync = true;
+    FrameStats m_lastFrameStats;
 };

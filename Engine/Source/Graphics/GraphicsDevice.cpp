@@ -80,6 +80,7 @@ void GraphicsDevice::CreateDevice()
             if (SUCCEEDED(D3D12CreateDevice(adapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                             IID_PPV_ARGS(&m_device))))
             {
+                m_adapterName = desc.Description;
 #if defined(_DEBUG)
                 // Optional: fails when the "Graphics Tools" Windows feature is
                 // not installed, which is normal on a fresh machine. The count
@@ -101,6 +102,11 @@ void GraphicsDevice::CreateDevice()
         SUCCEEDED(D3D12CreateDevice(warpAdapter.Get(), D3D_FEATURE_LEVEL_11_0,
                                     IID_PPV_ARGS(&m_device))))
     {
+        DXGI_ADAPTER_DESC desc = {};
+        if (SUCCEEDED(warpAdapter->GetDesc(&desc)))
+        {
+            m_adapterName = desc.Description;
+        }
 #if defined(_DEBUG)
         m_device.As(&m_infoQueue);
 #endif

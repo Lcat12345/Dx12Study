@@ -1,5 +1,6 @@
 #include "Player/PlayerApp.h"
 #include "Player/PlayerStartup.h"
+#include "Core/ProcessLog.h"
 #include "Core/TextEncoding.h"
 
 #include <Windows.h>
@@ -44,8 +45,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
+    ProcessLog::Initialize("Player");
+    ProcessLog::Info("application_start");
+
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(comResult))
     {
+        ProcessLog::Error("COM initialization failed");
+        ProcessLog::Info("application_stop exit_code=-1");
+        ProcessLog::Shutdown();
         return -1;
     }
 
@@ -69,31 +77,47 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         LocalFree(arguments);
         if (!parsed)
         {
+            exitCode = 2;
+            ProcessLog::Error("startup_error message=\"" +
+                              ToUtf8(startupError) + "\"");
             MessageBoxW(nullptr, startupError.c_str(), L"Dx12Engine Player arguments",
                         MB_OK | MB_ICONERROR);
-            CoUninitialize();
-            return 2;
         }
+        else
+        {
+            const std::wstring pathLog = L"Dx12Engine Player runtime root: " +
+                                         paths.root.wstring() + L"\nAssets: " +
+                                         paths.assetDir.wstring() + L"\nShaders: " +
+                                         paths.shaderDir.wstring() + L"\nScene: " +
+                                         startup.scenePath.wstring() + L"\n";
+            OutputDebugStringW(pathLog.c_str());
+            WriteRuntimePathLogIfRequested(pathLog);
+            ProcessLog::Info("runtime_paths root=\"" +
+                             ToUtf8(paths.root.wstring()) + "\" scene=\"" +
+                             ToUtf8(startup.scenePath.wstring()) + "\"");
 
-        const std::wstring pathLog = L"Dx12Engine Player runtime root: " +
-                                     paths.root.wstring() + L"\nAssets: " +
-                                     paths.assetDir.wstring() + L"\nShaders: " +
-                                     paths.shaderDir.wstring() + L"\nScene: " +
-                                     startup.scenePath.wstring() + L"\n";
-        OutputDebugStringW(pathLog.c_str());
-        WriteRuntimePathLogIfRequested(pathLog);
-
-        const std::wstring title = L"Dx12Engine Player - " +
-                                   startup.scenePath.filename().wstring();
-        PlayerApp app(hInstance, paths, startup.scenePath, title.c_str());
-        exitCode = app.Run(nCmdShow);
+            const std::wstring title = L"Dx12Engine Player - " +
+                                       startup.scenePath.filename().wstring();
+            PlayerApp app(hInstance, paths, startup.scenePath, title.c_str());
+            exitCode = app.Run(nCmdShow);
+        }
     }
     catch (const std::exception& error)
     {
+        ProcessLog::Error(std::string("unhandled_exception message=\"") +
+                          error.what() + "\"");
         MessageBoxA(nullptr, error.what(), "Dx12Engine Player failed",
+                    MB_OK | MB_ICONERROR);
+    }
+    catch (...)
+    {
+        ProcessLog::Error("unhandled_exception message=\"unknown exception\"");
+        MessageBoxA(nullptr, "unknown exception", "Dx12Engine Player failed",
                     MB_OK | MB_ICONERROR);
     }
 
     CoUninitialize();
+    ProcessLog::Info("application_stop exit_code=" + std::to_string(exitCode));
+    ProcessLog::Shutdown();
     return exitCode;
 }

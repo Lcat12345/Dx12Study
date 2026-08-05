@@ -1,6 +1,11 @@
 #include "Core/Engine.h"
+#include "Core/ProcessLog.h"
+#include "Core/TextEncoding.h"
 
 #include <cstdio>
+#include <iomanip>
+#include <locale>
+#include <sstream>
 
 Engine::Engine(HINSTANCE instance, const wchar_t* title, UINT width, UINT height,
                const RuntimePaths& runtimePaths)
@@ -51,11 +56,43 @@ int Engine::Run(int cmdShow)
 
         OnUpdate(dt);
         OnRender();
+        RecordFrameSample(dt);
         UpdateTitleFps(dt);
     }
 
     // wParam of WM_QUIT carries the exit code passed to PostQuitMessage.
     return static_cast<int>(msg.wParam);
+}
+
+void Engine::RecordFrameSample(float dt)
+{
+    const std::optional<FrameSampleSummary> summary =
+        m_frameSamples.AddSample(double(dt) * 1000.0);
+    if (!summary)
+    {
+        return;
+    }
+
+    const Renderer::FrameStats& frame = m_renderer->LastFrameStats();
+    std::ostringstream row;
+    row.imbue(std::locale::classic());
+    row << std::fixed << std::setprecision(3)
+        << "frame_summary"
+        << " warmup=" << m_frameSamples.WarmupFrames()
+        << " samples=" << summary->sampleCount
+        << " median_ms=" << summary->medianMilliseconds
+        << " p95_ms=" << summary->p95Milliseconds
+        << " max_ms=" << summary->maxMilliseconds
+        << " vsync=" << (m_renderer->IsVSync() ? "on" : "off")
+        << " msaa=" << m_renderer->MsaaSampleCount() << 'x'
+        << " width=" << frame.renderWidth
+        << " height=" << frame.renderHeight
+        << " adapter=\"" << ToUtf8(m_renderer->AdapterName()) << '"'
+        << " enemies=" << MeasurementEnemyCount()
+        << " draws=" << frame.drawCalls
+        << " main_visible=" << frame.mainVisible
+        << " shadow_visible=" << frame.shadowVisible;
+    ProcessLog::Info(row.str());
 }
 
 // Averages over a whole second - a per-frame number would be unreadable.

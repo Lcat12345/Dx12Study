@@ -1,4 +1,6 @@
 #include "Core/Common.h"
+#include "Core/FrameStatistics.h"
+#include "Core/ProcessLog.h"
 #include "Game/Components.h"
 #include "Editor/EditorSession.h"
 #include "Game/ExecutionContext.h"
@@ -352,6 +354,73 @@ namespace
         Check(!ParsePlayerStartup(2, missing, paths, startup, error) &&
                   error.find(L"requires a path") != std::wstring::npos,
               "missing --scene value lacked a clear error");
+    }
+
+    void FrameSamplesRespectWarmupAndPercentiles()
+    {
+        FrameSampleCollector samples(2, 20);
+        Check(!samples.AddSample(999.0), "first warm-up frame was sampled");
+        Check(!samples.AddSample(998.0), "second warm-up frame was sampled");
+
+        std::optional<FrameSampleSummary> summary;
+        for (int value = 20; value >= 1; --value)
+        {
+            summary = samples.AddSample(double(value));
+            if (value != 1)
+            {
+                Check(!summary, "frame summary completed before the fixed sample count");
+            }
+        }
+
+        Check(bool(summary), "frame summary was not produced at the sample count");
+        Check(summary->sampleCount == 20, "frame summary reported the wrong sample count");
+        CheckNear(float(summary->medianMilliseconds), 10.5f,
+                  "frame median was incorrect");
+        CheckNear(float(summary->p95Milliseconds), 19.0f,
+                  "frame p95 was incorrect");
+        CheckNear(float(summary->maxMilliseconds), 20.0f,
+                  "frame maximum was incorrect");
+        Check(samples.IsComplete(), "frame collector did not become complete");
+        Check(!samples.AddSample(21.0), "completed collector emitted twice");
+    }
+
+    void ProcessLogUsesEnvironmentOverride()
+    {
+        TempDirectory temp;
+        const std::filesystem::path logDirectory = temp.path / L"isolated-logs";
+
+        constexpr wchar_t variable[] = L"DX12ENGINE_LOG_DIR";
+        const DWORD oldRequired = GetEnvironmentVariableW(variable, nullptr, 0);
+        std::vector<wchar_t> oldValue(oldRequired > 0 ? oldRequired : 1);
+        const bool hadOldValue = oldRequired > 0 &&
+            GetEnvironmentVariableW(variable, oldValue.data(), oldRequired) > 0;
+
+        SetEnvironmentVariableW(variable, logDirectory.c_str());
+        const bool initialized = ProcessLog::Initialize("EngineTests");
+        const std::filesystem::path logPath = ProcessLog::Path();
+        if (initialized)
+        {
+            ProcessLog::Info("test_event value=42");
+        }
+        ProcessLog::Shutdown();
+
+        if (hadOldValue)
+        {
+            SetEnvironmentVariableW(variable, oldValue.data());
+        }
+        else
+        {
+            SetEnvironmentVariableW(variable, nullptr);
+        }
+
+        Check(initialized,
+              "process logger did not initialize in the override directory");
+        Check(logPath.parent_path() == logDirectory,
+              "process logger ignored DX12ENGINE_LOG_DIR");
+        const std::string log = ReadAll(logPath);
+        Check(log.find("[INFO] [EngineTests] test_event value=42") !=
+                  std::string::npos,
+              "process logger did not use the common line format");
     }
 
     void EditorCameraDoesNotMutateSceneCamera()
@@ -871,6 +940,8 @@ namespace
             void (*run)();
         };
         const CpuTestCase tests[] = {
+            { "unit/frame-sample-statistics", FrameSamplesRespectWarmupAndPercentiles },
+            { "functional/process-log-override", ProcessLogUsesEnvironmentOverride },
             { "functional/editor-session-reset", EditorSessionResetPolicy },
             { "functional/input-host-boundaries", InputContextsRespectHostBoundaries },
             { "functional/editor-camera-isolation", EditorCameraDoesNotMutateSceneCamera },

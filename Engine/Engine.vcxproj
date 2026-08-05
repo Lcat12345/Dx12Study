@@ -41,6 +41,8 @@
   <ItemGroup>
     <ClCompile Include="Source\Core\Common.cpp" />
     <ClCompile Include="Source\Core\Engine.cpp" />
+    <ClCompile Include="Source\Core\FrameStatistics.cpp" />
+    <ClCompile Include="Source\Core\ProcessLog.cpp" />
     <ClCompile Include="Source\Core\RuntimePaths.cpp" />
     <ClCompile Include="Source\Core\TextEncoding.cpp" />
     <ClCompile Include="Source\Core\Window.cpp" />
@@ -58,6 +60,8 @@
   <ItemGroup>
     <ClInclude Include="Source\Core\Common.h" />
     <ClInclude Include="Source\Core\Engine.h" />
+    <ClInclude Include="Source\Core\FrameStatistics.h" />
+    <ClInclude Include="Source\Core\ProcessLog.h" />
     <ClInclude Include="Source\Core\RuntimePaths.h" />
     <ClInclude Include="Source\Core\TextEncoding.h" />
     <ClInclude Include="Source\Core\Timer.h" />

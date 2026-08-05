@@ -104,6 +104,9 @@ using System.Runtime.InteropServices;
 
 public static class PlayerPackageNativeMethods
 {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    public static extern IntPtr FindWindow(string className, string windowName);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool MoveWindow(IntPtr hwnd, int x, int y,
                                          int width, int height, bool repaint);
@@ -215,6 +218,77 @@ function Invoke-IsolatedPlayer(
     return Get-Content -LiteralPath $RuntimeLog -Raw
 }
 
+function Invoke-InvalidScenePlayer(
+    [string]$Executable,
+    [string]$WorkingDirectory,
+    [string]$ApplicationLogDir)
+{
+    $before = @(Get-ChildItem -LiteralPath $ApplicationLogDir -File `
+        -ErrorAction SilentlyContinue | ForEach-Object FullName)
+    $process = Start-Process -FilePath $Executable `
+        -WorkingDirectory $WorkingDirectory -WindowStyle Normal -PassThru `
+        -ArgumentList @('--scene', 'Assets\Scenes\IntentionallyMissing.scene')
+
+    try
+    {
+        $messageBox = [IntPtr]::Zero
+        $deadline = [DateTime]::UtcNow.AddSeconds(15)
+        while ([DateTime]::UtcNow -lt $deadline)
+        {
+            $process.Refresh()
+            if ($process.HasExited)
+            {
+                break
+            }
+            $messageBox = [PlayerPackageNativeMethods]::FindWindow(
+                '#32770', 'Dx12Engine Player failed')
+            if ($messageBox -ne [IntPtr]::Zero)
+            {
+                break
+            }
+            Start-Sleep -Milliseconds 100
+        }
+        $process.Refresh()
+        if ($messageBox -eq [IntPtr]::Zero -and -not $process.HasExited)
+        {
+            throw 'Invalid-Scene Player neither exited nor displayed its error MessageBox'
+        }
+
+        if ($messageBox -ne [IntPtr]::Zero)
+        {
+            [PlayerPackageNativeMethods]::PostMessage(
+                $messageBox, 0x0010, [UIntPtr]::Zero,
+                [IntPtr]::Zero) | Out-Null
+            if (-not $process.WaitForExit(10000))
+            {
+                throw 'Invalid-Scene Player did not exit after its MessageBox closed'
+            }
+        }
+    }
+    finally
+    {
+        if (-not $process.HasExited)
+        {
+            Stop-Process -Id $process.Id -Force
+            $process.WaitForExit()
+        }
+        $process.Dispose()
+    }
+
+    $created = @(Get-ChildItem -LiteralPath $ApplicationLogDir -File |
+        Where-Object { $before -notcontains $_.FullName })
+    if ($created.Count -ne 1)
+    {
+        throw "Invalid-Scene Player produced $($created.Count) application logs instead of one"
+    }
+    $text = Get-Content -LiteralPath $created[0].FullName -Raw
+    if ($text.IndexOf('unhandled_exception', [StringComparison]::Ordinal) -lt 0 -or
+        $text.IndexOf('IntentionallyMissing.scene', [StringComparison]::Ordinal) -lt 0)
+    {
+        throw 'Invalid-Scene Player application log omitted the reported error'
+    }
+}
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'Dx12Engine-Phase12.7-' + [Guid]::NewGuid().ToString('N'))
 $isolatedPackage = Join-Path $tempRoot 'PlayerPackage'
@@ -232,9 +306,33 @@ try
     $isolatedExe = Join-Path $isolatedPackage 'Player.exe'
     $defaultLog = Join-Path $tempRoot 'default-runtime-paths.log'
     $explicitLog = Join-Path $tempRoot 'explicit-runtime-paths.log'
-    $defaultOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $defaultLog @() 'Demo.scene'
-    $explicitOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $explicitLog `
-        @('--scene', 'Assets\Scenes\ShadowA.scene') 'ShadowA.scene'
+    $applicationLogDir = Join-Path $tempRoot 'application-logs'
+    $oldApplicationLogDir = [Environment]::GetEnvironmentVariable(
+        'DX12ENGINE_LOG_DIR', 'Process')
+    [Environment]::SetEnvironmentVariable(
+        'DX12ENGINE_LOG_DIR', $applicationLogDir, 'Process')
+    try
+    {
+        $defaultOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $defaultLog @() 'Demo.scene'
+        $explicitOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $explicitLog `
+            @('--scene', 'Assets\Scenes\ShadowA.scene') 'ShadowA.scene'
+        Invoke-InvalidScenePlayer $isolatedExe $workingDirectory $applicationLogDir
+    }
+    finally
+    {
+        [Environment]::SetEnvironmentVariable(
+            'DX12ENGINE_LOG_DIR', $oldApplicationLogDir, 'Process')
+    }
+
+    $applicationLogs = @(Get-ChildItem -LiteralPath $applicationLogDir -File)
+    if ($applicationLogs.Count -ne 3)
+    {
+        throw "Expected one application log per Player run; found $($applicationLogs.Count)"
+    }
+    if (Test-Path -LiteralPath (Join-Path $isolatedPackage 'Logs'))
+    {
+        throw 'Package verification polluted the isolated package with application logs'
+    }
 
     $expectedRoot = [IO.Path]::GetFullPath($isolatedPackage).TrimEnd('\')
     foreach ($runtimeLog in @($defaultOutput, $explicitOutput))
@@ -252,7 +350,7 @@ try
     $packageBytes = (Get-ChildItem -LiteralPath $packagePath -File -Recurse -Force |
         Measure-Object -Property Length -Sum).Sum
     Write-Output ("Phase 12.7 Player package verified outside the repository: " +
-                  "{0} files, {1:N2} MiB, default and explicit Scene exit code 0" -f
+                  "{0} files, {1:N2} MiB, valid Scenes exit 0 and invalid Scene logged" -f
                   $actualFiles.Count, ($packageBytes / 1MB))
 }
 finally

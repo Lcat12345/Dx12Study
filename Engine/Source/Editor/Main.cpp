@@ -1,4 +1,6 @@
 #include "Editor/EditorApp.h"
+#include "Core/ProcessLog.h"
+#include "Core/TextEncoding.h"
 
 #include <Windows.h>
 #include <objbase.h>
@@ -12,8 +14,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
 
-    if (FAILED(CoInitializeEx(nullptr, COINIT_MULTITHREADED)))
+    ProcessLog::Initialize("Editor");
+    ProcessLog::Info("application_start");
+
+    const HRESULT comResult = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(comResult))
     {
+        ProcessLog::Error("COM initialization failed");
+        ProcessLog::Info("application_stop exit_code=-1");
+        ProcessLog::Shutdown();
         return -1;
     }
 
@@ -32,16 +41,28 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                                      paths.assetDir.wstring() + L"\nShaders: " +
                                      paths.shaderDir.wstring() + L"\n";
         OutputDebugStringW(pathLog.c_str());
+        ProcessLog::Info("runtime_paths root=\"" +
+                         ToUtf8(paths.root.wstring()) + "\"");
 
         EditorApp app(hInstance, paths);
         exitCode = app.Run(nCmdShow);
     }
     catch (const std::exception& error)
     {
+        ProcessLog::Error(std::string("unhandled_exception message=\"") +
+                          error.what() + "\"");
         MessageBoxA(nullptr, error.what(), "Dx12Engine Editor failed",
+                    MB_OK | MB_ICONERROR);
+    }
+    catch (...)
+    {
+        ProcessLog::Error("unhandled_exception message=\"unknown exception\"");
+        MessageBoxA(nullptr, "unknown exception", "Dx12Engine Editor failed",
                     MB_OK | MB_ICONERROR);
     }
 
     CoUninitialize();
+    ProcessLog::Info("application_stop exit_code=" + std::to_string(exitCode));
+    ProcessLog::Shutdown();
     return exitCode;
 }

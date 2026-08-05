@@ -1304,5 +1304,15 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     // next Render() that lands back on this FrameResource checks this value.
     frame.fenceValue = m_device.Signal();
 
+    m_lastFrameStats.mainVisible = opaqueItems.size() + transparentItems.size();
+    m_lastFrameStats.shadowVisible = m_shadowCastersExist
+        ? opaqueItems.size() : 0;
+    m_lastFrameStats.drawCalls = m_lastFrameStats.mainVisible +
+                                 m_lastFrameStats.shadowVisible +
+                                 (lighting.skybox.IsValid() &&
+                                  m_skyboxMesh.IsValid() ? 1u : 0u);
+    m_lastFrameStats.renderWidth = target.width;
+    m_lastFrameStats.renderHeight = target.height;
+
     m_currentFrame = (m_currentFrame + 1) % kFramesInFlight;
 }

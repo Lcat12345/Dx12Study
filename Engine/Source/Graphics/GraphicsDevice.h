@@ -4,6 +4,7 @@
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
+#include <string>
 
 // Owns the objects that exist exactly once for the lifetime of the app:
 // the DXGI factory, the device, the graphics queue, and the fence used to
@@ -36,6 +37,7 @@ public:
     // Whether the display path can tear. Without it, SyncInterval 0 still
     // gets paced to vblank by the desktop compositor.
     bool IsTearingSupported() const { return m_tearingSupported; }
+    const std::wstring& AdapterName() const { return m_adapterName; }
 
     // How many messages the debug layer has stored, all severities.
     //
@@ -85,4 +87,5 @@ private:
     HANDLE m_fenceEvent       = nullptr;
     bool   m_tearingSupported = false;
     AdapterPolicy m_adapterPolicy = AdapterPolicy::HardwareOnly;
+    std::wstring m_adapterName;
 };
