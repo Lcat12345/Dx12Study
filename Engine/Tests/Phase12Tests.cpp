@@ -355,6 +355,45 @@ namespace
         Check(!ParsePlayerStartup(2, missing, paths, startup, error) &&
                   error.find(L"requires a path") != std::wstring::npos,
               "missing --scene value lacked a clear error");
+
+        const wchar_t* benchmark[] = {
+            L"Player.exe", L"--benchmark", L"500"
+        };
+        Check(ParsePlayerStartup(3, benchmark, paths, startup, error),
+              "benchmark Player arguments failed");
+        Check(startup.scenePath ==
+                  (paths.root / L"Assets/Scenes/Arena.scene").lexically_normal(),
+              "benchmark mode did not select Arena.scene");
+        Check(startup.benchmark.enabled && startup.benchmark.enemyCount == 500,
+              "benchmark enemy count was not preserved");
+        Check(startup.benchmark.outputPath ==
+                  (paths.root / L"Logs/Player-benchmark.tsv").lexically_normal(),
+              "benchmark output was not rooted beside Player.exe");
+
+        const wchar_t* customBenchmark[] = {
+            L"Player.exe", L"--scene", L"Assets/Scenes/Arena.scene",
+            L"--benchmark-output", L"Results/baseline.tsv",
+            L"--benchmark", L"100"
+        };
+        Check(ParsePlayerStartup(7, customBenchmark, paths, startup, error),
+              "custom benchmark arguments failed");
+        Check(startup.benchmark.outputPath ==
+                  (paths.root / L"Results/baseline.tsv").lexically_normal(),
+              "custom benchmark output was not rooted beside Player.exe");
+
+        const wchar_t* unsupportedBenchmark[] = {
+            L"Player.exe", L"--benchmark", L"256"
+        };
+        Check(!ParsePlayerStartup(3, unsupportedBenchmark, paths, startup, error) &&
+                  error.find(L"100, 500, 1000, or 2000") != std::wstring::npos,
+              "unsupported benchmark population lacked a clear error");
+
+        const wchar_t* outputWithoutBenchmark[] = {
+            L"Player.exe", L"--benchmark-output", L"baseline.tsv"
+        };
+        Check(!ParsePlayerStartup(3, outputWithoutBenchmark, paths, startup, error) &&
+                  error.find(L"requires --benchmark") != std::wstring::npos,
+              "standalone benchmark output option was accepted");
     }
 
     void FrameSamplesRespectWarmupAndPercentiles()
@@ -796,6 +835,56 @@ namespace
               "100-enemy arena did not flatten to the expected draw items");
     }
 
+    void FixedResourceCeilingsAreReproducible(TestContext& context)
+    {
+        auto arenaDrawItemCount = [&](uint32_t enemyCount) {
+            World world;
+            std::string error;
+            CheckSucceeded(LoadScene(context.paths.SceneDir() / L"Arena.scene",
+                                     context.resources, world, error), error);
+            ArenaConfig config;
+            config.initialEnemyCount = enemyCount;
+            config.maxEnemies = enemyCount;
+            Check(InitializeArenaIfPresent(world, context.resources, config),
+                  "benchmark arena did not initialize");
+            std::vector<DrawItem> items;
+            LightingData lighting;
+            BuildRenderData(world, context.resources, items, lighting);
+            return items.size();
+        };
+
+        const size_t lastPassingCount = arenaDrawItemCount(252);
+        const size_t firstFailingCount = arenaDrawItemCount(253);
+        Check(lastPassingCount == 256 &&
+                  !Renderer::ExceedsInitialObjectCapacity(lastPassingCount),
+              "252 enemies no longer reproduce the last passing Object CB load");
+        Check(firstFailingCount == 257 &&
+                  Renderer::ExceedsInitialObjectCapacity(firstFailingCount),
+              "253 enemies no longer reproduce the first Object CB overflow");
+
+        DescriptorAllocator descriptors{
+            context.device.Device(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
+            64, true
+        };
+        for (UINT index = 0; index < 64; ++index)
+        {
+            Check(descriptors.Allocate().index == index,
+                  "SRV ceiling fixture did not allocate sequential slots");
+        }
+        try
+        {
+            descriptors.Allocate();
+            throw std::runtime_error("65th SRV allocation unexpectedly succeeded");
+        }
+        catch (const std::runtime_error& allocationError)
+        {
+            const std::string message = allocationError.what();
+            Check(message.find("used=64") != std::string::npos &&
+                      message.find("capacity=64") != std::string::npos,
+                  "SRV overflow omitted the last resource usage");
+        }
+    }
+
     void DemoSceneAndSpinInteraction(TestContext& context)
     {
         World world;
@@ -1219,6 +1308,7 @@ int main()
         const TestCase tests[] = {
             { "functional/play-stop-rollback", PlayStopRestoresExactEditWorld },
             { "functional/arena-play-stop-rollback", ArenaScenePlayStopRestoresSnapshot },
+            { "regression/fixed-resource-ceilings", FixedResourceCeilingsAreReproducible },
             { "functional/demo-scene-interaction", DemoSceneAndSpinInteraction },
             { "functional/play-capture-failure", FailedPlayCaptureIsAtomic },
             { "regression/repeated-play-stop", RepeatedPlayStopIsStable },

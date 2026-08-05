@@ -1,0 +1,5 @@
+status	enemies	warmup_frames	sample_frames	median_ms	p95_ms	max_ms	vsync	msaa	width	height	adapter	draw_calls	root_cbv_binds	main_visible	shadow_visible	draw_items	object_capacity	srv_used	srv_capacity	error
+success	100	120	600	0.292	2.443	4.159	off	4x	1280	720	NVIDIA GeForce RTX 5070 Ti	209	212	104	104	104	256	7	64	
+failed	500	120	0	0.000	0.000	0.000	off	4x	0	0	NVIDIA GeForce RTX 5070 Ti	0	0	0	0	504	256	7	64	object constant buffer exhausted: draw_items=504 capacity=256
+failed	1000	120	0	0.000	0.000	0.000	off	4x	0	0	NVIDIA GeForce RTX 5070 Ti	0	0	0	0	1004	256	7	64	object constant buffer exhausted: draw_items=1004 capacity=256
+failed	2000	120	0	0.000	0.000	0.000	off	4x	0	0	NVIDIA GeForce RTX 5070 Ti	0	0	0	0	2004	256	7	64	object constant buffer exhausted: draw_items=2004 capacity=256

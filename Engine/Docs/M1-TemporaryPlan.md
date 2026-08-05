@@ -111,16 +111,48 @@ Debug Layer 오류의 원인을 분리할 수 없다.
 
 이 단계의 목적은 최적화가 아니라 현재 실패 지점을 숫자로 남기는 것이다.
 
-- [ ] 시작 적 수를 100/500/1000/2000으로 고정하는 benchmark 옵션을 Player에
+- [x] 시작 적 수를 100/500/1000/2000으로 고정하는 benchmark 옵션을 Player에
   추가한다.
-- [ ] warm-up 뒤 동일 시간/프레임 수만 측정하고 CSV 또는 TSV 로그를 남긴다.
-- [ ] 256 DrawItem 초과 예외가 발생하는 최초 N과 SRV 64 초과 재현 테스트를 기록한다.
-- [ ] CPU frame time 외에 draw call, root CBV bind, main visible, shadow visible을 센다.
+- [x] warm-up 뒤 동일 시간/프레임 수만 측정하고 CSV 또는 TSV 로그를 남긴다.
+- [x] 256 DrawItem 초과 예외가 발생하는 최초 N과 SRV 64 초과 재현 테스트를 기록한다.
+- [x] CPU frame time 외에 draw call, root CBV bind, main visible, shadow visible을 센다.
 
 종료 조건:
 
-- 최적화 전 기준표가 문서에 붙일 수 있는 형태로 생성된다.
-- 실패는 crash만 남기지 않고 마지막 적 수와 자원 사용량을 파일 로그에 남긴다.
+- [x] 최적화 전 기준표가 문서에 붙일 수 있는 형태로 생성된다.
+- [x] 실패는 crash만 남기지 않고 마지막 적 수와 자원 사용량을 파일 로그에 남긴다.
+
+#### Benchmark 실행 계약
+
+```powershell
+Player.exe --benchmark 100
+Player.exe --benchmark 500 --benchmark-output Logs\custom-baseline.tsv
+```
+
+- `--benchmark`는 `100`, `500`, `1000`, `2000`만 허용한다.
+- `--scene`이 없으면 `Arena.scene`을 선택하고, 고정 seed에서 초기 적 수와 최대 적 수를
+  같은 값으로 설정한다.
+- VSync를 끄고 120 frame을 warm-up한 뒤 600 frame만 측정한다. 완료되면 Player가
+  자동 종료된다.
+- 기본 결과는 Player 실행 파일 옆 `Logs/Player-benchmark.tsv`에 append한다. 실패도 같은
+  스키마에 `status=failed`, 마지막 DrawItem 수, Object/SRV 사용량, 오류를 남긴다.
+
+#### 최적화 전 기준선
+
+2026-08-05, Release, 1280×720, MSAA 4x, VSync off,
+NVIDIA GeForce RTX 5070 Ti에서 측정했다. 원본 행은
+[M1-Baseline.tsv](M1-Baseline.tsv)에 보존한다.
+
+| 적 N | 상태 | median/p95/max (ms) | draw | root CBV | main/shadow | DrawItem | Object CB | SRV |
+|---:|---|---|---:|---:|---:|---:|---:|---:|
+| 100 | 성공 | 0.292 / 2.443 / 4.159 | 209 | 212 | 104 / 104 | 104 | 104 / 256 | 7 / 64 |
+| 500 | 상한 실패 | 측정 전 실패 | 0 | 0 | 0 / 0 | 504 | 504 / 256 | 7 / 64 |
+| 1000 | 상한 실패 | 측정 전 실패 | 0 | 0 | 0 / 0 | 1004 | 1004 / 256 | 7 / 64 |
+| 2000 | 상한 실패 | 측정 전 실패 | 0 | 0 | 0 / 0 | 2004 | 2004 / 256 | 7 / 64 |
+
+재현 테스트에서 Arena의 정적 3개, player 1개를 포함해 적 252마리는 정확히 256
+DrawItem으로 통과하고, 적 253마리는 257 DrawItem으로 최초 실패한다. 독립 SRV fixture는
+64번째 할당까지 통과하고 65번째에서 `used=64 capacity=64`로 실패한다.
 
 ### 4. Object CB 동적화
 

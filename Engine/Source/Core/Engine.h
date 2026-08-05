@@ -36,6 +36,8 @@ protected:
     virtual void OnUpdate(float dt) {}
     // Called once per frame; the game issues its own Render call here.
     virtual void OnRender() {}
+    virtual void OnFrameSampleSummary(const FrameSampleSummary&,
+                                      const Renderer::FrameStats&) {}
 
     Window&   GetWindow()   { return m_window; }
     Renderer& GetRenderer() { return *m_renderer; }
@@ -48,6 +50,11 @@ protected:
     // count separate preserves Engine's independence from game components.
     virtual uint64_t MeasurementEnemyCount() { return 0; }
     virtual std::wstring MeasurementTitleStatus() { return {}; }
+
+    void ConfigureFrameSampling(size_t warmupFrames, size_t sampleFrames)
+    {
+        m_frameSamples = FrameSampleCollector(warmupFrames, sampleFrames);
+    }
 
 private:
     void UpdateTitleFps(float dt);

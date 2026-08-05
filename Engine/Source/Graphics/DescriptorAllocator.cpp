@@ -52,7 +52,9 @@ DescriptorHandle DescriptorAllocator::Allocate()
 
     if (m_bump >= m_capacity)
     {
-        throw std::runtime_error("Descriptor heap is full - raise its capacity");
+        throw std::runtime_error(
+            "descriptor heap exhausted: used=" + std::to_string(UsedCount()) +
+            " capacity=" + std::to_string(m_capacity));
     }
     return MakeHandle(m_bump++);
 }

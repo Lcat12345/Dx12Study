@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <stdexcept>
+#include <utility>
 #include <vector>
 
 namespace
@@ -58,6 +59,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     }
 
     int exitCode = -1;
+    PlayerStartup startup;
+    bool suppressErrorDialog = false;
     try
     {
         const RuntimePaths paths = MakePlayerRuntimePaths();
@@ -68,7 +71,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
             throw std::runtime_error("CommandLineToArgvW failed");
         }
 
-        PlayerStartup startup;
         std::wstring startupError;
         const std::vector<const wchar_t*> argumentViews(arguments,
                                                         arguments + argumentCount);
@@ -85,6 +87,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
         }
         else
         {
+            suppressErrorDialog = startup.benchmark.enabled;
             const std::wstring pathLog = L"Dx12Engine Player runtime root: " +
                                          paths.root.wstring() + L"\nAssets: " +
                                          paths.assetDir.wstring() + L"\nShaders: " +
@@ -98,7 +101,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
             const std::wstring title = L"Dx12Engine Player - " +
                                        startup.scenePath.filename().wstring();
-            PlayerApp app(hInstance, paths, startup.scenePath, title.c_str());
+            PlayerApp app(hInstance, paths, std::move(startup), title.c_str());
             exitCode = app.Run(nCmdShow);
         }
     }
@@ -106,14 +109,20 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     {
         ProcessLog::Error(std::string("unhandled_exception message=\"") +
                           error.what() + "\"");
-        MessageBoxA(nullptr, error.what(), "Dx12Engine Player failed",
-                    MB_OK | MB_ICONERROR);
+        if (!suppressErrorDialog)
+        {
+            MessageBoxA(nullptr, error.what(), "Dx12Engine Player failed",
+                        MB_OK | MB_ICONERROR);
+        }
     }
     catch (...)
     {
         ProcessLog::Error("unhandled_exception message=\"unknown exception\"");
-        MessageBoxA(nullptr, "unknown exception", "Dx12Engine Player failed",
-                    MB_OK | MB_ICONERROR);
+        if (!suppressErrorDialog)
+        {
+            MessageBoxA(nullptr, "unknown exception", "Dx12Engine Player failed",
+                        MB_OK | MB_ICONERROR);
+        }
     }
 
     CoUninitialize();

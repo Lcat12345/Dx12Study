@@ -694,13 +694,12 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
 void Renderer::UpdateObjectConstants(FrameResource& frame,
                                      const std::vector<DrawItem>& items)
 {
-    if (items.size() > kMaxObjects)
+    if (ExceedsInitialObjectCapacity(items.size()))
     {
-        // Silently drawing only the first 32 would look like a rendering bug
-        // and cost an afternoon. Say exactly what to change instead.
         throw std::runtime_error(
-            "More draw items than the object constant buffer holds - "
-            "raise kMaxObjects in FrameResource.h");
+            "object constant buffer exhausted: draw_items=" +
+            std::to_string(items.size()) + " capacity=" +
+            std::to_string(kMaxObjects));
     }
 
     for (size_t i = 0; i < items.size(); ++i)
@@ -751,6 +750,7 @@ void Renderer::BindScenePass(FrameResource& frame, const SceneAttachments& targe
     // buffers by update frequency.
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
+    ++m_lastFrameStats.rootCbvBinds;
     m_commandList->SetGraphicsRootDescriptorTable(4, m_shadowMap->SRV());
 
     m_commandList->RSSetViewports(1, &target.viewport);
@@ -854,6 +854,7 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
         // juggling, just an address.
         m_commandList->SetGraphicsRootConstantBufferView(
             0, objectCBBase + UINT64(itemIndex) * kObjectCBSize);
+        ++m_lastFrameStats.rootCbvBinds;
 
         // Each material names its own texture; the handle resolves to a
         // slot in the heap bound above. A material placed in the editor may
@@ -884,6 +885,7 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
         m_commandList->DrawIndexedInstanced(
             item.indexCount != 0 ? item.indexCount : mesh.indexCount,
             1, item.indexOffset, 0, 0);
+        ++m_lastFrameStats.drawCalls;
     }
 }
 
@@ -951,6 +953,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
         m_pipelineStates[0][size_t(PsoRole::ShadowDepth)].Get());
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
+    ++m_lastFrameStats.rootCbvBinds;
 
     const D3D12_VIEWPORT viewport = m_shadowMap->Viewport();
     const D3D12_RECT     scissor  = m_shadowMap->ScissorRect();
@@ -973,12 +976,14 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
         // the object in two different places.
         m_commandList->SetGraphicsRootConstantBufferView(
             0, objectCBBase + UINT64(itemIndex) * kObjectCBSize);
+        ++m_lastFrameStats.rootCbvBinds;
 
         m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
         m_commandList->DrawIndexedInstanced(
             item.indexCount != 0 ? item.indexCount : mesh.indexCount,
             1, item.indexOffset, 0, 0);
+        ++m_lastFrameStats.drawCalls;
     }
 
     // Hand it to both readers: the scene lighting pass and the debug image.
@@ -1026,6 +1031,7 @@ void Renderer::DrawSkyboxPass(FrameResource& frame,
     // point it at a real address rather than leaving it dangling.
     m_commandList->SetGraphicsRootConstantBufferView(
         0, frame.objectCB->GetGPUVirtualAddress());
+    ++m_lastFrameStats.rootCbvBinds;
     m_commandList->SetGraphicsRootDescriptorTable(
         2, m_resources.CubeTextureSRV(skybox).gpu);
 
@@ -1033,6 +1039,7 @@ void Renderer::DrawSkyboxPass(FrameResource& frame,
     m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
     m_commandList->IASetIndexBuffer(&mesh.ibv);
     m_commandList->DrawIndexedInstanced(mesh.indexCount, 1, 0, 0, 0);
+    ++m_lastFrameStats.drawCalls;
 }
 
 // Straight-alpha compositing after the skybox supplies the background. The
@@ -1235,6 +1242,12 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
                            const std::vector<DrawItem>& items, SceneOutput output,
                            const OverlayRecorder& overlayRecorder)
 {
+    m_lastFrameStats = {};
+    m_lastFrameStats.submittedItems = items.size();
+    m_lastFrameStats.objectCapacity = kMaxObjects;
+    m_lastFrameStats.srvUsed = m_srvAllocator.UsedCount();
+    m_lastFrameStats.srvCapacity = m_srvAllocator.Capacity();
+
     FrameResource& frame = m_frames[m_currentFrame];
 
     // Wait only until the GPU is done with THIS set of resources - which,
@@ -1307,10 +1320,6 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     m_lastFrameStats.mainVisible = opaqueItems.size() + transparentItems.size();
     m_lastFrameStats.shadowVisible = m_shadowCastersExist
         ? opaqueItems.size() : 0;
-    m_lastFrameStats.drawCalls = m_lastFrameStats.mainVisible +
-                                 m_lastFrameStats.shadowVisible +
-                                 (lighting.skybox.IsValid() &&
-                                  m_skyboxMesh.IsValid() ? 1u : 0u);
     m_lastFrameStats.renderWidth = target.width;
     m_lastFrameStats.renderHeight = target.height;
 

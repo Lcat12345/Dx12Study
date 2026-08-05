@@ -24,11 +24,16 @@ class Renderer
 public:
     struct FrameStats
     {
-        uint64_t drawCalls     = 0;
-        uint64_t mainVisible   = 0;
-        uint64_t shadowVisible = 0;
-        UINT     renderWidth   = 0;
-        UINT     renderHeight  = 0;
+        uint64_t drawCalls        = 0;
+        uint64_t rootCbvBinds     = 0;
+        uint64_t mainVisible      = 0;
+        uint64_t shadowVisible    = 0;
+        uint64_t submittedItems   = 0;
+        UINT     objectCapacity   = 0;
+        UINT     srvUsed           = 0;
+        UINT     srvCapacity       = 0;
+        UINT     renderWidth       = 0;
+        UINT     renderHeight      = 0;
     };
 
     enum class SceneOutput
@@ -98,6 +103,11 @@ public:
     // shows it next to the live count so the ceiling is visible before it
     // is hit.
     UINT MaxDrawItems() const { return kMaxObjects; }
+    static constexpr UINT InitialObjectCapacity() { return kMaxObjects; }
+    static constexpr bool ExceedsInitialObjectCapacity(size_t drawItemCount)
+    {
+        return drawItemCount > kMaxObjects;
+    }
 
     // Takes flattened data, not a scene graph. Scene passes are shared by
     // both outputs; only the final presentation path differs. The optional

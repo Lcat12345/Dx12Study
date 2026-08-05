@@ -90,9 +90,14 @@ void Engine::RecordFrameSample(float dt)
         << " adapter=\"" << ToUtf8(m_renderer->AdapterName()) << '"'
         << " enemies=" << MeasurementEnemyCount()
         << " draws=" << frame.drawCalls
+        << " root_cbv_binds=" << frame.rootCbvBinds
         << " main_visible=" << frame.mainVisible
-        << " shadow_visible=" << frame.shadowVisible;
+        << " shadow_visible=" << frame.shadowVisible
+        << " object_capacity=" << frame.objectCapacity
+        << " srv_used=" << frame.srvUsed
+        << " srv_capacity=" << frame.srvCapacity;
     ProcessLog::Info(row.str());
+    OnFrameSampleSummary(*summary, frame);
 }
 
 // Averages over a whole second - a per-frame number would be unreadable.
