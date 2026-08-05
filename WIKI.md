@@ -1,12 +1,14 @@
 # Dx12Engine 사용설명서
 
 이 문서는 `Dx12Engine.slnx`를 기준으로 엔진을 빌드하고, Editor에서 Scene을
-제작하며, Player로 실행하고 배포하는 방법을 설명한다. 현재 기준은 Phase 12.7
-완료 상태다.
+제작하며, Player로 실행하고 배포하는 방법을 설명한다. 현재 기준은 `v1.3`
+(`Phase 12.7`) 완료 상태다. 이 문서는 현재 구현된 기능만 다루며, `v1.4` 이후의
+계획은 [개발 로드맵](ROADMAP.md)을 따른다.
 
 ## 목차
 
 - [엔진 개요](#엔진-개요)
+- [현재 범위와 로드맵](#현재-범위와-로드맵)
 - [요구 환경](#요구-환경)
 - [프로젝트 구조](#프로젝트-구조)
 - [빠른 시작](#빠른-시작)
@@ -24,7 +26,7 @@
 
 ## 엔진 개요
 
-Dx12Engine은 Win32와 DirectX 12로 작성된 학습용 3D 엔진이다. 현재 다음 기능을
+Dx12Engine은 Win32와 DirectX 12로 작성된 3D 게임 엔진이다. 현재 다음 기능을
 제공한다.
 
 - ECS 기반 World와 Component 조합
@@ -41,6 +43,30 @@ Dx12Engine은 Win32와 DirectX 12로 작성된 학습용 3D 엔진이다. 현재
 
 Editor와 Player는 같은 Scene 형식과 게임 시스템을 사용한다. Editor-only UI와
 ImGui는 Player 바이너리에 링크되지 않는다.
+
+## 현재 범위와 로드맵
+
+`v1.3`은 ECS 런타임, 렌더러, Editor, 독립 실행 Player와 재현 가능한 패키징까지
+완료한 기준선이다. 새 로드맵은 이 기반으로 **탑다운 3D 뱀파이어 서바이벌**을
+만들면서 게임이 실제로 요구하는 엔진 기능을 추가한다.
+
+| 마일스톤 | 계획된 결과물 | 태그 |
+|---|---|---|
+| M1 — 몰려오는 적 | 절차 메시 기반 최소 게임 루프와 적 1000마리 | `v1.4` |
+| M2 — 캐릭터 | FBX 임포트와 스켈레탈 애니메이션 | `v1.5` |
+| M3 — 월드와 물리 | 프랩이 놓인 아레나, 충돌과 점프 | `v1.6` |
+| M4 — 게임의 얼굴 | 파티클, 툰 셰이딩, HUD와 사운드 | `v1.7` |
+| M5 — 에디터 | 기즈모, 언두/리두, 프리팹과 비동기 에셋 로드 | `v1.8` |
+| M6 — 규모와 배포 | 멀티스레딩, bindless와 최종 패키지 | `v2.0` |
+
+위 표의 기능은 아직 현재 버전의 사용 가능 기능이 아니다. 특히 현재는 OBJ·PNG만
+지원하고, Transform은 Euler 회전을 사용하며, 물리·스켈레탈 애니메이션·파티클·
+런타임 HUD는 구현되지 않았다. 셰이더도 아직 FXC로 컴파일한다.
+
+M1에서 다룰 현재 렌더링 상한은 한 프레임의 DrawItem 256개
+(`kMaxObjects = 256`)와 공유 shader-visible SRV heap 64개다. 인스턴싱과 프러스텀
+컬링도 아직 없다. 상세한 착수 조건, 검증 방법과 외부 의존성 선택은
+[개발 로드맵](ROADMAP.md)에 기록한다.
 
 ## 요구 환경
 
@@ -77,7 +103,6 @@ Dx12Engine/
 ├─ Dx12Engine.slnx
 ├─ WIKI.md
 ├─ ROADMAP.md
-├─ docs/
 ├─ Engine/
 │  ├─ Assets/
 │  ├─ Shaders/
@@ -280,8 +305,11 @@ procedural mesh 이름이다.
 Mesh를 선택하고 **Place on click**을 켜면 Scene viewport의 바닥을 클릭해 새
 Entity를 배치할 수 있다. 선택한 Texture가 있으면 함께 할당된다.
 
-현재 빌드와 패키징은 `Assets/` 전체를 복사한다. 선택적 로컬 에셋이 많으면 패키지
-크기가 커질 수 있으며, asset cooking/manifest 기반 선별은 아직 구현 범위 밖이다.
+일반 Editor/Player 실행 출력은 개발 편의를 위해 `Assets/` 전체를 복사한다. 반면
+Release `PlayerPackage`는 `Engine/Tests/PlayerPackage.contents`에 선언된 Git 추적
+에셋만 포함한다. 배포할 Scene이나 에셋을 추가할 때는 이 목록도 함께 갱신해야 한다.
+라이선스상 재배포할 수 없는 로컬 전용 에셋은 목록에 넣지 않아야 하며, 그런 에셋이
+없어도 패키지 검증이 통과해야 한다.
 
 ## Play 모드
 
@@ -474,17 +502,18 @@ Frame 패널에 unsupported 상태가 표시된다.
 - Release 테스트: 25/25 통과
 - Debug/Release 프로젝트·링크 경계 검사: 통과
 - 저장소 밖 기본/지정 Scene Player 실행: 종료 코드 0
-- Release package: 40 files, 51.60 MiB, 별도 runtime DLL 없음
+- Release package: 선언된 에셋 목록과 manifest 일치, 별도 runtime DLL 없음
 
-필수 구현 누락은 발견되지 않았다. 다음 두 항목은 구현 결함이 아닌 릴리스 운영
+필수 구현 누락은 발견되지 않았다. 다음 항목은 구현 결함이 아닌 릴리스 운영
 상태로 남아 있다.
 
 - 개발 도구가 없는 별도 PC에서의 수동 실행은 선택 검증이며 아직 결과가 기록되지 않음
-- 현재 변경사항이 미커밋 상태이므로 `v1.3` Git tag는 아직 생성하지 않음
+
+`v1.3` Git tag는 Phase 12.7 완료 커밋에 생성됐다.
 
 ## 관련 문서
 
-- [전체 ROADMAP](ROADMAP.md)
+- [`v1.4`~`v2.0` 개발 ROADMAP](ROADMAP.md)
 - [실행 컨텍스트와 시스템 경계](Engine/Docs/Phase12.1-ExecutionBoundary.md)
 - [presentation 경계](Engine/Docs/Phase12.3-PresentationBoundary.md)
 - [프로젝트와 링크 경계](Engine/Docs/Phase12.4-ProjectBoundary.md)
