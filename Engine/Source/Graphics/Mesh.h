@@ -212,6 +212,12 @@ MeshData MakeFloorMeshData(float halfExtent, float uvTiling);
 // cheapest possible smooth-shading test.
 MeshData MakeSphereMeshData(float radius, UINT slices, UINT stacks);
 
+// A Y-axis capsule made from two hemispheres joined by a cylinder. The
+// equator is duplicated at each end of the cylinder so the same smooth
+// horizontal normal can be shared without pinching the body.
+MeshData MakeCapsuleMeshData(float radius, float halfHeight,
+                             UINT slices, UINT hemisphereStacks);
+
 // A torus standing UPRIGHT - its ring lies in the XY plane.
 //
 // Deliberately not flat in XZ: spinning a flat torus about Y is

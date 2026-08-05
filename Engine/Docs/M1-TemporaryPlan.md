@@ -83,16 +83,16 @@ Debug Layer 오류의 원인을 분리할 수 없다.
 먼저 적 100마리 이하에서 완결된 5분 루프를 만든다. 이 단계에서는 렌더러 상한을
 고치지 않는다.
 
-- [ ] `#capsule` 절차 메시와 `Assets/Scenes/Arena.scene`을 추가한다.
-- [ ] 런타임 전용 component를 정의한다: player marker, enemy, health, contact damage,
+- [x] `#capsule` 절차 메시와 `Assets/Scenes/Arena.scene`을 추가한다.
+- [x] 런타임 전용 component를 정의한다: player marker, enemy, health, contact damage,
   attack cooldown, XP pickup, arena state.
-- [ ] WASD 입력을 XZ 평면 이동으로 변환하고, 카메라는 player를 고정 offset으로
+- [x] WASD 입력을 XZ 평면 이동으로 변환하고, 카메라는 player를 고정 offset으로
   추적한다.
-- [ ] 화면 밖 ring에 시간 곡선과 고정 seed로 적을 생성한다.
-- [ ] 적 추적, 접촉 damage cooldown, 최근접 적 자동 공격을 구현한다.
-- [ ] 사망 대상을 2단계로 제거하고 XP pickup을 생성한다.
-- [ ] pickup 획득, player 사망, 생존 timer 정지를 구현한다.
-- [ ] HP, XP, 생존 시간, 현재/누적 적 수를 창 제목과 로그에 표시한다.
+- [x] 화면 밖 ring에 시간 곡선과 고정 seed로 적을 생성한다.
+- [x] 적 추적, 접촉 damage cooldown, 최근접 적 자동 공격을 구현한다.
+- [x] 사망 대상을 2단계로 제거하고 XP pickup을 생성한다.
+- [x] pickup 획득, player 사망, 생존 timer 정지를 구현한다.
+- [x] HP, XP, 생존 시간, 현재/누적 적 수를 창 제목과 로그에 표시한다.
 
 성능상 규칙:
 
@@ -102,10 +102,10 @@ Debug Layer 오류의 원인을 분리할 수 없다.
 
 종료 조건:
 
-- logic-only 테스트에서 이동, ring spawn, 추적, damage cooldown, 최근접 공격, 사망,
+- [x] logic-only 테스트에서 이동, ring spawn, 추적, damage cooldown, 최근접 공격, 사망,
   XP 획득이 고정 `dt`와 seed로 재현된다.
-- Editor의 Play/Stop snapshot 복원이 새 런타임 component 때문에 깨지지 않는다.
-- 적 100마리로 실제 플레이가 가능하고 기존 회귀 테스트가 통과한다.
+- [x] Editor의 Play/Stop snapshot 복원이 새 런타임 component 때문에 깨지지 않는다.
+- [x] 적 100마리로 실제 플레이가 가능하고 기존 회귀 테스트가 통과한다.
 
 ### 3. 상한 재현과 기준선 고정
 

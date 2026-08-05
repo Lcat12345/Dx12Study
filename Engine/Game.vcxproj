@@ -39,6 +39,7 @@
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="Source\Game\Arena.cpp" />
     <ClCompile Include="Source\Game\BuildWorld.cpp" />
     <ClCompile Include="Source\Game\ExecutionContext.cpp" />
     <ClCompile Include="Source\Game\Picking.cpp" />
@@ -46,6 +47,7 @@
     <ClCompile Include="Source\Game\Systems.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="Source\Game\Arena.h" />
     <ClInclude Include="Source\Game\BuildWorld.h" />
     <ClInclude Include="Source\Game\Components.h" />
     <ClInclude Include="Source\Game\ExecutionContext.h" />

@@ -507,6 +507,66 @@ MeshData MakeSphereMeshData(float radius, UINT slices, UINT stacks)
     return mesh;
 }
 
+MeshData MakeCapsuleMeshData(float radius, float halfHeight,
+                             UINT slices, UINT hemisphereStacks)
+{
+    radius           = (std::max)(radius, 0.001f);
+    halfHeight       = (std::max)(halfHeight, 0.0f);
+    slices           = (std::max)(slices, 3u);
+    hemisphereStacks = (std::max)(hemisphereStacks, 1u);
+
+    MeshData mesh;
+    const UINT ringCount = hemisphereStacks * 2 + 2;
+    mesh.vertices.reserve(size_t(slices + 1) * ringCount);
+
+    auto appendRing = [&](float latitude, float centerY, float v) {
+        const float radial = std::cos(latitude);
+        const float normalY = std::sin(latitude);
+        for (UINT slice = 0; slice <= slices; ++slice)
+        {
+            const float theta = XM_2PI * float(slice) / float(slices);
+            Vertex vertex;
+            vertex.normal = { radial * std::cos(theta), normalY,
+                              radial * std::sin(theta) };
+            vertex.position = { vertex.normal.x * radius,
+                                centerY + vertex.normal.y * radius,
+                                vertex.normal.z * radius };
+            vertex.uv = { float(slice) / float(slices), v };
+            mesh.vertices.push_back(vertex);
+        }
+    };
+
+    // Bottom pole -> bottom equator.
+    for (UINT stack = 0; stack <= hemisphereStacks; ++stack)
+    {
+        const float t = float(stack) / float(hemisphereStacks);
+        appendRing(-XM_PIDIV2 + XM_PIDIV2 * t, -halfHeight,
+                   0.5f * t);
+    }
+    // Top equator -> top pole. Keeping both equators creates the cylinder.
+    for (UINT stack = 0; stack <= hemisphereStacks; ++stack)
+    {
+        const float t = float(stack) / float(hemisphereStacks);
+        appendRing(XM_PIDIV2 * t, halfHeight, 0.5f + 0.5f * t);
+    }
+
+    const UINT rowStride = slices + 1;
+    for (UINT ring = 0; ring + 1 < ringCount; ++ring)
+    {
+        for (UINT slice = 0; slice < slices; ++slice)
+        {
+            const uint32_t bottomLeft  = ring * rowStride + slice;
+            const uint32_t bottomRight = bottomLeft + 1;
+            const uint32_t topLeft     = bottomLeft + rowStride;
+            const uint32_t topRight    = topLeft + 1;
+            mesh.indices.insert(mesh.indices.end(),
+                                { bottomLeft, topRight, bottomRight,
+                                  bottomLeft, topLeft, topRight });
+        }
+    }
+    return mesh;
+}
+
 MeshData MakeTorusMeshData(float majorRadius, float minorRadius,
                            UINT majorSegments, UINT minorSegments)
 {

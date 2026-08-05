@@ -119,7 +119,7 @@ void Engine::UpdateTitleFps(float dt)
     std::swprintf(title, _countof(title),
                   L"%ls   %d fps   %.2f ms   %ux%u   [%ls]  V=toggle"
                   L"   | mesh %u/%u  tex %u/%u  shader %u/%u (loads/requests)",
-                  m_title, m_fpsFrames,
+                  m_title.c_str(), m_fpsFrames,
                   1000.0f * m_fpsAccumulator / float(m_fpsFrames),
                   m_window.ClientWidth(), m_window.ClientHeight(), sync,
                   stats.meshLoads, stats.meshRequests,
@@ -128,11 +128,12 @@ void Engine::UpdateTitleFps(float dt)
 #else
     std::swprintf(title, _countof(title),
                   L"%ls   %d fps   %.2f ms   %ux%u   [%ls]  V=toggle",
-                  m_title, m_fpsFrames,
+                  m_title.c_str(), m_fpsFrames,
                   1000.0f * m_fpsAccumulator / float(m_fpsFrames),
                   m_window.ClientWidth(), m_window.ClientHeight(), sync);
 #endif
-    m_window.SetTitle(title);
+    const std::wstring fullTitle = std::wstring(title) + MeasurementTitleStatus();
+    m_window.SetTitle(fullTitle.c_str());
 
     m_fpsAccumulator = 0.0f;
     m_fpsFrames      = 0;

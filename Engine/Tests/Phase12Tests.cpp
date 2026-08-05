@@ -1,6 +1,7 @@
 #include "Core/Common.h"
 #include "Core/FrameStatistics.h"
 #include "Core/ProcessLog.h"
+#include "Game/Arena.h"
 #include "Game/Components.h"
 #include "Editor/EditorSession.h"
 #include "Game/ExecutionContext.h"
@@ -517,6 +518,178 @@ namespace
         play.EndFrame();
     }
 
+    World MakeLogicArena(const ArenaConfig& config)
+    {
+        World world;
+        const Entity marker = world.Create();
+        SetName(world, marker, "Arena Runtime");
+
+        const Entity camera = world.Create();
+        world.Add<Transform>(camera);
+        world.Add<CameraComponent>(camera);
+        world.Add<ActiveCamera>(camera);
+
+        Check(InitializeArena(world, ArenaRuntimeAssets{}, config),
+              "logic arena did not initialize");
+        return world;
+    }
+
+    Entity ArenaPlayerEntity(World& world)
+    {
+        Entity player;
+        world.ForEach<ArenaPlayer>([&](Entity entity, ArenaPlayer&) {
+            player = entity;
+        });
+        return player;
+    }
+
+    Entity FirstArenaEnemy(World& world)
+    {
+        Entity enemy;
+        world.ForEach<ArenaEnemy>([&](Entity entity, ArenaEnemy&) {
+            if (!enemy.IsValid())
+                enemy = entity;
+        });
+        return enemy;
+    }
+
+    Entity AddLogicEnemy(World& world, const DirectX::XMFLOAT3& position,
+                         float health, float speed = 0.0f)
+    {
+        const Entity enemy = world.Create();
+        world.Add<Transform>(enemy, { position });
+        world.Add<ArenaEnemy>(enemy, { speed });
+        world.Add<Health>(enemy, { health, health });
+        ContactDamage contact;
+        contact.amount = 0.0f;
+        contact.radius = 0.0f;
+        world.Add<ContactDamage>(enemy, contact);
+        return enemy;
+    }
+
+    void ArenaMovementSpawnAndTrackingAreDeterministic()
+    {
+        ArenaConfig config;
+        config.seed = 12345;
+        config.initialEnemyCount = 0;
+        config.maxEnemies = 1;
+        config.firstSpawnDelay = 0.0f;
+
+        World first = MakeLogicArena(config);
+        World second = MakeLogicArena(config);
+        ArenaGameSystem(first, InputContext{}, 0.0f);
+        ArenaGameSystem(second, InputContext{}, 0.0f);
+
+        const Entity firstEnemy = FirstArenaEnemy(first);
+        const Entity secondEnemy = FirstArenaEnemy(second);
+        Check(firstEnemy.IsValid() && secondEnemy.IsValid(),
+              "zero-delay ring spawn did not create an enemy");
+        const Transform firstSpawn = *first.Get<Transform>(firstEnemy);
+        const Transform secondSpawn = *second.Get<Transform>(secondEnemy);
+        CheckNear(firstSpawn.position.x, secondSpawn.position.x,
+                  "fixed seed changed ring spawn X");
+        CheckNear(firstSpawn.position.z, secondSpawn.position.z,
+                  "fixed seed changed ring spawn Z");
+        const float radius = std::sqrt(firstSpawn.position.x * firstSpawn.position.x +
+                                       firstSpawn.position.z * firstSpawn.position.z);
+        Check(std::fabs(radius - config.spawnRadius) < 0.001f,
+              "enemy did not spawn on the ring");
+
+        InputContext input;
+        input.keyDown['W'] = true;
+        input.keyDown['D'] = true;
+        const Entity player = ArenaPlayerEntity(first);
+        ArenaGameSystem(first, input, 0.5f);
+        const Transform* movedPlayer = first.Get<Transform>(player);
+        Check(movedPlayer->position.x > 2.0f && movedPlayer->position.z > 2.0f,
+              "WASD did not move the arena player on XZ");
+
+        const Transform* trackedEnemy = first.Get<Transform>(firstEnemy);
+        Check(std::fabs(trackedEnemy->position.x - firstSpawn.position.x) > 0.01f ||
+              std::fabs(trackedEnemy->position.z - firstSpawn.position.z) > 0.01f,
+              "arena enemy did not track the player");
+
+        CameraView camera;
+        Check(GetActiveCameraView(first, camera), "arena camera disappeared");
+        CheckNear(camera.position.x, movedPlayer->position.x,
+                  "arena camera did not follow player X");
+        CheckNear(camera.position.z, movedPlayer->position.z - 16.0f,
+                  "arena camera did not preserve its fixed offset");
+    }
+
+    void ArenaDamageCooldownDeathAndTimerStop()
+    {
+        ArenaConfig config;
+        config.initialEnemyCount = 0;
+        config.maxEnemies = 0;
+        World world = MakeLogicArena(config);
+        const Entity player = ArenaPlayerEntity(world);
+
+        const Entity enemy = AddLogicEnemy(world, { 0.0f, 1.0f, 0.5f }, 100.0f);
+        Health* playerHealth = world.Get<Health>(player);
+        ContactDamage* contact = world.Get<ContactDamage>(enemy);
+        contact->amount = 10.0f;
+        contact->radius = 1.0f;
+        contact->cooldownSeconds = 1.0f;
+
+        ArenaGameSystem(world, InputContext{}, 0.0f);
+        CheckNear(playerHealth->current, 90.0f,
+                  "first enemy contact did not damage player");
+        ArenaGameSystem(world, InputContext{}, 0.5f);
+        CheckNear(playerHealth->current, 90.0f,
+                  "contact damage ignored its cooldown");
+        ArenaGameSystem(world, InputContext{}, 0.5f);
+        CheckNear(playerHealth->current, 80.0f,
+                  "contact damage did not repeat after cooldown");
+
+        contact->amount = 100.0f;
+        contact->remainingCooldown = 0.0f;
+        ArenaGameSystem(world, InputContext{}, 0.25f);
+        const ArenaStatus dead = GetArenaStatus(world);
+        Check(!dead.playerAlive && dead.health == 0.0f,
+              "lethal contact did not stop the player");
+        ArenaGameSystem(world, InputContext{}, 1.0f);
+        CheckNear(GetArenaStatus(world).survivalSeconds, dead.survivalSeconds,
+                  "survival timer advanced after player death");
+    }
+
+    void ArenaNearestAttackDeathAndXpPickup()
+    {
+        ArenaConfig config;
+        config.initialEnemyCount = 0;
+        config.maxEnemies = 0;
+        World world = MakeLogicArena(config);
+        const Entity player = ArenaPlayerEntity(world);
+        AttackCooldown* attack = world.Get<AttackCooldown>(player);
+        attack->damage = 50.0f;
+        attack->range = 6.0f;
+        attack->intervalSeconds = 1.0f;
+
+        const Entity nearest = AddLogicEnemy(world, { 2.0f, 1.0f, 0.0f }, 40.0f);
+        const Entity farther = AddLogicEnemy(world, { 4.0f, 1.0f, 0.0f }, 40.0f);
+        Entity arenaEntity;
+        world.ForEach<ArenaState>([&](Entity entity, ArenaState& state) {
+            arenaEntity = entity;
+            state.currentEnemyCount = 2;
+            state.totalEnemyCount = 2;
+        });
+
+        ArenaGameSystem(world, InputContext{}, 0.0f);
+        Check(!world.IsAlive(nearest), "automatic attack did not kill nearest enemy");
+        Check(world.IsAlive(farther), "automatic attack hit a farther enemy");
+        CheckNear(world.Get<Health>(farther)->current, 40.0f,
+                  "farther enemy took nearest-target damage");
+
+        Entity pickup;
+        world.ForEach<XpPickup>([&](Entity entity, XpPickup&) { pickup = entity; });
+        Check(pickup.IsValid(), "enemy death did not create an XP pickup");
+        world.Get<Transform>(player)->position = world.Get<Transform>(pickup)->position;
+        ArenaGameSystem(world, InputContext{}, 0.0f);
+        Check(!world.IsAlive(pickup), "collected XP pickup was not removed");
+        Check(world.Get<ArenaState>(arenaEntity)->experience == 1,
+              "XP pickup did not increment arena experience");
+    }
+
     void PlayStopRestoresExactEditWorld(TestContext& context)
     {
         World world = MakeCompleteWorld(context.resources, "Rollback");
@@ -572,6 +745,55 @@ namespace
               "StopPlay overwrote file status");
         Check(world.Get<MeshRenderer>(FirstEntity(world))->mesh.index == originalMesh.index,
               "StopPlay did not resolve the mesh through the shared resource cache");
+    }
+
+    void ArenaScenePlayStopRestoresSnapshot(TestContext& context)
+    {
+        World world;
+        std::string error;
+        CheckSucceeded(LoadScene(context.paths.SceneDir() / L"Arena.scene",
+                                 context.resources, world, error), error);
+        const std::string before = Snapshot(world, context.resources);
+
+        EditorSession editor;
+        PlaySession play;
+        Check(editor.EnterPlay(world, context.resources, play),
+              "Arena.scene could not enter Play");
+        Check(InitializeArenaIfPresent(world, context.resources),
+              "Arena.scene marker did not initialize runtime components");
+
+        FrameContext frame;
+        frame.deltaSeconds = 1.0f / 60.0f;
+        frame.input.keyDown['W'] = true;
+        play.BeginFrame(frame);
+        RunPlaySystems(world, play, &context.resources);
+        play.EndFrame();
+        Check(GetArenaStatus(world).active, "arena runtime did not run in Play");
+
+        Check(editor.StopPlay(world, context.resources, play),
+              "Arena.scene could not Stop Play");
+        Check(Snapshot(world, context.resources) == before,
+              "arena runtime components broke Editor snapshot restoration");
+        Check(!GetArenaStatus(world).active,
+              "arena runtime component survived Editor Stop");
+        Check(context.resources.ResolveMesh(L"#capsule").IsValid(),
+              "#capsule procedural recipe did not resolve");
+
+        World crowded;
+        CheckSucceeded(LoadScene(context.paths.SceneDir() / L"Arena.scene",
+                                 context.resources, crowded, error), error);
+        ArenaConfig crowdedConfig;
+        crowdedConfig.initialEnemyCount = 100;
+        crowdedConfig.maxEnemies = 100;
+        Check(InitializeArenaIfPresent(crowded, context.resources, crowdedConfig),
+              "100-enemy arena did not initialize");
+        Check(GetArenaStatus(crowded).currentEnemyCount == 100,
+              "100-enemy arena did not reach its configured population");
+        std::vector<DrawItem> items;
+        LightingData lighting;
+        BuildRenderData(crowded, context.resources, items, lighting);
+        Check(items.size() == 104,
+              "100-enemy arena did not flatten to the expected draw items");
     }
 
     void DemoSceneAndSpinInteraction(TestContext& context)
@@ -946,6 +1168,12 @@ namespace
             { "functional/input-host-boundaries", InputContextsRespectHostBoundaries },
             { "functional/editor-camera-isolation", EditorCameraDoesNotMutateSceneCamera },
             { "functional/play-system-context", PlaySystemsUseSessionTimeAndInput },
+            { "functional/arena-movement-spawn-tracking",
+              ArenaMovementSpawnAndTrackingAreDeterministic },
+            { "functional/arena-damage-death-timer",
+              ArenaDamageCooldownDeathAndTimerStop },
+            { "functional/arena-nearest-attack-xp",
+              ArenaNearestAttackDeathAndXpPickup },
             { "functional/player-startup-arguments", PlayerStartupArguments },
         };
 
@@ -990,6 +1218,7 @@ int main()
         TestContext context;
         const TestCase tests[] = {
             { "functional/play-stop-rollback", PlayStopRestoresExactEditWorld },
+            { "functional/arena-play-stop-rollback", ArenaScenePlayStopRestoresSnapshot },
             { "functional/demo-scene-interaction", DemoSceneAndSpinInteraction },
             { "functional/play-capture-failure", FailedPlayCaptureIsAtomic },
             { "regression/repeated-play-stop", RepeatedPlayStopIsStable },

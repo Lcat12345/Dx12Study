@@ -31,6 +31,8 @@ private:
     void RunEditorOnly(const FrameContext& frame);
     void RunPlayOnly(const FrameContext& frame);
     void SetRunMode(RunMode mode);
+    uint64_t MeasurementEnemyCount() override;
+    std::wstring MeasurementTitleStatus() override;
 
     World         m_world;
     EditorSession m_editor;

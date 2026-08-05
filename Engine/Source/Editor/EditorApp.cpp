@@ -1,5 +1,6 @@
 #include "Editor/EditorApp.h"
 
+#include "Game/Arena.h"
 #include "Game/BuildWorld.h"
 #include "Editor/DebugUI.h"
 #include "Game/Systems.h"
@@ -163,6 +164,7 @@ void EditorApp::SetRunMode(RunMode mode)
     {
         if (m_editor.EnterPlay(m_world, GetRenderer().Resources(), m_play))
         {
+            InitializeArenaIfPresent(m_world, GetRenderer().Resources());
             GetActiveCameraView(m_world, m_camera);
         }
     }
@@ -170,6 +172,16 @@ void EditorApp::SetRunMode(RunMode mode)
     {
         m_camera = GetEditorCameraView(m_editorCamera);
     }
+}
+
+uint64_t EditorApp::MeasurementEnemyCount()
+{
+    return GetArenaStatus(m_world).currentEnemyCount;
+}
+
+std::wstring EditorApp::MeasurementTitleStatus()
+{
+    return ArenaTitleStatus(m_world);
 }
 
 void EditorApp::OnRender()

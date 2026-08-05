@@ -1,0 +1,27 @@
+scene 5
+entity
+  name "Arena Runtime"
+entity
+  name "Arena Floor"
+  transform 0 0 0 0 0 0 1 1 1
+  meshrenderer mesh "#floor" texture "Floor.png" albedo 0.42 0.46 0.52 1 specular 0.08 0.08 0.08 shininess 8 normal "TestNormal.png" strength 0.25 blend opaque
+entity
+  name "North Marker"
+  transform 0 0.5 17 0 0 0 1 1 1
+  meshrenderer mesh "#cube" texture "" albedo 0.18 0.42 0.85 1 specular 0.15 0.15 0.15 shininess 16 normal "" strength 1 blend opaque
+entity
+  name "East Marker"
+  transform 17 0.5 0 0 0 0 1 1 1
+  meshrenderer mesh "#cube" texture "" albedo 0.85 0.34 0.16 1 specular 0.15 0.15 0.15 shininess 16 normal "" strength 1 blend opaque
+entity
+  name "Arena Camera"
+  transform 0 19 -16 -0.72 0 0 1 1 1
+  camera 0.785398185 0.1 200
+  activecamera
+entity
+  name "Arena Sun"
+  transform 0 0 0 -0.9 -0.55 0 1 1 1
+  light directional 0.92 0.9 0.82 0
+entity
+  name "Arena Environment"
+  environment 0.16 0.18 0.23 skybox "Test" shadow 1 0.001 0.8

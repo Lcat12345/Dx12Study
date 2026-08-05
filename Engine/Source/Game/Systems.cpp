@@ -1,5 +1,6 @@
 #include "Game/Systems.h"
 
+#include "Game/Arena.h"
 #include "Game/Components.h"
 #include "Game/Picking.h"
 
@@ -241,10 +242,17 @@ void RunPlaySystems(World& world, const PlaySession& session,
     {
         return;
     }
-    GameCameraSystem(world, session.Input(), session.DeltaSeconds());
-    if (resources)
+    if (GetArenaStatus(world).active)
     {
-        InteractSpinSystem(world, *resources, session.Input());
+        ArenaGameSystem(world, session.Input(), session.DeltaSeconds());
+    }
+    else
+    {
+        GameCameraSystem(world, session.Input(), session.DeltaSeconds());
+        if (resources)
+        {
+            InteractSpinSystem(world, *resources, session.Input());
+        }
     }
     SpinSystem(world, session.DeltaSeconds());
     LightOrbitSystem(world, session.ElapsedSeconds());

@@ -8,6 +8,7 @@
 #include "Graphics/Renderer.h"
 
 #include <memory>
+#include <string>
 
 // A game derives from Engine and fills in the three hooks. Engine never
 // learns what a Scene or a Camera is - that stays on the game side, which
@@ -45,13 +46,14 @@ protected:
 
     // Arena gameplay can override this once enemies exist; keeping the host
     // count separate preserves Engine's independence from game components.
-    virtual uint64_t MeasurementEnemyCount() const { return 0; }
+    virtual uint64_t MeasurementEnemyCount() { return 0; }
+    virtual std::wstring MeasurementTitleStatus() { return {}; }
 
 private:
     void UpdateTitleFps(float dt);
     void RecordFrameSample(float dt);
 
-    const wchar_t* m_title = nullptr;
+    std::wstring m_title;
 
     Window m_window;
     // Held by pointer so construction can be wrapped in try/catch and

@@ -187,6 +187,7 @@ MeshHandle ResourceManager::ResolveMesh(const std::wstring& name)
     if (key == L"#pyramid") { return AddMesh(key, MakePyramidMeshData()); }
     if (key == L"#floor")   { return AddMesh(key, MakeFloorMeshData(40.0f, 20.0f)); }
     if (key == L"#sphere")  { return AddMesh(key, MakeSphereMeshData(1.0f, 32, 16)); }
+    if (key == L"#capsule") { return AddMesh(key, MakeCapsuleMeshData(0.5f, 0.5f, 24, 8)); }
     if (key == L"#torus")   { return AddMesh(key, MakeTorusMeshData(1.0f, 0.4f, 48, 24)); }
 
     return MeshHandle{}; // unknown recipe - the caller reports it

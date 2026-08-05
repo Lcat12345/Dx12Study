@@ -5,6 +5,7 @@
 #include "Graphics/ResourceManager.h"
 
 #include <DirectXMath.h>
+#include <cstdint>
 
 // A human-readable label. Scene data, not editor state - "what this thing is
 // called" is saved with the scene, unlike "what is selected".
@@ -67,6 +68,71 @@ struct Spin
 // no data, just a type. This is how ECS expresses "the active one".
 struct ActiveCamera
 {
+};
+
+// Runtime-only arena components. Scene serialization deliberately ignores
+// these: entering Play creates them and Editor Stop restores the pre-Play
+// Scene snapshot.
+struct ArenaPlayer
+{
+};
+
+struct ArenaEnemy
+{
+    float moveSpeed = 2.4f;
+};
+
+struct Health
+{
+    float current = 100.0f;
+    float maximum = 100.0f;
+};
+
+struct ContactDamage
+{
+    float amount             = 8.0f;
+    float radius             = 0.9f;
+    float cooldownSeconds    = 0.75f;
+    float remainingCooldown  = 0.0f;
+};
+
+struct AttackCooldown
+{
+    float damage            = 25.0f;
+    float range             = 5.5f;
+    float intervalSeconds   = 0.35f;
+    float remainingCooldown = 0.0f;
+};
+
+struct XpPickup
+{
+    uint32_t amount           = 1;
+    float    collectRadius    = 1.25f;
+    float    remainingSeconds = 20.0f;
+};
+
+struct ArenaState
+{
+    uint32_t randomState       = 1;
+    uint32_t currentEnemyCount = 0;
+    uint32_t totalEnemyCount   = 0;
+    uint32_t experience        = 0;
+    uint32_t maxEnemies        = 100;
+
+    float survivalSeconds      = 0.0f;
+    float spawnCooldown        = 0.0f;
+    float spawnIntervalStart   = 0.85f;
+    float spawnIntervalEnd     = 0.18f;
+    float spawnCurveSeconds    = 300.0f;
+    float spawnRadius          = 24.0f;
+    float summaryCooldown      = 1.0f;
+
+    bool playerAlive = true;
+
+    MeshHandle    enemyMesh;
+    MeshHandle    pickupMesh;
+    TextureHandle colorTexture;
+    TextureHandle normalTexture;
 };
 
 // Ambient light is a property of the scene rather than of any one light, so

@@ -22,6 +22,8 @@ protected:
 
 private:
     FrameContext CaptureHostFrame(float dt);
+    uint64_t MeasurementEnemyCount() override;
+    std::wstring MeasurementTitleStatus() override;
 
     World                 m_world;
     PlaySession           m_play;

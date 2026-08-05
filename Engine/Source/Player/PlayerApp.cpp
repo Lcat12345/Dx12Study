@@ -1,5 +1,6 @@
 #include "Player/PlayerApp.h"
 
+#include "Game/Arena.h"
 #include "Game/Scene.h"
 #include "Game/Systems.h"
 #include "Core/TextEncoding.h"
@@ -33,7 +34,18 @@ void PlayerApp::OnInit()
         throw std::runtime_error("Player Scene has no ActiveCamera: " +
                                  ToUtf8(m_scenePath.wstring()));
     }
+    InitializeArenaIfPresent(m_world, GetRenderer().Resources());
     m_play.Begin();
+}
+
+uint64_t PlayerApp::MeasurementEnemyCount()
+{
+    return GetArenaStatus(m_world).currentEnemyCount;
+}
+
+std::wstring PlayerApp::MeasurementTitleStatus()
+{
+    return ArenaTitleStatus(m_world);
 }
 
 void PlayerApp::OnUpdate(float dt)
