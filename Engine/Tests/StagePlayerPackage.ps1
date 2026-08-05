@@ -10,6 +10,9 @@ param(
     [string]$AssetSourceDir,
 
     [Parameter(Mandatory = $true)]
+    [string]$ContentsFile,
+
+    [Parameter(Mandatory = $true)]
     [string]$PackageDir,
 
     [Parameter(Mandatory = $true)]
@@ -172,14 +175,14 @@ Copy-Item -LiteralPath $playerExe -Destination $packagePath
 # See PlayerPackage.contents for why - in short, a blanket copy made the
 # package depend on untracked files sitting in a developer's folder and
 # shipped 43 MB of non-redistributable art no Scene references.
-$contentsFile = Join-Path $PSScriptRoot 'PlayerPackage.contents'
-if (-not (Test-Path -LiteralPath $contentsFile -PathType Leaf))
+$contentsPath = Get-FullPath $ContentsFile
+if (-not (Test-Path -LiteralPath $contentsPath -PathType Leaf))
 {
-    throw "Player package content list is missing: $contentsFile"
+    throw "Player package content list is missing: $contentsPath"
 }
 
 $stagedAssets = New-Object System.Collections.Generic.List[string]
-foreach ($line in Get-Content -LiteralPath $contentsFile)
+foreach ($line in Get-Content -LiteralPath $contentsPath)
 {
     $entry = $line.Trim()
     if ($entry.Length -eq 0 -or $entry.StartsWith('#'))
@@ -263,11 +266,33 @@ if ($LASTEXITCODE -ne 0)
 {
     throw 'Could not list tracked assets; the package cannot claim a commit'
 }
+$repoAssetSource = Get-FullPath (Join-Path $repoRootPath 'Engine\Assets')
+$usesRepositoryAssets = $assetSource.Equals(
+    $repoAssetSource, [StringComparison]::OrdinalIgnoreCase)
 $untrackedStaged = @($stagedAssets | Where-Object { $trackedAssets -notcontains $_ })
-if ($untrackedStaged.Count -gt 0)
+if ($usesRepositoryAssets -and $untrackedStaged.Count -gt 0)
 {
     throw ("Player package would ship files git does not track, so the commit " +
            "in the manifest would not reproduce it: " + ($untrackedStaged -join ', '))
+}
+
+# An editor build normally edits the deployable Assets copy beside Editor.exe.
+# If it differs from the checked-in source, the package is valid but the
+# manifest must not imply that the recorded commit reproduces those bytes.
+if (-not $usesRepositoryAssets)
+{
+    foreach ($relative in $stagedAssets)
+    {
+        $runtimeFile = Join-Path $assetSource ($relative.Replace('/', '\'))
+        $sourceFile = Join-Path $repoAssetSource ($relative.Replace('/', '\'))
+        if (-not (Test-Path -LiteralPath $sourceFile -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $runtimeFile -Algorithm SHA256).Hash -ne
+            (Get-FileHash -LiteralPath $sourceFile -Algorithm SHA256).Hash)
+        {
+            $sourceState = 'dirty'
+            break
+        }
+    }
 }
 
 $manifestName = 'package-manifest.txt'
@@ -294,7 +319,7 @@ $manifest = @(
     "runtime_dlls=$dllPolicy"
     # Says HOW the asset set was chosen, so "commit=" above is read as the
     # reproducibility claim it now actually is.
-    "asset_policy=declared in Engine/Tests/PlayerPackage.contents; all staged assets are tracked"
+    "asset_policy=declared content list; editor-selected Scene dependency closure may be dirty"
     ''
     '[files]'
 ) + $fileList

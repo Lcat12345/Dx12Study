@@ -1,4 +1,6 @@
-# What ships in the Player package, relative to Engine/Assets.
+# Baseline content that ships in every Player package, relative to Assets/.
+# Build > Package Project starts with this list and adds the selected startup
+# Scene plus its texture, model/material and skybox dependency closure.
 #
 # DECLARED, not discovered. The staging step used to copy Assets\ wholesale,
 # which made the package a function of whatever happened to sit in a

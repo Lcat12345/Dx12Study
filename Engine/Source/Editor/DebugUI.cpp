@@ -4,6 +4,7 @@
 #include "Game/BuildWorld.h"
 #include "Game/Components.h"
 #include "Editor/EditorSession.h"
+#include "Editor/PackageBuilder.h"
 #include "Game/Picking.h"
 #include "Game/Scene.h"
 #include "Core/Common.h"
@@ -715,7 +716,7 @@ namespace
 
     // Saving is the one action that does NOT go through the command queue:
     // it only reads the world, so there is nothing to defer.
-    void SaveTo(World& world, const ResourceManager& resources,
+    bool SaveTo(World& world, const ResourceManager& resources,
                 const std::filesystem::path& path, EditorSession& session)
     {
         std::string error;
@@ -723,15 +724,18 @@ namespace
         {
             session.scenePath   = path;
             session.sceneStatus = "saved " + ToUtf8(path.filename().wstring());
+            return true;
         }
         else
         {
             session.sceneStatus = "save failed: " + error;
+            return false;
         }
     }
 
     void DrawMainMenuBar(World& world, ResourceManager& resources,
-                         EditorSession& session, DebugUIContext& ui)
+                         EditorSession& session, PackageBuilder& packages,
+                         DebugUIContext& ui)
     {
         if (!ImGui::BeginMainMenuBar())
         {
@@ -802,6 +806,27 @@ namespace
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("Build"))
+        {
+            const bool canOpen = ui.runMode == RunMode::Edit &&
+                                 packages.IsAvailable() && !packages.IsRunning();
+            if (ImGui::MenuItem("Package Project...", nullptr, false, canOpen))
+            {
+                session.openPackageProject = true;
+            }
+            if (packages.IsRunning())
+            {
+                ImGui::Separator();
+                ImGui::TextDisabled("A Release Player package is building");
+            }
+            else if (!packages.IsAvailable())
+            {
+                ImGui::Separator();
+                ImGui::TextDisabled("Open a development build to package");
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("View"))
         {
             // The only way back from a layout that has been dragged into an
@@ -842,8 +867,198 @@ namespace
             ImGui::Separator();
             ImGui::TextDisabled("%s", session.runStatus.c_str());
         }
+        if (!packages.Status().empty())
+        {
+            std::string shortStatus = packages.Status();
+            const std::size_t lineEnd = shortStatus.find('\n');
+            if (lineEnd != std::string::npos)
+            {
+                shortStatus.erase(lineEnd);
+            }
+            constexpr std::size_t kMaxStatusCharacters = 120;
+            if (shortStatus.size() > kMaxStatusCharacters)
+            {
+                shortStatus.resize(kMaxStatusCharacters - 3);
+                shortStatus += "...";
+            }
+            ImGui::Separator();
+            ImGui::TextDisabled("%s", shortStatus.c_str());
+        }
 
         ImGui::EndMainMenuBar();
+    }
+
+    void CopyToBuffer(const std::string& text, char* buffer, std::size_t size)
+    {
+        if (size == 0)
+        {
+            return;
+        }
+        std::snprintf(buffer, size, "%s", text.c_str());
+    }
+
+    bool SamePath(const std::filesystem::path& a,
+                  const std::filesystem::path& b)
+    {
+        if (a.empty() || b.empty())
+        {
+            return false;
+        }
+        const std::wstring left =
+            std::filesystem::absolute(a).lexically_normal().wstring();
+        const std::wstring right =
+            std::filesystem::absolute(b).lexically_normal().wstring();
+        return _wcsicmp(left.c_str(), right.c_str()) == 0;
+    }
+
+    std::vector<std::filesystem::path> FindScenes(
+        const ResourceManager& resources)
+    {
+        std::vector<std::filesystem::path> scenes;
+        std::error_code error;
+        std::filesystem::directory_iterator directory(
+            resources.Paths().SceneDir(), error);
+        if (error)
+        {
+            return scenes;
+        }
+        for (const auto& item : directory)
+        {
+            std::error_code itemError;
+            if (item.is_regular_file(itemError) && !itemError &&
+                item.path().extension() == L".scene")
+            {
+                scenes.push_back(item.path());
+            }
+        }
+        std::sort(scenes.begin(), scenes.end());
+        return scenes;
+    }
+
+    void DrawPackageProjectPopup(World& world,
+                                 const ResourceManager& resources,
+                                 EditorSession& session,
+                                 PackageBuilder& packages,
+                                 RunMode runMode)
+    {
+        if (session.openPackageProject)
+        {
+            const std::vector<std::filesystem::path> scenes = FindScenes(resources);
+            if (session.packageScenePath.empty())
+            {
+                if (!session.scenePath.empty() &&
+                    std::filesystem::is_regular_file(session.scenePath))
+                {
+                    session.packageScenePath = session.scenePath;
+                }
+                else if (!scenes.empty())
+                {
+                    const auto demo = std::find_if(
+                        scenes.begin(), scenes.end(), [](const auto& path) {
+                            return _wcsicmp(path.filename().c_str(), L"Demo.scene") == 0;
+                        });
+                    session.packageScenePath =
+                        demo == scenes.end() ? scenes.front() : *demo;
+                }
+            }
+            if (session.packageOutputDir[0] == '\0')
+            {
+                CopyToBuffer(ToUtf8(packages.DefaultPackageDir().wstring()),
+                             session.packageOutputDir.data(),
+                             session.packageOutputDir.size());
+            }
+            ImGui::OpenPopup("Package Project");
+            session.openPackageProject = false;
+        }
+
+        const ImVec2 centre = ImGui::GetMainViewport()->GetCenter();
+        ImGui::SetNextWindowPos(centre, ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+        if (!ImGui::BeginPopupModal("Package Project", nullptr,
+                                    ImGuiWindowFlags_AlwaysAutoResize))
+        {
+            return;
+        }
+
+        const std::vector<std::filesystem::path> scenes = FindScenes(resources);
+        ImGui::TextDisabled("Builds Player.exe and deployable content (Release x64).");
+        ImGui::SeparatorText("Startup Scene");
+        const std::string selectedLabel = session.packageScenePath.empty()
+            ? std::string("(select a Scene)")
+            : ToUtf8(session.packageScenePath.filename().wstring());
+        ImGui::SetNextItemWidth(420.0f);
+        if (ImGui::BeginCombo("##package-scene", selectedLabel.c_str()))
+        {
+            for (const std::filesystem::path& scene : scenes)
+            {
+                const bool selected = SamePath(scene, session.packageScenePath);
+                const std::string label = ToUtf8(scene.filename().wstring());
+                if (ImGui::Selectable(label.c_str(), selected))
+                {
+                    session.packageScenePath = scene;
+                }
+                if (selected)
+                {
+                    ImGui::SetItemDefaultFocus();
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (scenes.empty())
+        {
+            ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.4f, 1.0f),
+                               "No .scene files were found under Assets/Scenes.");
+        }
+
+        const bool selectedCurrent =
+            SamePath(session.packageScenePath, session.scenePath);
+        ImGui::BeginDisabled(!selectedCurrent);
+        ImGui::Checkbox("Save the current Scene before packaging",
+                        &session.saveSceneBeforePackage);
+        ImGui::EndDisabled();
+        if (!selectedCurrent)
+        {
+            ImGui::TextDisabled("The selected Scene will be packaged from disk.");
+        }
+
+        ImGui::SeparatorText("Output");
+        ImGui::SetNextItemWidth(520.0f);
+        ImGui::InputText("##package-output", session.packageOutputDir.data(),
+                         session.packageOutputDir.size());
+        ImGui::TextDisabled("For safety, the folder must be inside %s",
+                            ToUtf8((packages.EngineDir().parent_path() / L"Output").wstring())
+                                .c_str());
+
+        if (!packages.Status().empty())
+        {
+            ImGui::Separator();
+            ImGui::TextWrapped("%s", packages.Status().c_str());
+        }
+
+        const bool canBuild = runMode == RunMode::Edit && !packages.IsRunning() &&
+                              !session.packageScenePath.empty() &&
+                              session.packageOutputDir[0] != '\0';
+        ImGui::BeginDisabled(!canBuild);
+        if (ImGui::Button("Build Package"))
+        {
+            bool saved = true;
+            if (selectedCurrent && session.saveSceneBeforePackage)
+            {
+                saved = SaveTo(world, resources, session.scenePath, session);
+            }
+            if (saved && packages.Start(
+                    session.packageScenePath,
+                    std::filesystem::path(ToWide(session.packageOutputDir.data()))))
+            {
+                ImGui::CloseCurrentPopup();
+            }
+        }
+        ImGui::EndDisabled();
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+        {
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
     }
 
     // A modal rather than a Win32 file dialog: the scenes folder is a known
@@ -1218,11 +1433,13 @@ void BuildDefaultLayout(ImGuiID dockspaceId)
 }
 
 void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
-                 EditorSession& session, DebugUIContext& ui)
+                 EditorSession& session, PackageBuilder& packages,
+                 DebugUIContext& ui)
 {
     // Before the dock space, which sizes itself around the menu bar.
-    DrawMainMenuBar(world, resources, session, ui);
+    DrawMainMenuBar(world, resources, session, packages, ui);
     DrawSaveAsPopup(world, resources, session, ui.runMode);
+    DrawPackageProjectPopup(world, resources, session, packages, ui.runMode);
 
     // A full-window dock space so the panels can be rearranged and docked.
     const ImGuiID dockspaceId =

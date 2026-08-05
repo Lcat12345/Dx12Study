@@ -57,6 +57,7 @@
     <ClCompile Include="Source\Editor\DebugUI.cpp" />
     <ClCompile Include="Source\Editor\EditorSession.cpp" />
     <ClCompile Include="Source\Editor\ImGuiLayer.cpp" />
+    <ClCompile Include="Source\Editor\PackageBuilder.cpp" />
     <ClCompile Include="..\ThirdParty\imgui\imgui.cpp" />
     <ClCompile Include="..\ThirdParty\imgui\imgui_draw.cpp" />
     <ClCompile Include="..\ThirdParty\imgui\imgui_tables.cpp" />
@@ -70,6 +71,7 @@
     <ClInclude Include="Source\Editor\DebugUI.h" />
     <ClInclude Include="Source\Editor\EditorSession.h" />
     <ClInclude Include="Source\Editor\ImGuiLayer.h" />
+    <ClInclude Include="Source\Editor\PackageBuilder.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="Engine.vcxproj">

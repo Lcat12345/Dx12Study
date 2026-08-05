@@ -13,6 +13,7 @@ namespace
 
 EditorApp::EditorApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
     : Engine(instance, kWindowTitle, kClientWidth, kClientHeight, runtimePaths)
+    , m_packageBuilder(runtimePaths)
 {
     Renderer& renderer = GetRenderer();
     m_overlay = std::make_unique<ImGuiLayer>(
@@ -89,6 +90,8 @@ void EditorApp::RunPlayOnly(const FrameContext& frame)
 
 void EditorApp::RunAlways(const FrameContext& frame)
 {
+    m_packageBuilder.Poll();
+
     DebugUIContext ui;
     ui.dt               = frame.deltaSeconds;
     ui.fps              = CurrentFps();
@@ -118,7 +121,8 @@ void EditorApp::RunAlways(const FrameContext& frame)
     ui.applyDefaultLayout = m_applyDefaultLayout;
     m_applyDefaultLayout  = false;
 
-    DrawDebugUI(m_world, GetRenderer().Resources(), *m_assets, m_editor, ui);
+    DrawDebugUI(m_world, GetRenderer().Resources(), *m_assets, m_editor,
+                m_packageBuilder, ui);
     m_viewportHovered = ui.viewportHovered;
 
     // Deferred to the NEXT frame on purpose: this frame's panels have already

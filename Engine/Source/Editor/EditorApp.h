@@ -8,6 +8,7 @@
 #include "Game/ExecutionContext.h"
 #include "Game/Systems.h"
 #include "Editor/ImGuiLayer.h"
+#include "Editor/PackageBuilder.h"
 #include "Graphics/RenderData.h"
 
 #include <memory>
@@ -33,6 +34,7 @@ private:
 
     World         m_world;
     EditorSession m_editor;
+    PackageBuilder m_packageBuilder;
     PlaySession   m_play;
     EditorCamera  m_editorCamera;
 

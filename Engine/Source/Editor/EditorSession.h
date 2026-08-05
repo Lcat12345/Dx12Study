@@ -86,6 +86,14 @@ public:
         return value;
     }();
 
+    // Build > Package Project keeps its choices across popup opens. The
+    // selected Scene is a real file in the editor's runtime Assets copy;
+    // PackageBuilder translates it into the Player's package-relative path.
+    bool                          openPackageProject = false;
+    std::filesystem::path         packageScenePath;
+    std::array<char, 512>         packageOutputDir{};
+    bool                          saveSceneBeforePackage = true;
+
     // The single boundary for state that can contain Entity handles or
     // deferred edits aimed at the old World. Scene path/status intentionally
     // survive; callers decide whether a New/Open operation changes them.

@@ -38,8 +38,13 @@
   <Import Project="BuildSettings.props" />
   <PropertyGroup>
     <PlayerPackageDir>$([MSBuild]::NormalizeDirectory('$(OutDir)..\PlayerPackage'))</PlayerPackageDir>
+    <PlayerAssetSourceDir Condition="'$(PlayerAssetSourceDir)'==''">$(MSBuildThisFileDirectory)Assets</PlayerAssetSourceDir>
+    <PlayerContentFile Condition="'$(PlayerContentFile)'==''">$(MSBuildThisFileDirectory)Tests\PlayerPackage.contents</PlayerContentFile>
   </PropertyGroup>
   <ItemDefinitionGroup>
+    <ClCompile>
+      <PreprocessorDefinitions>PLAYER_DEFAULT_SCENE=L&quot;$(DefaultPlayerScene)&quot;;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -72,7 +77,7 @@
   <Target Name="StagePlayerPackage"
           Condition="'$(Configuration)'=='Release' and '$(DesignTimeBuild)'!='true'"
           AfterTargets="CopyRuntimeContent">
-    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Tests\StagePlayerPackage.ps1&quot; -Configuration &quot;$(Configuration)&quot; -PlayerOutputDir &quot;$(OutDir).&quot; -AssetSourceDir &quot;$(MSBuildThisFileDirectory)Assets&quot; -PackageDir &quot;$(PlayerPackageDir).&quot; -DefaultScene &quot;$(DefaultPlayerScene)&quot; -RepoRoot &quot;$(MSBuildThisFileDirectory)..&quot;" />
+    <Exec Command="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;$(MSBuildThisFileDirectory)Tests\StagePlayerPackage.ps1&quot; -Configuration &quot;$(Configuration)&quot; -PlayerOutputDir &quot;$(OutDir).&quot; -AssetSourceDir &quot;$(PlayerAssetSourceDir)&quot; -ContentsFile &quot;$(PlayerContentFile)&quot; -PackageDir &quot;$(PlayerPackageDir).&quot; -DefaultScene &quot;$(DefaultPlayerScene)&quot; -RepoRoot &quot;$(MSBuildThisFileDirectory)..&quot;" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

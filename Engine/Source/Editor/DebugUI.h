@@ -12,6 +12,7 @@
 
 class AssetBrowser;
 class EditorSession;
+class PackageBuilder;
 class ResourceManager;
 
 // What the panels read from the engine, and what they hand back. A struct
@@ -87,4 +88,5 @@ struct DebugUIContext
 // 'world' may be REPLACED wholesale when a scene is loaded, which is why it
 // is a mutable reference rather than something this file only reads.
 void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
-                 EditorSession& session, DebugUIContext& ui);
+                 EditorSession& session, PackageBuilder& packages,
+                 DebugUIContext& ui);
