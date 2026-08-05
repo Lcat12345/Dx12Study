@@ -1,9 +1,9 @@
 # Dx12Engine 사용설명서
 
 이 문서는 `Dx12Engine.slnx`를 기준으로 엔진을 빌드하고, Editor에서 Scene을
-제작하며, Player로 실행하고 배포하는 방법을 설명한다. 현재 기준은 `v1.3`
-(`Phase 12.7`) 완료 상태다. 이 문서는 현재 구현된 기능만 다루며, `v1.4` 이후의
-계획은 [개발 로드맵](ROADMAP.md)을 따른다.
+제작하며, Player로 실행하고 배포하는 방법을 설명한다. 현재 기준은 `v1.4`
+(`M1`) 완료 상태다. 이 문서는 현재 구현된 기능만 다루며, `v1.5` 이후의 계획은
+[개발 로드맵](ROADMAP.md)을 따른다.
 
 ## 목차
 
@@ -46,9 +46,9 @@ ImGui는 Player 바이너리에 링크되지 않는다.
 
 ## 현재 범위와 로드맵
 
-`v1.3`은 ECS 런타임, 렌더러, Editor, 독립 실행 Player와 재현 가능한 패키징까지
-완료한 기준선이다. 새 로드맵은 이 기반으로 **탑다운 3D 뱀파이어 서바이벌**을
-만들면서 게임이 실제로 요구하는 엔진 기능을 추가한다.
+`v1.4`는 ECS 런타임, Editor, 독립 실행 Player와 재현 가능한 패키징 위에 절차 메시
+기반 생존 게임 루프와 적 1000마리 지원을 더한 현재 기준선이다. 로드맵은 이 기반으로
+**탑다운 3D 뱀파이어 서바이벌**을 만들면서 게임이 실제로 요구하는 엔진 기능을 추가한다.
 
 | 마일스톤 | 계획된 결과물 | 태그 |
 |---|---|---|
@@ -59,13 +59,14 @@ ImGui는 Player 바이너리에 링크되지 않는다.
 | M5 — 에디터 | 기즈모, 언두/리두, 프리팹과 비동기 에셋 로드 | `v1.8` |
 | M6 — 규모와 배포 | 멀티스레딩, bindless와 최종 패키지 | `v2.0` |
 
-위 표의 기능은 아직 현재 버전의 사용 가능 기능이 아니다. 특히 현재는 OBJ·PNG만
+M1은 현재 버전에 들어 있고 M2 이후 기능은 아직 사용할 수 없다. 현재는 OBJ·PNG만
 지원하고, Transform은 Euler 회전을 사용하며, 물리·스켈레탈 애니메이션·파티클·
 런타임 HUD는 구현되지 않았다. 셰이더도 아직 FXC로 컴파일한다.
 
-M1에서 다룰 현재 렌더링 상한은 한 프레임의 DrawItem 256개
-(`kMaxObjects = 256`)와 공유 shader-visible SRV heap 64개다. 인스턴싱과 프러스텀
-컬링도 아직 없다. 상세한 착수 조건, 검증 방법과 외부 의존성 선택은
+M1이 다룬 렌더링 상한은 모두 제거됐다. 프레임당 DrawItem 수와 shader-visible SRV
+heap은 각각 256칸과 64칸에서 **시작**할 뿐 고정 상한이 아니며, 필요할 때 GPU가
+쉬는 프레임 경계에서 커진다. opaque 인스턴싱과 main/shadow 프러스텀 컬링도 M1에서
+들어왔다. 상세한 착수 조건, 검증 방법과 외부 의존성 선택은
 [개발 로드맵](ROADMAP.md)에 기록한다.
 
 ## 요구 환경
@@ -338,12 +339,14 @@ Play 시간은 진입할 때마다 0에서 시작한다.
 .\Player.exe
 ```
 
-기본 Scene은 빌드 설정의 `Assets/Scenes/Demo.scene`이다.
+기본 Scene은 빌드 설정(`DefaultPlayerScene`)의 `Assets/Scenes/Arena.scene`이다.
+M1 전까지는 `Demo.scene`이었다. Demo는 패키지에 그대로 들어 있으므로 아래처럼
+지정해서 실행하면 된다.
 
 ### Scene 지정
 
 ```powershell
-.\Player.exe --scene Assets\Scenes\ShadowA.scene
+.\Player.exe --scene Assets\Scenes\Demo.scene
 ```
 
 상대 경로는 working directory가 아니라 `Player.exe`가 있는 runtime root를 기준으로
@@ -354,15 +357,50 @@ Play 시간은 진입할 때마다 0에서 시작한다.
 
 ### Player 입력
 
-| 입력 | 동작 |
-|---|---|
-| 마우스 오른쪽 버튼 + 이동 | ActiveCamera 회전 |
-| `W`, `A`, `S`, `D` | 이동 |
-| `Shift` | 빠른 이동 |
-| `E` | Spin 대상 상호작용 |
-| `M` | 1x/4x MSAA 전환 |
-| `V` | VSync 전환 |
-| `Esc` | 정상 종료 |
+Scene에 따라 두 조작계 중 하나만 돈다. Arena.scene에서는 생존 루프가 돌아
+`W`·`A`·`S`·`D`가 플레이어를 XZ 평면에서 움직이고 카메라가 고정 offset으로 따라간다.
+그 외 Scene에서는 같은 키가 ActiveCamera를 직접 움직이고 상호작용 키가 살아난다.
+
+| 입력 | 동작 | 적용 Scene |
+|---|---|---|
+| `W`, `A`, `S`, `D` | 플레이어 이동 | Arena |
+| `W`, `A`, `S`, `D` | 카메라 이동 | 그 외 |
+| 마우스 오른쪽 버튼 + 이동 | 카메라 회전 | 그 외 |
+| `Shift` | 빠른 카메라 이동 | 그 외 |
+| `E` | Spin 대상 상호작용 | 그 외 |
+| `M` | 1x/4x MSAA 전환 | 전부 |
+| `V` | VSync 전환 | 전부 |
+| `Esc` | 정상 종료 | 전부 |
+
+HP·XP·생존 시간·적 수는 M4에서 HUD가 들어오기 전까지 창 제목 표시줄에 나온다.
+
+### 적 수와 플레이어 체력 지정
+
+Arena.scene은 기본적으로 8마리로 시작해 최대 100마리까지 늘어나고 플레이어 HP는
+100이다. `--enemies`는 시작 수와 최대 수를 함께 지정해 처음부터 그만큼을 링에
+세운다(1~100000). `--player-health`는 시작·최대 HP를 지정한다(1~1000000).
+
+```powershell
+.\Player.exe --enemies 1000
+.\Player.exe --enemies 1000 --player-health 100000
+```
+
+적을 많이 세울수록 접촉 damage가 촘촘해져 기본 100 HP로는 1000마리 속에서 약 10초
+만에 죽는다. 그러면 1초 주기인 `arena_summary` 로그가 HP가 깎이는 중간 상태를 한
+번도 남기지 못하므로, 게임플레이를 관찰하려면 HP를 함께 올린다.
+
+### 측정 option
+
+M1의 임시 계측 option이며 일반 실행 경로에는 영향이 없다. `--benchmark`는
+`100`, `500`, `1000`, `2000`만 받고, warm-up 120 frame 뒤 600 frame을 측정한 다음
+결과를 TSV 한 행으로 남기고 **자동 종료한다** — 플레이용이 아니므로 적 수만 바꾸려면
+위의 `--enemies`를 쓴다(둘은 같은 값을 정하므로 함께 쓸 수 없다). `--instancing`과
+`--culling`은 각각 `on`(기본)과 `off`를 받으며 benchmark 모드와 무관하게 쓸 수 있다.
+
+```powershell
+.\Player.exe --benchmark 1000
+.\Player.exe --benchmark 2000 --instancing off --culling off
+```
 
 ## 배포 방법
 
@@ -408,13 +446,17 @@ Scene, DLL 정책, 파일 목록이 기록된다. 정식 배포 전에는 변경
 .\Output\Tests\x64\Release\EngineTests.exe
 ```
 
-현재 25개 테스트가 다음 범위를 검증한다.
+현재 37개 테스트가 다음 범위를 검증한다.
 
 - EditorSession과 World 교체 초기화
 - Edit/Play/Player 입력 및 카메라 경계
 - Play/Stop snapshot과 transactional restore
 - Scene v1~v5 호환성과 atomic save
 - Player CLI와 Demo interaction
+- Arena 이동·스폰·추적·데미지·사망·XP 결정성
+- Object CB 증가 정책, opaque 인스턴싱, main/shadow 컬링 queue 분리
+- 최적화 toggle 4조합의 draw·bind·Object CB write 수
+- SRV heap 증가와 ImGui overlay의 heap 교체 생존
 - 1x/4x presentation, resize, D3D12 Debug Layer
 - executable-relative runtime path와 compiled shader cache
 
@@ -434,8 +476,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 ```
 
 검증 스크립트는 package만 시스템 임시 폴더로 복사하고 package 밖 working
-directory에서 기본 Scene과 명시적 Scene을 실행한다. resize, E interaction,
-1x/4x MSAA 전환, runtime root, 종료 코드 0을 확인한다.
+directory에서 기본 Scene(Arena)과 명시적 Scene(Demo, ShadowA)을 실행한다. resize,
+E interaction, 1x/4x MSAA 전환, runtime root, 종료 코드 0을 확인한다.
 
 ## 문제 해결
 

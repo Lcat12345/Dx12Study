@@ -25,17 +25,23 @@
 # recorded in the manifest is genuinely enough to rebuild this package.
 
 # --- Scenes the package can start with ---
-# Demo.scene is the default; ShadowA.scene is what VerifyPlayerPackage.ps1
-# passes through --scene, so the explicit-Scene path is exercised too.
+# Arena.scene is the default since M1 - the survival loop is what a shipped
+# Player should open with. ShadowA.scene is what VerifyPlayerPackage.ps1
+# passes through --scene, so the explicit-Scene path is exercised too, and
+# Demo.scene stays because it is the one Scene that covers transparency,
+# normal mapping, the skybox and interaction in a single load.
+Scenes/Arena.scene
 Scenes/Demo.scene
 Scenes/ShadowA.scene
 
-# --- textures the two Scenes name ---
+# --- textures the shipped Scenes name ---
+# Arena.scene adds no texture of its own: its floor and markers reuse
+# Floor.png and TestNormal.png, and its enemies are procedural.
 Crate.png
 Floor.png
 TestNormal.png
 
-# --- the skybox Demo.scene names ---
+# --- the skybox Demo.scene and Arena.scene both name ---
 # A cube map is six files under one logical name; all six or none.
 Skyboxes/Test/px.png
 Skyboxes/Test/nx.png

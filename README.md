@@ -50,7 +50,7 @@ Release 빌드는 `PlayerPackage/`를 자동으로 만든다. 이 폴더를 통�
 다른 PC에서도 그대로 실행된다.
 
 ```powershell
-.\Player.exe                                  # 기본 Scene
+.\Player.exe                                  # 기본 Scene (Arena)
 .\Player.exe --scene Assets\Scenes\Demo.scene # Scene 지정
 ```
 

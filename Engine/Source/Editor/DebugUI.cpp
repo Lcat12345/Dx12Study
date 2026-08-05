@@ -959,12 +959,15 @@ namespace
                 }
                 else if (!scenes.empty())
                 {
-                    const auto demo = std::find_if(
+                    // Matches the build's DefaultPlayerScene, so a package
+                    // built without choosing anything starts where a plain
+                    // Player.exe starts.
+                    const auto arena = std::find_if(
                         scenes.begin(), scenes.end(), [](const auto& path) {
-                            return _wcsicmp(path.filename().c_str(), L"Demo.scene") == 0;
+                            return _wcsicmp(path.filename().c_str(), L"Arena.scene") == 0;
                         });
                     session.packageScenePath =
-                        demo == scenes.end() ? scenes.front() : *demo;
+                        arena == scenes.end() ? scenes.front() : *arena;
                 }
             }
             if (session.packageOutputDir[0] == '\0')

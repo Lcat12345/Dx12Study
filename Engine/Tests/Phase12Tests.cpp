@@ -328,12 +328,20 @@ namespace
         PlayerStartup startup;
         std::wstring error;
 
+        // No arguments at all is the shipping path, and since M1 it lands on
+        // the survival loop rather than the rendering demo. Everything the
+        // benchmark options add has to leave this line alone: the checks
+        // below re-assert it after the whole option set has been parsed.
         const wchar_t* defaults[] = { L"Player.exe" };
         Check(ParsePlayerStartup(1, defaults, paths, startup, error),
               "default Player arguments failed");
         Check(startup.scenePath ==
-                  (paths.root / L"Assets/Scenes/Demo.scene").lexically_normal(),
+                  (paths.root / L"Assets/Scenes/Arena.scene").lexically_normal(),
               "default Player Scene was not rooted beside the executable");
+        Check(!startup.benchmark.enabled && startup.benchmark.outputPath.empty(),
+              "a Player started with no arguments entered benchmark mode");
+        Check(startup.frustumCulling && startup.instancing,
+              "a Player started with no arguments lost an optimization");
 
         const wchar_t* relative[] = {
             L"Player.exe", L"--scene", L"Assets/Scenes/ShadowA.scene"
@@ -406,6 +414,105 @@ namespace
                   error.find(L"on or off") != std::wstring::npos,
               "an unsupported --culling value lacked a clear error");
 
+        // Instancing is the second axis of the same matrix, and the two are
+        // independent: "culling only" and "instancing only" both have to be
+        // expressible, which means neither switch may imply the other.
+        const wchar_t* instancingOff[] = {
+            L"Player.exe", L"--benchmark", L"2000", L"--instancing", L"off"
+        };
+        Check(ParsePlayerStartup(5, instancingOff, paths, startup, error) &&
+                  !startup.instancing && startup.frustumCulling,
+              "--instancing off was not applied independently of culling");
+        const wchar_t* baselineRow[] = {
+            L"Player.exe", L"--culling", L"off", L"--instancing", L"off"
+        };
+        Check(ParsePlayerStartup(5, baselineRow, paths, startup, error) &&
+                  !startup.instancing && !startup.frustumCulling,
+              "the baseline row could not be requested from one command line");
+        const wchar_t* instancingBad[] = {
+            L"Player.exe", L"--instancing", L"sometimes"
+        };
+        Check(!ParsePlayerStartup(3, instancingBad, paths, startup, error) &&
+                  error.find(L"--instancing must be on or off") != std::wstring::npos,
+              "an unsupported --instancing value lacked a clear error");
+        const wchar_t* instancingTwice[] = {
+            L"Player.exe", L"--instancing", L"on", L"--instancing", L"off"
+        };
+        Check(!ParsePlayerStartup(5, instancingTwice, paths, startup, error) &&
+                  error.find(L"only once") != std::wstring::npos,
+              "a repeated --instancing was accepted");
+        const wchar_t* instancingMissing[] = { L"Player.exe", L"--instancing" };
+        Check(!ParsePlayerStartup(2, instancingMissing, paths, startup, error) &&
+                  error.find(L"requires on or off") != std::wstring::npos,
+              "a valueless --instancing lacked a clear error");
+
+        // --enemies is what makes the M1 completion criterion reachable: the
+        // arena's own ceiling is 100, so five minutes among a thousand of them
+        // cannot be attempted without it. Deliberately NOT the benchmark's
+        // count - that run measures 600 frames and exits.
+        const wchar_t* enemies[] = { L"Player.exe", L"--enemies", L"1000" };
+        Check(ParsePlayerStartup(3, enemies, paths, startup, error) &&
+                  startup.enemyCount == 1000 && !startup.benchmark.enabled,
+              "--enemies did not select a population outside benchmark mode");
+        const wchar_t* enemiesDefault[] = { L"Player.exe" };
+        Check(ParsePlayerStartup(1, enemiesDefault, paths, startup, error) &&
+                  startup.enemyCount == 0,
+              "a Player with no --enemies did not leave the arena default alone");
+        const wchar_t* enemiesWithBenchmark[] = {
+            L"Player.exe", L"--enemies", L"1000", L"--benchmark", L"1000"
+        };
+        Check(!ParsePlayerStartup(5, enemiesWithBenchmark, paths, startup, error) &&
+                  error.find(L"both set the enemy count") != std::wstring::npos,
+              "--enemies and --benchmark were allowed to disagree silently");
+        // A count is a count: no truncation, no unsigned wrap, no zero.
+        for (const wchar_t* bad : { L"0", L"-4", L"12abc", L"abc", L"100001" })
+        {
+            const wchar_t* enemiesBad[] = { L"Player.exe", L"--enemies", bad };
+            Check(!ParsePlayerStartup(3, enemiesBad, paths, startup, error) &&
+                      error.find(L"must be a count") != std::wstring::npos,
+                  "an unusable --enemies count was accepted");
+        }
+        const wchar_t* enemiesMissing[] = { L"Player.exe", L"--enemies" };
+        Check(!ParsePlayerStartup(2, enemiesMissing, paths, startup, error) &&
+                  error.find(L"requires a count") != std::wstring::npos,
+              "a valueless --enemies lacked a clear error");
+
+        // --player-health exists so contact damage and XP are observable at
+        // 1000 enemies, where the default 100 is gone before the arena logs a
+        // single summary. It combines with everything, including --benchmark.
+        const wchar_t* health[] = {
+            L"Player.exe", L"--enemies", L"1000", L"--player-health", L"100000"
+        };
+        Check(ParsePlayerStartup(5, health, paths, startup, error) &&
+                  startup.playerHealth == 100000 && startup.enemyCount == 1000,
+              "--player-health did not combine with --enemies");
+        const wchar_t* healthWithBenchmark[] = {
+            L"Player.exe", L"--benchmark", L"2000", L"--player-health", L"5000"
+        };
+        Check(ParsePlayerStartup(5, healthWithBenchmark, paths, startup, error) &&
+                  startup.playerHealth == 5000 && startup.benchmark.enabled,
+              "--player-health was rejected in benchmark mode");
+        const wchar_t* healthDefault[] = { L"Player.exe" };
+        Check(ParsePlayerStartup(1, healthDefault, paths, startup, error) &&
+                  startup.playerHealth == 0,
+              "a Player with no --player-health did not leave the arena default alone");
+        for (const wchar_t* bad : { L"0", L"-1", L"5x", L"1000001" })
+        {
+            const wchar_t* healthBad[] = {
+                L"Player.exe", L"--player-health", bad
+            };
+            Check(!ParsePlayerStartup(3, healthBad, paths, startup, error) &&
+                      error.find(L"--player-health must be a count") !=
+                          std::wstring::npos,
+                  "an unusable --player-health value was accepted");
+        }
+        const wchar_t* healthTwice[] = {
+            L"Player.exe", L"--player-health", L"200", L"--player-health", L"300"
+        };
+        Check(!ParsePlayerStartup(5, healthTwice, paths, startup, error) &&
+                  error.find(L"only once") != std::wstring::npos,
+              "a repeated --player-health was accepted");
+
         const wchar_t* unsupportedBenchmark[] = {
             L"Player.exe", L"--benchmark", L"256"
         };
@@ -419,6 +526,20 @@ namespace
         Check(!ParsePlayerStartup(3, outputWithoutBenchmark, paths, startup, error) &&
                   error.find(L"requires --benchmark") != std::wstring::npos,
               "standalone benchmark output option was accepted");
+
+        // The benchmark options are temporary M1 scaffolding, and the one
+        // thing they must never do is change what a shipped Player does when
+        // nobody asks for them. Parsed last, into the same struct every
+        // benchmark command line above has already written to.
+        Check(ParsePlayerStartup(1, defaults, paths, startup, error),
+              "default Player arguments failed after the benchmark options");
+        Check(startup.scenePath ==
+                  (paths.root / L"Assets/Scenes/Arena.scene").lexically_normal() &&
+                  !startup.benchmark.enabled &&
+                  startup.benchmark.outputPath.empty() &&
+                  startup.frustumCulling && startup.instancing &&
+                  startup.enemyCount == 0 && startup.playerHealth == 0,
+              "a benchmark option leaked into the plain Player startup path");
     }
 
     void FrameSamplesRespectWarmupAndPercentiles()
@@ -715,6 +836,26 @@ namespace
         ArenaGameSystem(world, InputContext{}, 1.0f);
         CheckNear(GetArenaStatus(world).survivalSeconds, dead.survivalSeconds,
                   "survival timer advanced after player death");
+
+        // A configured health has to reach both fields. It is what makes the
+        // loop observable at high enemy counts: at the default 100, contact
+        // damage from a thousand enemies is gone before the arena logs a
+        // single summary, so nothing in between is ever recorded.
+        ArenaConfig tough = config;
+        tough.playerHealth = 50000.0f;
+        World toughWorld = MakeLogicArena(tough);
+        const ArenaStatus toughStatus = GetArenaStatus(toughWorld);
+        Check(toughStatus.health == 50000.0f &&
+                  toughStatus.maximumHealth == 50000.0f,
+              "a configured player health did not reach the arena");
+
+        // Nonsense must fall back rather than start the player dead, which
+        // would read as a failed arena rather than as a bad argument.
+        ArenaConfig broken = config;
+        broken.playerHealth = 0.0f;
+        World brokenWorld = MakeLogicArena(broken);
+        Check(GetArenaStatus(brokenWorld).health == 100.0f,
+              "a non-positive configured health was not replaced by the default");
     }
 
     void ArenaNearestAttackDeathAndXpPickup()
@@ -1614,6 +1755,151 @@ namespace
         UnregisterClassW(className, windowClass.hInstance);
     }
 
+    // The four rows of the M1 performance matrix, on one fixture, from one
+    // binary - and the reason the matrix is worth reading at all.
+    //
+    // A frame time cannot tell instancing apart from culling; these counters
+    // can. Each combination is pinned to an exact draw count, an exact number
+    // of root CBV binds, and an exact number of Object CB slots written, so a
+    // change that quietly moves work between the two shows up here rather
+    // than as an unexplained millisecond.
+    void OptimizationTogglesProduceIndependentRows(TestContext&)
+    {
+        constexpr wchar_t className[] = L"Dx12EngineM18ToggleMatrixTest";
+        WNDCLASSEXW windowClass = {};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = className;
+        const ATOM atom = RegisterClassExW(&windowClass);
+        Check(atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS,
+              "could not register toggle matrix test window");
+
+        HWND hwnd = CreateWindowExW(0, className, L"M1.8 Toggle Matrix Test",
+                                    WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                    320, 200, nullptr, nullptr,
+                                    windowClass.hInstance, nullptr);
+        Check(hwnd != nullptr, "could not create toggle matrix test window");
+
+        try
+        {
+            Renderer renderer(hwnd, 320, 200,
+                              RuntimePaths::FromRoot(GetExecutableDir()),
+                              GraphicsDevice::AdapterPolicy::SoftwareOnly);
+            renderer.SetMsaaEnabled(false);
+            Check(renderer.IsInstancingEnabled() && renderer.IsFrustumCullingEnabled(),
+                  "a fresh renderer did not start with both optimizations on");
+
+            CameraView camera; // origin, looking down +Z
+            LightingData lighting;
+            lighting.shadowsEnabled = true;
+            lighting.directionalDirection = { 0.0f, -1.0f, 0.0f };
+
+            const MeshHandle mesh = renderer.Resources().ResolveMesh(L"#cube");
+            auto itemAt = [&](float x, float y, float z, RenderLayer layer) {
+                DrawItem item;
+                item.mesh = mesh;
+                item.layer = layer;
+                DirectX::XMStoreFloat4x4(
+                    &item.world, DirectX::XMMatrixTranslation(x, y, z));
+                item.worldBoundsCenter = { x, y, z };
+                return item;
+            };
+
+            // Three opaque cubes that share one batch key - in view, above the
+            // view but casting into it, and behind the camera - plus one
+            // transparent item, which no batch may ever absorb.
+            const std::vector<DrawItem> items = {
+                itemAt(0.0f, 0.0f, 10.0f, RenderLayer::Opaque),
+                itemAt(0.0f, 30.0f, 10.0f, RenderLayer::Opaque),
+                itemAt(0.0f, 0.0f, -30.0f, RenderLayer::Opaque),
+                itemAt(2.0f, 0.0f, 8.0f, RenderLayer::Transparent),
+            };
+
+            struct Row
+            {
+                const char* name;
+                bool instancing;
+                bool culling;
+                uint64_t drawCalls;
+                uint64_t rootCbvBinds;
+                uint64_t objectWrites;
+                uint64_t mainVisible;
+                uint64_t shadowVisible;
+            };
+
+            // baseline           3 opaque + 3 casters + 1 transparent draws,
+            //                    one b0 bind each plus one pass bind per pass.
+            // instancing only    both passes collapse to one batch draw; b0
+            //                    survives once per batch for the material.
+            // culling only       the camera and the light disagree, so the two
+            //                    passes draw different counts - and the union
+            //                    of what they bind is what gets written.
+            // both               one batch each, one material bind, one slot.
+            const Row rows[] = {
+                { "baseline",        false, false, 7, 10, 4, 4, 3 },
+                { "instancing only", true,  false, 3,  5, 2, 4, 3 },
+                { "culling only",    false, true,  4,  7, 3, 2, 2 },
+                { "both",            true,  true,  3,  5, 2, 2, 2 },
+            };
+
+            for (const Row& row : rows)
+            {
+                renderer.SetInstancingEnabled(row.instancing);
+                renderer.SetFrustumCullingEnabled(row.culling);
+                renderer.RenderFrame(camera, lighting, items,
+                                     Renderer::SceneOutput::OffscreenTexture);
+                const Renderer::FrameStats stats = renderer.LastFrameStats();
+
+                Check(stats.submittedItems == items.size(),
+                      "a toggle combination lost a submitted item");
+                Check(stats.mainVisible == row.mainVisible &&
+                          stats.shadowVisible == row.shadowVisible,
+                      "a toggle combination changed which items are visible");
+                Check(stats.drawCalls == row.drawCalls,
+                      "a toggle combination submitted the wrong number of draws");
+                Check(stats.rootCbvBinds == row.rootCbvBinds,
+                      "a toggle combination performed the wrong number of b0 binds");
+                // The M1.6 finding this exists to close: the frame used to
+                // write 176 bytes and a matrix inverse for every submitted
+                // item, including the ones only the instance stream feeds.
+                Check(stats.objectWrites == row.objectWrites,
+                      "a toggle combination wrote Object CB slots nothing reads");
+                Check(stats.objectWrites <= stats.submittedItems,
+                      "the Object CB queue outgrew the items it indexes");
+            }
+
+            // Instancing off must not reserve instance slots it never draws
+            // from, and neither switch may trigger a growth flush.
+            renderer.SetInstancingEnabled(false);
+            renderer.SetFrustumCullingEnabled(false);
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            Check(renderer.LastFrameStats().fullGpuWaits == 0,
+                  "switching the optimizations off forced a full GPU flush");
+
+            // Back to the shipping configuration, so a later test in the same
+            // process is not handed a renderer in a benchmark-only state.
+            renderer.SetInstancingEnabled(true);
+            renderer.SetFrustumCullingEnabled(true);
+
+            if (renderer.HasDebugLayer())
+            {
+                Check(renderer.DebugMessageCount() == 0,
+                      "an optimization toggle recorded a D3D12 debug message");
+            }
+        }
+        catch (...)
+        {
+            DestroyWindow(hwnd);
+            UnregisterClassW(className, windowClass.hInstance);
+            throw;
+        }
+
+        DestroyWindow(hwnd);
+        UnregisterClassW(className, windowClass.hInstance);
+    }
+
     // Past the old 64-slot ceiling, with the scene actually drawing through
     // the frame that replaces the heap.
     //
@@ -1972,6 +2258,8 @@ int main()
               PresentationPathsAndDynamicObjectBuffersStayClean },
             { "functional/main-shadow-culling-queues",
               CullingSplitsMainAndShadowQueues },
+            { "functional/optimization-toggle-matrix",
+              OptimizationTogglesProduceIndependentRows },
             { "functional/srv-heap-growth", SrvHeapGrowsPastItsInitialCapacity },
             { "functional/imgui-overlay-srv-heap-growth",
               ImGuiOverlaySurvivesSrvHeapGrowth },

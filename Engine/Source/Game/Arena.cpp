@@ -208,7 +208,11 @@ bool InitializeArena(World& world, const ArenaRuntimeAssets& assets,
     SetRuntimeName(world, player, "Arena Player");
     world.Add<Transform>(player, { { 0.0f, 1.0f, 0.0f }, {}, { 1.25f, 1.25f, 1.25f } });
     world.Add<ArenaPlayer>(player);
-    world.Add<Health>(player, { 100.0f, 100.0f });
+    // A non-positive request would make the player start dead, which reads as
+    // "the arena failed to initialize" rather than as a bad argument.
+    const float playerHealth = config.playerHealth > 0.0f
+                             ? config.playerHealth : 100.0f;
+    world.Add<Health>(player, { playerHealth, playerHealth });
     world.Add<AttackCooldown>(player);
     world.Add<MeshRenderer>(player,
         { liveState.enemyMesh,

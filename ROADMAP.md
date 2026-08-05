@@ -86,15 +86,19 @@ XP·레벨업 선택, 생존 타이머. 아레나는 절차적으로 구성하�
 바꾸기 때문이다.** 수백~수천 엔티티가 장르의 전제라, 아래 벽들이 투기적으로가
 아니라 **게임이 요구해서** 터진다. 트리거 원칙과 충돌하지 않고 기반이 강화된다.
 
-| 엔진의 벽 | 무엇이 발화시키는가 |
-|---|---|
-| `kMaxObjects = 256` (`Graphics/FrameResource.h`) | 적 300마리. 주석이 이미 *"a genuinely dynamic buffer waits until a scene needs more than this"*라고 트리거를 예고해 둠 |
-| 인스턴싱 없음 — `DrawIndexedInstanced` 3곳 전부 instance count 1 | 동일 메시 수백 개 |
-| 컬링 없음 — `BuildDrawQueues`가 모든 DrawItem을 매 프레임 전량 제출 | 아레나 밖 엔티티, 그림자 패스의 중복 제출 |
-| `kSrvHeapCapacity = 64` (`Graphics/Renderer.h`) — ImGui·씬 SRV·모든 텍스처가 공유 | 적 타입과 프랩 텍스처 |
-| `Transform`이 오일러각 (`Game/Components.h`) | 애니메이션 블렌딩. 주석이 이미 *"a quaternion becomes worth it once things start interpolating between orientations"*라고 조건을 명시 |
-| `Vertex`에 본 인덱스·웨이트 없음 (`Graphics/Mesh.h`) | 스킨드 캐릭터 |
-| 싱글 스레드 — 스레드 관련 심볼이 저장소에 0개 | 수천 엔티티 시뮬레이션 |
+| 엔진의 벽 | 무엇이 발화시키는가 | 상태 |
+|---|---|---|
+| `kMaxObjects = 256` (`Graphics/FrameResource.h`) | 적 300마리. 주석이 이미 *"a genuinely dynamic buffer waits until a scene needs more than this"*라고 트리거를 예고해 둠 | M1에서 제거 |
+| 인스턴싱 없음 — `DrawIndexedInstanced` 3곳 전부 instance count 1 | 동일 메시 수백 개 | M1에서 추가 |
+| 컬링 없음 — `BuildDrawQueues`가 모든 DrawItem을 매 프레임 전량 제출 | 아레나 밖 엔티티, 그림자 패스의 중복 제출 | M1에서 추가 |
+| `kSrvHeapCapacity = 64` (`Graphics/Renderer.h`) — ImGui·씬 SRV·모든 텍스처가 공유 | 적 타입과 프랩 텍스처 | M1에서 제거 |
+| `Transform`이 오일러각 (`Game/Components.h`) | 애니메이션 블렌딩. 주석이 이미 *"a quaternion becomes worth it once things start interpolating between orientations"*라고 조건을 명시 | M2 대기 |
+| `Vertex`에 본 인덱스·웨이트 없음 (`Graphics/Mesh.h`) | 스킨드 캐릭터 | M2 대기 |
+| 싱글 스레드 — 스레드 관련 심볼이 저장소에 0개 | 수천 엔티티 시뮬레이션 | M6 대기 |
+
+두 이름은 이제 상한이 아니라 **시작 크기**다. `kInitialObjectCapacity`와
+`kSrvHeapCapacity`는 각각 256칸과 64칸에서 출발해 GPU가 쉬는 프레임 경계에서
+커진다. 아래 M1 기록에 실측이 있다.
 
 ### 장르가 강제하는 것 두 가지
 
@@ -140,6 +144,9 @@ XP·레벨업 선택, 생존 타이머. 아레나는 절차적으로 구성하�
 
 ## M1 — 몰려오는 적 (`v1.4`)
 
+**상태**: 완료 (2026-08-06). 구현, 자동 검증, 성능 측정과 수동 플레이 확인을
+마쳤다(아래 [M1 기록](#m1-기록-2026-08-06)).
+
 **목표**: 게임 루프를 절차 메시(캡슐·구)로 먼저 세운다. 캐릭터도 물리도 없이.
 그리고 적 수를 올려서 상한들을 실제로 터뜨린 다음, 그것을 고치는 것이 이
 마일스톤의 나머지다.
@@ -150,32 +157,33 @@ XP·레벨업 선택, 생존 타이머. 아레나는 절차적으로 구성하�
 
 ### 게임 루프
 
-- [ ] 탑다운 추적 카메라 — 기존 `CameraComponent`와 `ActiveCamera` 태그 재사용
-- [ ] 플레이어 이동 (기존 `InputContext`), 캡슐 메시
-- [ ] 적 스폰 — 화면 밖 링에서 시간 곡선에 따라
-- [ ] 적 추적 이동, 접촉 데미지
-- [ ] 자동 공격 — 사거리 내 최근접 적
-- [ ] HP·사망·생존 타이머, XP 드롭과 획득
+- [x] 탑다운 추적 카메라 — 기존 `CameraComponent`와 `ActiveCamera` 태그 재사용
+- [x] 플레이어 이동 (기존 `InputContext`), 캡슐 메시
+- [x] 적 스폰 — 화면 밖 링에서 시간 곡선에 따라
+- [x] 적 추적 이동, 접촉 데미지
+- [x] 자동 공격 — 사거리 내 최근접 적
+- [x] HP·사망·생존 타이머, XP 드롭과 획득
 
 ### 터지는 것들
 
-- [ ] **Object CB 동적화** — 기존 트리거 대기 항목 발화. 10.2에서 32 → 256으로
+- [x] **Object CB 동적화** — 기존 트리거 대기 항목 발화. 10.2에서 32 → 256으로
       올려 시간을 벌었을 뿐이고, `UpdateObjectConstants`가 `kMaxObjects`를 넘기면
-      예외를 던진다. GPU가 읽는 중인 버퍼의 재할당이라 RT 재생성과 같은 지연 처리가
-      필요하다 — `RenderFrame` 상단의 기존 deferred resize 패턴을 재사용한다
-- [ ] **인스턴싱** — 같은 메시 + 같은 머티리얼의 DrawItem을 하나의 draw call로.
-      `PsoRole` 테이블에 인스턴스 variant를 추가한다 (지금 `[MSAA][role]` 2차원
-      배열이라 확장 지점이 명확하다). 오브젝트별 root CBV + descriptor table 재바인딩이
-      사라지는 것이 draw call 감소보다 큰 효과일 수 있으므로 둘을 나눠 측정한다
-- [ ] **프러스텀 컬링** — `BuildDrawQueues`에서 기존 `Mesh::bounds`(AABB) 재사용.
+      예외를 던졌다. GPU가 읽는 중인 버퍼의 재할당이라 RT 재생성과 같은 지연 처리가
+      필요하다 — `RenderFrame` 상단의 기존 deferred resize 패턴을 재사용했다
+- [x] **인스턴싱** — 같은 메시 + 같은 머티리얼의 DrawItem을 하나의 draw call로.
+      `PsoRole` 테이블을 `[MSAA][role][draw variant]`로 확장했다. 오브젝트별 root
+      CBV + descriptor table 재바인딩이 사라지는 것이 draw call 감소보다 큰 효과일
+      수 있으므로 둘을 나눠 측정했다
+- [x] **프러스텀 컬링** — `BuildDrawQueues`에서 기존 `Mesh::bounds`(AABB) 재사용.
       메인 패스와 그림자 패스는 절두체가 다르므로 각각 판정한다
-- [ ] **SRV 힙 상한 제거** — `kSrvHeapCapacity = 64`를 ImGui·씬 컬러 SRV·그림자
-      SRV·모든 텍스처가 나눠 쓰고 있어 텍스처 ~55장이면 에디터가 죽는다.
-      `DescriptorAllocator`가 예외를 던지는 구조이므로 상한 제거 대상
+- [x] **SRV 힙 상한 제거** — `kSrvHeapCapacity = 64`를 ImGui·씬 컬러 SRV·그림자
+      SRV·모든 텍스처가 나눠 쓰고 있어 텍스처 ~55장이면 에디터가 죽었다.
+      CPU 전용 staging heap을 page 단위로 늘리고 shader-visible heap만 GPU가 쉬는
+      프레임 경계에서 교체한다
 
 ### 선행 작업
 
-- [ ] **파일 로그 채널** — Player는 실패하면 정보가 0이다(예외가 프로세스를 죽이고
+- [x] **파일 로그 채널** — Player는 실패하면 정보가 0이다(예외가 프로세스를 죽이고
       ImGui 패널이 없다). 수백 엔티티를 다루기 전에 필요하다. `Engine.lib`에 두고
       Editor/Player 양쪽이 쓴다
 
@@ -185,6 +193,49 @@ Debug Layer 0. 기존 회귀 테스트 전량 통과.
 
 **완료 기준**: 적 1000마리가 몰려오는 아레나에서 60 Hz를 유지하며 실제로 5분
 생존을 시도할 수 있다.
+
+### M1 기록 (2026-08-06)
+
+Release, 1280×720, MSAA 4x, VSync off, 고정 seed, NVIDIA GeForce RTX 5070 Ti.
+warm-up 120 frame 뒤 600 frame을 재고, 설정마다 12회 돌려 median의 중앙값을 적었다.
+원본 행은 [Engine/Docs/M1-Matrix.tsv](Engine/Docs/M1-Matrix.tsv)와
+[Engine/Docs/M1-ObjectWrites.tsv](Engine/Docs/M1-ObjectWrites.tsv)에 있다.
+
+| 적 N | baseline | instancing only | culling only | both | draw (baseline → both) | Object CB write |
+|---:|---:|---:|---:|---:|---:|---:|
+| 100 | 0.183 | 0.182 | 0.184 | 0.189 | 209 → 11 | 104 → 5 |
+| 500 | 0.253 | 0.250 | 0.259 | 0.281 | 1009 → 11 | 504 → 5 |
+| 1000 | 0.343 | 0.340 | 0.357 | 0.406 | 2009 → 11 | 1004 → 5 |
+| 2000 | 0.542 | 0.541 | 0.570 | 0.679 | 4009 → 11 | 2004 → 5 |
+
+여기서 baseline은 두 최적화 토글이 off인 행이며, Object CB와 SRV heap의 동적 증가는
+네 행 모두에 들어 있다. 최적화 전 기준선(고정 256)은 500마리에서 측정 자체가
+불가능했다.
+
+**읽는 법 — 이 하드웨어의 이 scene에서 두 최적화는 CPU 프레임타임을 줄이지
+않는다.** 2000마리에서 `both`가 baseline보다 0.14 ms 느리고, 이는 오차가 아니라
+독립된 두 세션에서 재현된 값이다. draw call 4000개와 root bind 4000개를 없애는
+대가로 batch key 정렬이 들어오는데, 이 GPU에서 둘의 비용이 거의 같기 때문이다.
+그럼에도 1000마리에서 네 설정 전부 median ≤ 0.406 ms, max ≤ 1.545 ms로 60 Hz
+예산의 10분의 1 아래이므로 완료 기준은 충족된다. **M1이 실제로 해결한 것은
+프레임타임이 아니라 하드 실패다.** 두 최적화는 GPU가 병목이 되는 M2 이후를 위해
+기본값 on으로 남기되, "켜면 빨라진다"의 근거로 인용하면 안 된다. 지금 남은 가장 큰
+CPU 항목은 batch 정렬과 프레임당 벡터 할당이다.
+
+Debug Layer: Debug Player로 적 1000마리를 네 토글 조합 전부에서 완주시켜
+`frame_summary`의 `debug_messages=0 has_debug_layer=1`을 확인했다. WARP 회귀 테스트도
+Debug·Release 각각 37/37 통과하고, 저장소 밖 Player 패키지 검증도 통과한다.
+
+수동 플레이: Release Player를 `--enemies 1000 --player-health 100000`으로 실행해
+156.8초 동안 확인했다. `survival_s=156`, `total_enemies=1000 -> 1154`, `xp=0 -> 34`로
+추적, 접촉 damage, 자동 공격, 사망·재생성, XP 획득 루프가 계속 돌았고 오류 없이
+종료 코드 0으로 끝났다. frame summary는 median/p95/max 5.884/6.316/7.103 ms였다.
+완료 기준의 5분은 반드시 300초를 완주한다는 뜻이 아니라 5분 생존 플레이를 실제로
+시도할 수 있다는 뜻이며, 사용자가 이동·카메라·렌더링을 눈으로 확인한 뒤 종료했다.
+
+기타: Player의 기본 Scene이 `Assets/Scenes/Arena.scene`으로 바뀌었다. `--scene`
+계약은 그대로이고 `Demo.scene`도 패키지에 남아 있다. `--benchmark`, `--culling`,
+`--instancing`은 M1의 임시 계측 option이며 일반 시작 경로를 바꾸지 않는다.
 
 ---
 
@@ -317,7 +368,6 @@ DXC 전환 후 기존 렌더링 결과가 픽셀 단위로 동일한지 확인 (
 
 | 항목 | 트리거 | 발화 지점 |
 |---|---|---|
-| Object CB 동적화 | 한 씬이 `kMaxObjects`(256)를 넘기는 순간. 10.2에서 32 → 256으로 올려 시간을 벌었을 뿐 | M1 |
 | 씬 계층 구조 (Transform 부모-자식) | 여러 엔티티를 한 덩어리로 움직이고 싶어지는 순간 | M3 |
 | 비동기 에셋 로드 | 큰 모델을 고를 때의 정지가 실제로 작업을 방해하는 순간. 10.3에서 23 MB OBJ에 **5043 ms** 측정 — UI 스레드가 통째로 멈춘다 | M5 |
 | 메시 3D 썸네일 | 파일 이름만으로 에셋을 구분하기 어려워지는 순간. 에셋마다 렌더 타겟이 필요하다 | M5 |
@@ -353,6 +403,12 @@ DXC 전환 후 기존 렌더링 결과가 픽셀 단위로 동일한지 확인 (
 
 - [ ] **리소스 상태 추적기** — *트리거: 새 패스를 추가하다 배리어를 틀리는 순간.*
       M4에서 발화 가능성이 높다
+
+**발화 완료**:
+
+- ~~Object CB 동적화~~ — M1에서 발화. `kMaxObjects`(256)는 런타임 capacity가 됐고
+  요청량의 다음 2의 거듭제곱으로, GPU가 쉬는 프레임 경계에서만 커진다. 2000마리
+  실측에서 2048칸까지 증가하고 증가하지 않는 프레임에는 full flush가 없다
 
 **폐기**:
 

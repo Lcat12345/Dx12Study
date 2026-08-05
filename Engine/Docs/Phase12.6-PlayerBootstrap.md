@@ -8,7 +8,11 @@ same Play systems used by the Editor. Player no longer calls `BuildWorld`.
 `CommandLineToArgvW` preserves Unicode arguments. `--scene <path>` selects a
 Scene; relative paths resolve against the directory containing `Player.exe`,
 not the working directory. With no option, the shared MSBuild
-`DefaultPlayerScene` property selects `Assets/Scenes/Demo.scene`.
+`DefaultPlayerScene` property chooses the startup Scene. It named
+`Assets/Scenes/Demo.scene` through Phase 12; M1 moved it to
+`Assets/Scenes/Arena.scene` so a plain launch opens the game rather than the
+rendering demo. The option contract itself did not change, and `--scene`
+still reaches `Demo.scene`, which the package still ships.
 
 Unknown options, a missing value, Scene parse or asset failures, and a Scene
 without a usable `ActiveCamera` all fail before the window loop with a clear

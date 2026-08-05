@@ -17,6 +17,12 @@ struct ArenaConfig
     uint32_t maxEnemies        = 100;
     float    spawnRadius       = 24.0f;
     float    firstSpawnDelay   = 0.85f;
+    // The player's starting and maximum health. Raising it is what makes the
+    // loop OBSERVABLE at high enemy counts: at 1000 enemies contact damage
+    // takes the default 100 down inside a single second, so the once-a-second
+    // arena summary never samples a partial health bar and the run ends
+    // before any XP is collected.
+    float    playerHealth      = 100.0f;
 };
 
 struct ArenaRuntimeAssets

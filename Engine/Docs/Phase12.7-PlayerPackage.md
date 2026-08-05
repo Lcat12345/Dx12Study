@@ -96,9 +96,15 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass `
 The verifier audits the manifest and forbidden-file policy, copies only the
 staging contents to a new system temporary directory, and uses a separate
 working directory. It launches the copied Player once with the default Scene
-and once with `--scene Assets/Scenes/ShadowA.scene`. Each run verifies the
-Scene-bearing window title, resizes the window, sends the E interaction edge,
-uses M to exercise 1x and 4x MSAA, closes the window, and requires exit code 0.
+and twice through `--scene`, with `Assets/Scenes/Demo.scene` and
+`Assets/Scenes/ShadowA.scene`. Each run verifies the Scene-bearing window
+title, resizes the window, sends the E interaction edge, uses M to exercise 1x
+and 4x MSAA, closes the window, and requires exit code 0.
+
+Demo.scene is run explicitly because M1 moved the default to `Arena.scene`
+(see Phase 12.6). It remains the widest single load in the package -
+transparency, normal mapping, skybox and interaction - so it keeps a run of
+its own rather than losing coverage to the change of default.
 
 For this automated check only, `DX12ENGINE_RUNTIME_PATH_LOG` asks Player to
 mirror its debugger runtime-path message to a selected file. The verifier

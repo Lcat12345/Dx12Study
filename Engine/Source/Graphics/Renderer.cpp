@@ -8,6 +8,7 @@
 #include <bit>
 #include <cfloat>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <tuple>
@@ -898,11 +899,22 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     memcpy(frame.passCBMapped, &constants, sizeof(constants));
 }
 
-// Written once per OBJECT: its transform and material.
+// Written once per OBJECT THAT READS IT: its transform and material.
+//
+// The queue, not the item list, is what decides that - see
+// BuildObjectConstantQueue. The slot is still the item's own index, so a
+// written slot means the same thing it always did; the frames simply stop
+// paying for the ones nothing binds.
+//
+// The capacity check stays keyed on the item count rather than the queue: the
+// addressing invariant is "slot index == item index", and it has to hold for
+// the highest index in the frame whether or not that item is written.
+//
 // The world matrix arrives already built - composing it from a Transform is
 // the render system's job, on the other side of the boundary.
 void Renderer::UpdateObjectConstants(FrameResource& frame,
-                                     const std::vector<DrawItem>& items)
+                                     const std::vector<DrawItem>& items,
+                                     const DrawQueue& objectItems)
 {
     if (items.size() > frame.objectCapacity)
     {
@@ -910,7 +922,8 @@ void Renderer::UpdateObjectConstants(FrameResource& frame,
             "object constant buffer growth was not applied at the frame boundary");
     }
 
-    for (size_t i = 0; i < items.size(); ++i)
+    m_lastFrameStats.objectWrites = objectItems.size();
+    for (const size_t i : objectItems)
     {
         const DrawItem& item  = items[i];
         const XMMATRIX  world = XMLoadFloat4x4(&item.world);
@@ -1307,6 +1320,64 @@ void Renderer::BuildOpaqueBatches(const std::vector<DrawItem>& items,
     }
 }
 
+// Which items this frame actually has to write b0 for.
+//
+// Not all of them, and that is the point. In the instanced path b0 carries
+// only the batch's MATERIAL and is bound once per batch, while transforms
+// travel in the instance stream - so writing 176 bytes and a matrix inverse
+// per submitted item spends nearly all of it on slots no shader ever binds.
+// The Arena at 2000 enemies wrote 2004 of them and read five.
+//
+// Worth roughly 0.023 ms there, about 3% of the frame - real, and smaller
+// than the size of the waste suggests. See M1-TemporaryPlan.md, which has the
+// paired measurement and what the rest of that frame actually goes to.
+//
+// The two singleton readers are kept whole because they genuinely read one
+// slot per draw: the transparent pass always, and both opaque passes whenever
+// instancing is switched off.
+void Renderer::BuildObjectConstantQueue(
+    const FrameVisibility& visibility,
+    const std::vector<OpaqueBatch>& opaqueBatches,
+    DrawQueue& outObjectItems) const
+{
+    outObjectItems.clear();
+    if (m_instancingEnabled)
+    {
+        outObjectItems.reserve(opaqueBatches.size() +
+                               visibility.mainTransparent.size());
+        for (const OpaqueBatch& batch : opaqueBatches)
+        {
+            // A batch with no main-visible prefix exists only for the shadow
+            // pass, and the depth-only VS binds no b0 at all: it has no
+            // material and takes its transform from the instance stream.
+            if (batch.mainInstanceCount != 0)
+            {
+                outObjectItems.push_back(batch.representativeItem);
+            }
+        }
+    }
+    else
+    {
+        // Both singleton passes bind per item, and the two queues overlap
+        // wherever a visible item also casts. Both are in ascending item
+        // order, so their union is a merge of two short lists rather than
+        // another pass over every item.
+        outObjectItems.reserve(visibility.mainOpaque.size() +
+                               visibility.shadowCasters.size() +
+                               visibility.mainTransparent.size());
+        std::set_union(visibility.mainOpaque.begin(), visibility.mainOpaque.end(),
+                       visibility.shadowCasters.begin(),
+                       visibility.shadowCasters.end(),
+                       std::back_inserter(outObjectItems));
+    }
+
+    // Disjoint from everything above either way: the queues merged there hold
+    // opaque items only.
+    outObjectItems.insert(outObjectItems.end(),
+                          visibility.mainTransparent.begin(),
+                          visibility.mainTransparent.end());
+}
+
 // One draw per item, with its per-object constants and texture.
 //
 // A queue changes draw ORDER only. Each queue value remains the source item
@@ -1366,7 +1437,8 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 // pass reads this map and has to find it already finished.
 void Renderer::DrawShadowDepthPass(FrameResource& frame,
                                    const std::vector<DrawItem>& items,
-                                   const std::vector<OpaqueBatch>& opaqueBatches)
+                                   const std::vector<OpaqueBatch>& opaqueBatches,
+                                   const DrawQueue& shadowCasters)
 {
     // Back to writable. Skipped on the very first frame because DepthTarget
     // creates its resource already in DEPTH_WRITE - transitioning FROM a
@@ -1404,9 +1476,12 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // Clearing to 1.0 (far) is the honest picture for "nothing to cast a
     // shadow": every texel reads as the far plane, same as a real pass over
     // an empty frustum would produce.
-    const bool anyCaster = std::any_of(
-        opaqueBatches.begin(), opaqueBatches.end(),
-        [](const OpaqueBatch& batch) { return batch.casterInstanceCount != 0; });
+    const bool anyCaster = m_instancingEnabled
+        ? std::any_of(opaqueBatches.begin(), opaqueBatches.end(),
+                      [](const OpaqueBatch& batch) {
+                          return batch.casterInstanceCount != 0;
+                      })
+        : !shadowCasters.empty();
     if (!m_shadowCastersExist || !anyCaster)
     {
         D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
@@ -1422,10 +1497,12 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // material tables, and both would be wrong here. The shadow map has its
     // own square resolution, and there are no textures to bind because there
     // is no pixel shader to sample them.
+    const DrawVariant variant = m_instancingEnabled ? DrawVariant::Instanced
+                                                    : DrawVariant::Singleton;
     m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
     m_commandList->SetPipelineState(
         m_pipelineStates[0][size_t(PsoRole::ShadowDepth)]
-                           [size_t(DrawVariant::Instanced)].Get());
+                           [size_t(variant)].Get());
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
     ++m_lastFrameStats.rootCbvBinds;
@@ -1436,9 +1513,37 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     m_commandList->RSSetScissorRects(1, &scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
+    if (!m_instancingEnabled)
+    {
+        // The pre-M1.5 path: one draw and one b0 bind per caster, reading the
+        // SAME object slot the main pass uses so the two cannot disagree about
+        // where an object is. No textures - there is no pixel shader.
+        const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase =
+            frame.objectCB->GetGPUVirtualAddress();
+        for (const size_t itemIndex : shadowCasters)
+        {
+            const DrawItem& item = items[itemIndex];
+            const Mesh&     mesh = m_resources.GetMesh(item.mesh);
+
+            m_commandList->SetGraphicsRootConstantBufferView(
+                0, objectCBBase + UINT64(itemIndex) * kObjectCBSize);
+            ++m_lastFrameStats.rootCbvBinds;
+
+            m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
+            m_commandList->IASetIndexBuffer(&mesh.ibv);
+            m_commandList->DrawIndexedInstanced(
+                item.indexCount != 0 ? item.indexCount : mesh.indexCount,
+                1, item.indexOffset, 0, 0);
+            ++m_lastFrameStats.drawCalls;
+        }
+    }
+
     // The WHOLE of each batch's run, where the main pass below draws only its
     // main-visible prefix: an item the camera cannot see still reaches the
     // map, and one whose shadow cannot reach the screen never entered the run.
+    //
+    // Empty when instancing is off - RenderFrame does not build batches it
+    // would not draw - so the loop above and this one never both run.
     for (const OpaqueBatch& batch : opaqueBatches)
     {
         if (batch.casterInstanceCount == 0)
@@ -1472,7 +1577,8 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
 void Renderer::DrawOpaquePass(FrameResource& frame,
                               const SceneAttachments& target,
                               const std::vector<DrawItem>& items,
-                              const std::vector<OpaqueBatch>& opaqueBatches)
+                              const std::vector<OpaqueBatch>& opaqueBatches,
+                              const DrawQueue& mainOpaque)
 {
     m_commandList->OMSetRenderTargets(1, &target.rtv, FALSE, &target.dsv);
     m_commandList->ClearRenderTargetView(target.rtv, kSceneClearColor,
@@ -1481,6 +1587,16 @@ void Renderer::DrawOpaquePass(FrameResource& frame,
     // would reject this frame's pixels.
     m_commandList->ClearDepthStencilView(target.dsv, D3D12_CLEAR_FLAG_DEPTH,
                                          1.0f, 0, 0, nullptr);
+
+    if (!m_instancingEnabled)
+    {
+        // Exactly what the transparent pass does, on the opaque queue: b0 and
+        // both material tables rebound per item. This is the row the
+        // instancing measurement is against.
+        BindScenePass(frame, target, PsoRole::Opaque, DrawVariant::Singleton);
+        DrawItems(frame, items, mainOpaque);
+        return;
+    }
 
     BindScenePass(frame, target, PsoRole::Opaque, DrawVariant::Instanced);
 
@@ -1633,17 +1749,17 @@ void Renderer::RecordScenePasses(FrameResource& frame,
                                  const LightingData& lighting,
                                  const std::vector<DrawItem>& items,
                                  const std::vector<OpaqueBatch>& opaqueBatches,
-                                 const DrawQueue& transparentItems)
+                                 const FrameVisibility& visibility)
 {
-    DrawShadowDepthPass(frame, items, opaqueBatches);
+    DrawShadowDepthPass(frame, items, opaqueBatches, visibility.shadowCasters);
 
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
         target.color, target.restingState, D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
-    DrawOpaquePass(frame, target, items, opaqueBatches);
+    DrawOpaquePass(frame, target, items, opaqueBatches, visibility.mainOpaque);
     DrawSkyboxPass(frame, target, lighting.skybox);
-    DrawTransparentPass(frame, target, items, transparentItems);
+    DrawTransparentPass(frame, target, items, visibility.mainTransparent);
 }
 
 void Renderer::RecordBackBufferOverlay(const OverlayRecorder& overlayRecorder,
@@ -1803,11 +1919,20 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
 
     // Queues contain source indices, so transparent sorting and batch
     // reordering never change the item-to-Object-CB mapping.
+    //
+    // With instancing off nothing is batched and no instance slot is asked
+    // for: the point of the switch is that the frame costs what it cost
+    // before M1.5, not that it takes a cheaper route to the same buffers.
     DrawQueue instanceOrder;
     std::vector<OpaqueBatch> opaqueBatches;
-    BuildOpaqueBatches(items, visibility.mainOpaque, visibility.shadowCasters,
-                       instanceOrder, opaqueBatches);
-    RequestInstanceCapacity(instanceOrder.size());
+    if (m_instancingEnabled)
+    {
+        BuildOpaqueBatches(items, visibility.mainOpaque, visibility.shadowCasters,
+                           instanceOrder, opaqueBatches);
+        RequestInstanceCapacity(instanceOrder.size());
+    }
+    DrawQueue objectItems;
+    BuildObjectConstantQueue(visibility, opaqueBatches, objectItems);
 
     FrameResource& frame = m_frames[m_currentFrame];
 
@@ -1881,7 +2006,7 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     UpdatePassConstants(frame, camera, lighting, shadowViewProj, shadowStrength,
                         target.height == 0
                             ? 1.0f : float(target.width) / float(target.height));
-    UpdateObjectConstants(frame, items);
+    UpdateObjectConstants(frame, items, objectItems);
     UpdateInstanceData(frame, items, instanceOrder);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
@@ -1892,8 +2017,7 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-    RecordScenePasses(frame, target, lighting, items, opaqueBatches,
-                      visibility.mainTransparent);
+    RecordScenePasses(frame, target, lighting, items, opaqueBatches, visibility);
     if (output == SceneOutput::OffscreenTexture)
     {
         PresentOffscreen(overlayRecorder);

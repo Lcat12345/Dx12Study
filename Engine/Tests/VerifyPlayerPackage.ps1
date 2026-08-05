@@ -22,6 +22,7 @@ $playerExe = Join-Path $packagePath 'Player.exe'
 $manifestPath = Join-Path $packagePath 'package-manifest.txt'
 
 foreach ($required in @($playerExe, $manifestPath,
+                         (Join-Path $packagePath 'Assets\Scenes\Arena.scene'),
                          (Join-Path $packagePath 'Assets\Scenes\Demo.scene'),
                          (Join-Path $packagePath 'Shaders\Basic.VS.cso')))
 {
@@ -59,7 +60,7 @@ if ($fileMarker -lt 0)
 }
 $metadata = $manifestLines[0..($fileMarker - 1)] -join "`n"
 foreach ($requiredMetadata in @('configuration=Release', 'platform=x64',
-                                'commit=', 'default_scene=Assets/Scenes/Demo.scene',
+                                'commit=', 'default_scene=Assets/Scenes/Arena.scene',
                                 'runtime_dlls='))
 {
     if ($metadata.IndexOf($requiredMetadata, [StringComparison]::Ordinal) -lt 0)
@@ -289,6 +290,39 @@ function Invoke-InvalidScenePlayer(
     }
 }
 
+function Remove-TemporaryRoot(
+    [string]$Path,
+    [int]$Attempts = 10,
+    [int]$DelayMilliseconds = 200)
+{
+    # Windows can hold the Player working-directory handle briefly after the
+    # process exits, so retry instead of failing an otherwise passing run.
+    $lastError = $null
+    for ($attempt = 1; $attempt -le $Attempts; $attempt++)
+    {
+        try
+        {
+            Remove-Item -LiteralPath $Path -Recurse -Force -ErrorAction Stop
+        }
+        catch
+        {
+            $lastError = $_
+        }
+        # A delete can also report success while the directory lingers, so the
+        # path itself - not the absence of an error - decides when we are done.
+        if (-not (Test-Path -LiteralPath $Path))
+        {
+            return
+        }
+        Start-Sleep -Milliseconds $DelayMilliseconds
+    }
+
+    $reason = if ($null -ne $lastError) { $lastError.Exception.Message }
+              else { 'the directory still exists' }
+    Write-Warning ("Could not remove the temporary verification directory " +
+                   "'$Path' after $Attempts attempts: $reason")
+}
+
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) (
     'Dx12Engine-Phase12.7-' + [Guid]::NewGuid().ToString('N'))
 $isolatedPackage = Join-Path $tempRoot 'PlayerPackage'
@@ -305,6 +339,7 @@ try
 
     $isolatedExe = Join-Path $isolatedPackage 'Player.exe'
     $defaultLog = Join-Path $tempRoot 'default-runtime-paths.log'
+    $demoLog = Join-Path $tempRoot 'demo-runtime-paths.log'
     $explicitLog = Join-Path $tempRoot 'explicit-runtime-paths.log'
     $applicationLogDir = Join-Path $tempRoot 'application-logs'
     $oldApplicationLogDir = [Environment]::GetEnvironmentVariable(
@@ -313,7 +348,13 @@ try
         'DX12ENGINE_LOG_DIR', $applicationLogDir, 'Process')
     try
     {
-        $defaultOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $defaultLog @() 'Demo.scene'
+        # No arguments is the shipped path and now opens the arena. Demo.scene
+        # is run explicitly because it is still the widest content in the
+        # package - transparency, normal maps, skybox, interaction - and it
+        # stopped being covered by the no-argument run when the default moved.
+        $defaultOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $defaultLog @() 'Arena.scene'
+        $demoOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $demoLog `
+            @('--scene', 'Assets\Scenes\Demo.scene') 'Demo.scene'
         $explicitOutput = Invoke-IsolatedPlayer $isolatedExe $workingDirectory $explicitLog `
             @('--scene', 'Assets\Scenes\ShadowA.scene') 'ShadowA.scene'
         Invoke-InvalidScenePlayer $isolatedExe $workingDirectory $applicationLogDir
@@ -325,7 +366,7 @@ try
     }
 
     $applicationLogs = @(Get-ChildItem -LiteralPath $applicationLogDir -File)
-    if ($applicationLogs.Count -ne 3)
+    if ($applicationLogs.Count -ne 4)
     {
         throw "Expected one application log per Player run; found $($applicationLogs.Count)"
     }
@@ -335,7 +376,7 @@ try
     }
 
     $expectedRoot = [IO.Path]::GetFullPath($isolatedPackage).TrimEnd('\')
-    foreach ($runtimeLog in @($defaultOutput, $explicitOutput))
+    foreach ($runtimeLog in @($defaultOutput, $demoOutput, $explicitOutput))
     {
         if ($runtimeLog.IndexOf("runtime root: $expectedRoot", [StringComparison]::OrdinalIgnoreCase) -lt 0)
         {
@@ -355,8 +396,5 @@ try
 }
 finally
 {
-    if (Test-Path -LiteralPath $tempRoot)
-    {
-        Remove-Item -LiteralPath $tempRoot -Recurse -Force
-    }
+    Remove-TemporaryRoot $tempRoot
 }

@@ -31,6 +31,10 @@ public:
         uint64_t mainVisible      = 0;
         uint64_t shadowVisible    = 0;
         uint64_t submittedItems   = 0;
+        // Object CB slots actually written this frame. Separate from
+        // submittedItems because the instanced path binds b0 once per BATCH:
+        // the gap between the two is the per-item upload that nothing reads.
+        uint64_t objectWrites     = 0;
         // What culling removed, counted separately from what survived so a
         // benchmark row shows the work avoided rather than only the work done.
         uint64_t mainCulled       = 0;
@@ -152,6 +156,13 @@ public:
     // one binary can produce the on and off rows of the same benchmark.
     void SetFrustumCullingEnabled(bool enabled) { m_frustumCullingEnabled = enabled; }
     bool IsFrustumCullingEnabled() const { return m_frustumCullingEnabled; }
+
+    // Opaque instancing off restores the pre-M1.5 path: one draw, one b0 bind
+    // and one texture rebind per item, in the main pass and the shadow pass
+    // alike. Same reason as the culling switch - the four rows of the M1
+    // matrix have to come out of one binary, measured in one session.
+    void SetInstancingEnabled(bool enabled) { m_instancingEnabled = enabled; }
+    bool IsInstancingEnabled() const { return m_instancingEnabled; }
 
     // Takes flattened data, not a scene graph. Scene passes are shared by
     // both outputs; only the final presentation path differs. The optional
@@ -287,7 +298,8 @@ private:
                              DirectX::FXMMATRIX shadowViewProj,
                              float shadowStrength, float renderAspect);
     void UpdateObjectConstants(FrameResource& frame,
-                               const std::vector<DrawItem>& items);
+                               const std::vector<DrawItem>& items,
+                               const DrawQueue& objectItems);
     void UpdateInstanceData(FrameResource& frame,
                             const std::vector<DrawItem>& items,
                             const DrawQueue& instanceOrder);
@@ -338,12 +350,19 @@ private:
                             const DrawQueue& shadowCasters,
                             DrawQueue& outInstanceOrder,
                             std::vector<OpaqueBatch>& outBatches) const;
+    // Which items this frame has to write b0 for - which is not all of them.
+    // See the definition: the instanced path binds b0 once per batch.
+    void BuildObjectConstantQueue(const FrameVisibility& visibility,
+                                  const std::vector<OpaqueBatch>& opaqueBatches,
+                                  DrawQueue& outObjectItems) const;
     void DrawShadowDepthPass(FrameResource& frame,
                              const std::vector<DrawItem>& items,
-                             const std::vector<OpaqueBatch>& opaqueBatches);
+                             const std::vector<OpaqueBatch>& opaqueBatches,
+                             const DrawQueue& shadowCasters);
     void DrawOpaquePass(FrameResource& frame, const SceneAttachments& target,
                         const std::vector<DrawItem>& items,
-                        const std::vector<OpaqueBatch>& opaqueBatches);
+                        const std::vector<OpaqueBatch>& opaqueBatches,
+                        const DrawQueue& mainOpaque);
     // After opaque so it only fills pixels nothing has claimed, and before
     // transparent (11.6) so alpha has a background to blend against.
     void DrawSkyboxPass(FrameResource& frame, const SceneAttachments& target,
@@ -361,7 +380,7 @@ private:
                            const LightingData& lighting,
                            const std::vector<DrawItem>& items,
                            const std::vector<OpaqueBatch>& opaqueBatches,
-                           const DrawQueue& transparentItems);
+                           const FrameVisibility& visibility);
     void PresentOffscreen(const OverlayRecorder& overlayRecorder);
     void PresentSwapChain(const SceneAttachments& target,
                           const OverlayRecorder& overlayRecorder);
@@ -434,6 +453,7 @@ private:
     UINT          m_instanceCapacity = kInitialObjectCapacity;
     UINT          m_requestedInstanceCapacity = kInitialObjectCapacity;
     bool          m_frustumCullingEnabled = true;
+    bool          m_instancingEnabled     = true;
     DescriptorHeapChangedCallback m_descriptorHeapChanged;
 
     // Shared by the scene passes for as long as they need the same inputs.

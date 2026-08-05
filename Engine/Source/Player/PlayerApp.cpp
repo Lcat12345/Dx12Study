@@ -47,6 +47,7 @@ PlayerApp::PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths,
 void PlayerApp::OnInit()
 {
     GetRenderer().SetFrustumCullingEnabled(m_startup.frustumCulling);
+    GetRenderer().SetInstancingEnabled(m_startup.instancing);
 
     std::string error;
     if (!LoadScene(m_startup.scenePath, GetRenderer().Resources(), m_world, error))
@@ -61,11 +62,24 @@ void PlayerApp::OnInit()
     }
 
     ArenaConfig arenaConfig;
+    if (m_startup.playerHealth != 0)
+    {
+        arenaConfig.playerHealth = float(m_startup.playerHealth);
+    }
     if (m_startup.benchmark.enabled)
     {
         arenaConfig.initialEnemyCount = m_startup.benchmark.enemyCount;
         arenaConfig.maxEnemies        = m_startup.benchmark.enemyCount;
         GetRenderer().SetVSync(false);
+    }
+    else if (m_startup.enemyCount != 0)
+    {
+        // Start at the requested population rather than ramping up to it: the
+        // spawn curve would take far longer than the five minutes this run is
+        // meant to verify. VSync is left alone - a play session should be
+        // presented the way a player would see it.
+        arenaConfig.initialEnemyCount = m_startup.enemyCount;
+        arenaConfig.maxEnemies        = m_startup.enemyCount;
     }
     const bool initializedArena =
         InitializeArenaIfPresent(m_world, GetRenderer().Resources(), arenaConfig);
@@ -213,11 +227,11 @@ bool PlayerApp::WriteBenchmarkRow(std::string_view status,
     if (writeHeader)
     {
         stream << "status\tenemies\twarmup_frames\tsample_frames"
-                  "\tmedian_ms\tp95_ms\tmax_ms\tvsync\tmsaa\tculling"
+                  "\tmedian_ms\tp95_ms\tmax_ms\tvsync\tmsaa\tculling\tinstancing"
                   "\twidth\theight\tadapter\tdraw_calls\troot_cbv_binds"
                   "\tmain_visible\tshadow_visible\tmain_culled\tshadow_culled"
-                  "\tunbounded\tdraw_items\tobject_capacity\tinstance_capacity"
-                  "\tsrv_used\tsrv_capacity\terror\n";
+                  "\tunbounded\tdraw_items\tobject_writes\tobject_capacity"
+                  "\tinstance_capacity\tsrv_used\tsrv_capacity\terror\n";
     }
 
     stream.imbue(std::locale::classic());
@@ -232,13 +246,15 @@ bool PlayerApp::WriteBenchmarkRow(std::string_view status,
            << (GetRenderer().IsVSync() ? "on" : "off") << '\t'
            << GetRenderer().MsaaSampleCount() << 'x' << '\t'
            << (GetRenderer().IsFrustumCullingEnabled() ? "on" : "off") << '\t'
+           << (GetRenderer().IsInstancingEnabled() ? "on" : "off") << '\t'
            << frame.renderWidth << '\t' << frame.renderHeight << '\t'
            << TsvField(ToUtf8(GetRenderer().AdapterName())) << '\t'
            << frame.drawCalls << '\t' << frame.rootCbvBinds << '\t'
            << frame.mainVisible << '\t' << frame.shadowVisible << '\t'
            << frame.mainCulled << '\t' << frame.shadowCulled << '\t'
            << frame.unboundedItems << '\t'
-           << m_drawItems.size() << '\t' << GetRenderer().MaxDrawItems() << '\t'
+           << m_drawItems.size() << '\t' << frame.objectWrites << '\t'
+           << GetRenderer().MaxDrawItems() << '\t'
            << frame.instanceCapacity << '\t'
            << GetRenderer().ShaderVisibleDescriptors().UsedCount() << '\t'
            << GetRenderer().ShaderVisibleDescriptors().Capacity() << '\t'

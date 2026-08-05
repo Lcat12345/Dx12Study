@@ -7,7 +7,13 @@
     <FxcToolPath>$([MSBuild]::NormalizePath('$(WindowsSdkDir)bin\$(TargetPlatformVersion)\x64\fxc.exe'))</FxcToolPath>
     <RuntimeShaderFlags Condition="'$(Configuration)'=='Debug'">/Zi /Od</RuntimeShaderFlags>
     <RuntimeShaderFlags Condition="'$(Configuration)'=='Release'">/O3</RuntimeShaderFlags>
-    <DefaultPlayerScene>Assets/Scenes/Demo.scene</DefaultPlayerScene>
+    <!-- What Player.exe starts with when the command line names no Scene.
+         Arena.scene since M1: the milestone's deliverable is the survival
+         loop, and the run target a plain double-click produces should be the
+         game rather than the rendering feature demo. The Scene option itself
+         is unchanged and still reaches Demo.scene, which the tests and the
+         package both keep. -->
+    <DefaultPlayerScene>Assets/Scenes/Arena.scene</DefaultPlayerScene>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
