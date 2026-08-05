@@ -105,7 +105,52 @@ if (Test-Path -LiteralPath $packagePath)
 New-Item -ItemType Directory -Path $packagePath | Out-Null
 
 Copy-Item -LiteralPath $playerExe -Destination $packagePath
-Copy-Item -LiteralPath $assetSource -Destination $packagePath -Recurse
+
+# Assets are staged from a DECLARED list, not by copying Assets\ wholesale.
+# See PlayerPackage.contents for why - in short, a blanket copy made the
+# package depend on untracked files sitting in a developer's folder and
+# shipped 43 MB of non-redistributable art no Scene references.
+$contentsFile = Join-Path $PSScriptRoot 'PlayerPackage.contents'
+if (-not (Test-Path -LiteralPath $contentsFile -PathType Leaf))
+{
+    throw "Player package content list is missing: $contentsFile"
+}
+
+$stagedAssets = New-Object System.Collections.Generic.List[string]
+foreach ($line in Get-Content -LiteralPath $contentsFile)
+{
+    $entry = $line.Trim()
+    if ($entry.Length -eq 0 -or $entry.StartsWith('#'))
+    {
+        continue
+    }
+
+    $entryPath = Join-Path $assetSource ($entry.Replace('/', '\'))
+    # -Path, not -LiteralPath: entries are allowed to be wildcards.
+    # NOT named $matches - that is a PowerShell automatic variable.
+    $matchedFiles = @(Get-ChildItem -Path $entryPath -File -ErrorAction SilentlyContinue)
+    if ($matchedFiles.Count -eq 0)
+    {
+        # A shipped Scene that names a missing asset must fail HERE, where the
+        # line that asked for it is known, rather than as a texture that
+        # quietly falls back to white on a user's machine.
+        throw "Player package content entry matched no file: $entry"
+    }
+
+    foreach ($file in $matchedFiles)
+    {
+        $relative = (Get-FullPath $file.FullName).Substring((Get-FullPath $assetSource).Length + 1)
+        $destination = Join-Path (Join-Path $packagePath 'Assets') $relative
+        $destinationDir = Split-Path -Parent $destination
+        if (-not (Test-Path -LiteralPath $destinationDir))
+        {
+            New-Item -ItemType Directory -Path $destinationDir -Force | Out-Null
+        }
+        Copy-Item -LiteralPath $file.FullName -Destination $destination
+        $stagedAssets.Add($relative.Replace('\', '/'))
+    }
+}
+
 Copy-Item -LiteralPath $shaderSource -Destination $packagePath -Recurse
 
 # A DLL beside Player.exe is an explicitly deployed, non-system runtime dependency.
@@ -142,6 +187,27 @@ else
     'dirty'
 }
 
+# Everything staged must be in the commit the manifest is about to name.
+#
+# Without this, "commit=<sha> source_state=clean" reads as "check out this
+# commit and you get this package" while the package could still be carrying
+# files that exist only on this machine - which is exactly the state the
+# blanket Assets\ copy produced. An untracked asset is either something that
+# should be committed or something that should not ship; both are decisions
+# for a person, so fail and say which file forced the question.
+$trackedAssets = @(& git -C $repoRootPath ls-files --error-unmatch -- 'Engine/Assets' 2>$null |
+    ForEach-Object { $_ -replace '^Engine/Assets/', '' })
+if ($LASTEXITCODE -ne 0)
+{
+    throw 'Could not list tracked assets; the package cannot claim a commit'
+}
+$untrackedStaged = @($stagedAssets | Where-Object { $trackedAssets -notcontains $_ })
+if ($untrackedStaged.Count -gt 0)
+{
+    throw ("Player package would ship files git does not track, so the commit " +
+           "in the manifest would not reproduce it: " + ($untrackedStaged -join ', '))
+}
+
 $manifestName = 'package-manifest.txt'
 $fileList = @(Get-ChildItem -LiteralPath $packagePath -File -Recurse -Force |
     ForEach-Object { Get-PackageRelativePath $packagePath $_.FullName })
@@ -164,6 +230,9 @@ $manifest = @(
     "source_state=$sourceState"
     "default_scene=$($DefaultScene.Replace('\', '/'))"
     "runtime_dlls=$dllPolicy"
+    # Says HOW the asset set was chosen, so "commit=" above is read as the
+    # reproducibility claim it now actually is.
+    "asset_policy=declared in Engine/Tests/PlayerPackage.contents; all staged assets are tracked"
     ''
     '[files]'
 ) + $fileList

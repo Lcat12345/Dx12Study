@@ -12,10 +12,33 @@ copying newer files over it, prevents deleted runtime content from surviving as
 a stale package file. The package contains only:
 
 - `Player.exe`
-- the runtime `Assets/` tree, including the default Scene
+- the assets named by `Engine/Tests/PlayerPackage.contents`, including every
+  Scene the package can start with
 - build-time compiled `Shaders/*.cso`
 - explicitly deployed DLLs found beside `Player.exe`, when present
 - `package-manifest.txt`
+
+## Why the asset set is declared
+
+Staging originally copied `Assets/` wholesale, which made the package a
+function of the developer's working folder rather than of the commit: 51 of
+its 51.6 MB were files git does not track, including the 43 MB `laevat/` tree
+that was gitignored precisely because it cannot be redistributed - and which no
+shipped Scene references.
+
+Two rules now hold instead, both enforced by staging failing rather than by
+convention:
+
+1. Only entries listed in `PlayerPackage.contents` are staged, and an entry
+   matching no file is an error. Adding an asset to the package is a
+   deliberate, reviewable change.
+2. Every staged asset must be tracked by git. Without this the manifest's
+   `commit=` line would promise a reproducibility it could not deliver.
+
+An asset a shipped Scene needs but the list omits is caught by the independent
+verification below, which runs both Scenes: a missing texture surfaces as a
+failed load, not as a silent white fallback. The manifest records the policy on
+its `asset_policy=` line.
 
 The manifest records configuration, platform, source commit and dirty/clean
 state, default Scene, runtime DLL policy, and a sorted package file list. It has
@@ -30,7 +53,9 @@ Release uses the static CRT. The audited package currently contains no DLLs;
 `ole32.dll`, `d3d12.dll`, and `dxgi.dll`, which are Windows system components.
 
 `Demo.scene` uses the tracked `Test` skybox so a clean checkout can build the
-default package without the optional, locally downloaded `ColdSunset` asset.
+default package without the optional, locally downloaded `ColdSunset` asset -
+now enforced by the tracked-asset rule above rather than left to the Scene
+author's care.
 
 ## Independent verification
 

@@ -1,6 +1,6 @@
 #include "Core/Common.h"
 #include "Game/Components.h"
-#include "Game/EditorSession.h"
+#include "Editor/EditorSession.h"
 #include "Game/ExecutionContext.h"
 #include "Game/Scene.h"
 #include "Game/Systems.h"

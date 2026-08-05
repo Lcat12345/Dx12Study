@@ -1,0 +1,43 @@
+# What ships in the Player package, relative to Engine/Assets.
+#
+# DECLARED, not discovered. The staging step used to copy Assets\ wholesale,
+# which made the package a function of whatever happened to sit in a
+# developer's working folder rather than of the commit:
+#
+#   - 51 of the package's 51.6 MB were files git does not track, so a fresh
+#     clone of the SAME commit produced a completely different package while
+#     package-manifest.txt still claimed commit=... source_state=clean.
+#   - laevat\ (43 MB) was gitignored in 11.2.5 precisely because it is
+#     third-party art that cannot be redistributed - and the packaging step
+#     copied it straight into the thing meant for redistribution. No shipped
+#     Scene even references it.
+#
+# Adding an asset here is therefore a deliberate act. Omitting one that a
+# shipped Scene needs is caught at package time, not by a user: staging fails
+# on an entry that matches nothing, and VerifyPlayerPackage.ps1 then RUNS both
+# Scenes outside the repository, where a missing texture surfaces as a failed
+# load rather than a silent fallback.
+#
+# Entries may be literal paths or wildcards. Blank lines and #-comments are
+# ignored. Every staged file must also be tracked by git, so that the commit
+# recorded in the manifest is genuinely enough to rebuild this package.
+
+# --- Scenes the package can start with ---
+# Demo.scene is the default; ShadowA.scene is what VerifyPlayerPackage.ps1
+# passes through --scene, so the explicit-Scene path is exercised too.
+Scenes/Demo.scene
+Scenes/ShadowA.scene
+
+# --- textures the two Scenes name ---
+Crate.png
+Floor.png
+TestNormal.png
+
+# --- the skybox Demo.scene names ---
+# A cube map is six files under one logical name; all six or none.
+Skyboxes/Test/px.png
+Skyboxes/Test/nx.png
+Skyboxes/Test/py.png
+Skyboxes/Test/ny.png
+Skyboxes/Test/pz.png
+Skyboxes/Test/nz.png

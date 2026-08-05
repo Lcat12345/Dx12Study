@@ -1,4 +1,4 @@
-#include "Game/EditorSession.h"
+#include "Editor/EditorSession.h"
 
 #include "Game/Scene.h"
 

@@ -897,6 +897,61 @@ Output/x64/Release/PlayerPackage/
 [`Engine/Docs/Phase12.7-PlayerPackage.md`](../Engine/Docs/Phase12.7-PlayerPackage.md)에
 기록했다.
 
+#### 후속 리뷰: 에셋 선정 방식 (2026-08-05)
+
+위 40 files / 51.60 MiB를 뜯어보니 **51.0 MiB(20개 파일)가 git이 추적하지
+않는 파일**이었다. staging이 `Copy-Item $assetSource -Recurse`로 `Assets\`를
+통째로 복사했기 때문이다. 두 가지가 동시에 깨져 있었다.
+
+- **재현성**: 신규 클론은 에셋 13개(~0.6 MiB)만 받으므로 같은 커밋에서
+  빌드해도 전혀 다른 package가 나온다. 그런데 manifest는
+  `commit=... source_state=clean`을 적는다 — "이 커밋이면 이 package"로
+  읽히지만 실제로는 개발 머신에 우연히 있는 파일에 좌우됐다.
+- **재배포**: 그 51 MiB의 대부분이 `laevat/`(43 MiB)다. 11.2.5에서
+  *재배포할 수 없는 서드파티 에셋*이라는 이유로 `.gitignore`에 넣은 바로 그
+  파일들이 배포용 폴더로 복사되고 있었다. 어느 Scene도 참조하지 않는다.
+
+기능은 깨지지 않았다 — `Demo.scene`과 `ShadowA.scene`은 절차 메시와
+`Crate.png`/`Floor.png`/`TestNormal.png`/`Skyboxes/Test`만 쓴다. 순수한
+과적재이자 라이선스 사고 대기 상태였다.
+
+**고침**: 담을 것을 저장소에 선언한다
+([`Engine/Tests/PlayerPackage.contents`](../Engine/Tests/PlayerPackage.contents)).
+staging은 그 목록만 복사하고, 두 가지를 실패로 만든다.
+
+| 가드 | 동작 | 실측 |
+|---|---|---|
+| 목록 항목이 아무 파일과도 안 맞음 | staging 실패 | `content entry matched no file: DoesNotExist.png` |
+| staging 대상이 git 미추적 | staging 실패 | 목록에 `laevat/laevat.mtl`을 넣어 확인 |
+
+두 번째 가드가 핵심이다. 원칙이 주석이 아니라 **빌드 실패**로 강제되므로,
+manifest의 `commit=`이 비로소 사실이 된다. manifest에 `asset_policy=` 줄을
+추가해 선정 방식 자체도 기록한다.
+
+목록 누락은 사람이 아니라 파이프라인이 잡는다. `VerifyPlayerPackage.ps1`이
+저장소 밖에서 두 Scene을 **실행**하므로, 빠진 텍스처는 조용한 fallback이
+아니라 로드 실패로 드러난다.
+
+| | 이전 | 이후 |
+|---|---|---|
+| package | 40 files, 51.60 MiB | **18 files, 0.55 MiB** |
+| 미추적 파일 | 20개 (51.0 MiB) | **0개** |
+| 독립 실행 검증 | 통과 | **통과** (기본·명시 Scene 모두 exit 0) |
+| Engine tests | 25/25 | **25/25** |
+
+#### 후속 리뷰: 폴더 배치를 링크 경계에 맞춤 (2026-08-05)
+
+`AssetBrowser`/`DebugUI`/`EditorSession`이 `Source/Game/`에, `ImGuiLayer`가
+`Source/Graphics/`에 있으면서 **Editor.exe로만 컴파일**되고 있었다. 링크
+경계는 정확했지만(Game.lib은 이들을 포함하지 않는다) 폴더가 그렇게 말하지
+않았다. Phase 12의 원칙이 *"분류는 곧 빌드·링크·패키징 경계"*인데 빌드만
+지키고 배치는 어긋난 상태였고, 이는 누군가 Game.lib 코드에서
+`#include "Game/DebugUI.h"`를 했다가 링크 단계에서야 알게 되는 구조다.
+
+여덟 파일을 `Source/Editor/`로 옮기고 include 경로 10곳과 두 vcxproj를
+갱신했다. 링크 산출물은 그대로다 — Player.exe에 ImGui 문자열 0건, Editor.exe
+에만 존재.
+
 ---
 
 ## 6. 단계별 커밋 경계

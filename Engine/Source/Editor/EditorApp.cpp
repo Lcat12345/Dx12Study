@@ -1,7 +1,7 @@
 #include "Editor/EditorApp.h"
 
 #include "Game/BuildWorld.h"
-#include "Game/DebugUI.h"
+#include "Editor/DebugUI.h"
 #include "Game/Systems.h"
 
 namespace

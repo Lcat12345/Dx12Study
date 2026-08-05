@@ -1,4 +1,4 @@
-#include "Game/AssetBrowser.h"
+#include "Editor/AssetBrowser.h"
 
 #include "Core/TextEncoding.h"
 #include "Graphics/Mesh.h"

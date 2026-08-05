@@ -53,10 +53,10 @@
   <ItemGroup>
     <ClCompile Include="Source\Editor\EditorApp.cpp" />
     <ClCompile Include="Source\Editor\Main.cpp" />
-    <ClCompile Include="Source\Game\AssetBrowser.cpp" />
-    <ClCompile Include="Source\Game\DebugUI.cpp" />
-    <ClCompile Include="Source\Game\EditorSession.cpp" />
-    <ClCompile Include="Source\Graphics\ImGuiLayer.cpp" />
+    <ClCompile Include="Source\Editor\AssetBrowser.cpp" />
+    <ClCompile Include="Source\Editor\DebugUI.cpp" />
+    <ClCompile Include="Source\Editor\EditorSession.cpp" />
+    <ClCompile Include="Source\Editor\ImGuiLayer.cpp" />
     <ClCompile Include="..\ThirdParty\imgui\imgui.cpp" />
     <ClCompile Include="..\ThirdParty\imgui\imgui_draw.cpp" />
     <ClCompile Include="..\ThirdParty\imgui\imgui_tables.cpp" />
@@ -66,10 +66,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Source\Editor\EditorApp.h" />
-    <ClInclude Include="Source\Game\AssetBrowser.h" />
-    <ClInclude Include="Source\Game\DebugUI.h" />
-    <ClInclude Include="Source\Game\EditorSession.h" />
-    <ClInclude Include="Source\Graphics\ImGuiLayer.h" />
+    <ClInclude Include="Source\Editor\AssetBrowser.h" />
+    <ClInclude Include="Source\Editor\DebugUI.h" />
+    <ClInclude Include="Source\Editor\EditorSession.h" />
+    <ClInclude Include="Source\Editor\ImGuiLayer.h" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="Engine.vcxproj">

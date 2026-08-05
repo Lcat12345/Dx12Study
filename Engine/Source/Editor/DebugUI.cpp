@@ -1,9 +1,9 @@
-#include "Game/DebugUI.h"
+#include "Editor/DebugUI.h"
 
-#include "Game/AssetBrowser.h"
+#include "Editor/AssetBrowser.h"
 #include "Game/BuildWorld.h"
 #include "Game/Components.h"
-#include "Game/EditorSession.h"
+#include "Editor/EditorSession.h"
 #include "Game/Picking.h"
 #include "Game/Scene.h"
 #include "Core/Common.h"

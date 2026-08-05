@@ -3,11 +3,11 @@
 
 #include "Core/Engine.h"
 #include "Core/World.h"
-#include "Game/AssetBrowser.h"
-#include "Game/EditorSession.h"
+#include "Editor/AssetBrowser.h"
+#include "Editor/EditorSession.h"
 #include "Game/ExecutionContext.h"
 #include "Game/Systems.h"
-#include "Graphics/ImGuiLayer.h"
+#include "Editor/ImGuiLayer.h"
 #include "Graphics/RenderData.h"
 
 #include <memory>
