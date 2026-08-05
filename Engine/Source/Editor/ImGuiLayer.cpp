@@ -130,9 +130,9 @@ bool ImGuiLayer::WantsMouse() const
     return ImGui::GetIO().WantCaptureMouse;
 }
 
-bool ImGuiLayer::WantsKeyboard() const
+bool ImGuiLayer::WantsTextInput() const
 {
-    return ImGui::GetIO().WantCaptureKeyboard;
+    return ImGui::GetIO().WantTextInput;
 }
 
 bool ImGuiLayer::HandleMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)

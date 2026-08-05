@@ -28,15 +28,20 @@ void InputContext::ClearKeyboard()
 
 FrameContext MakeEditorFrameContext(const FrameContext& hostFrame,
                                     bool viewportHovered,
-                                    bool uiCapturesKeyboard)
+                                    bool uiWantsTextInput)
 {
     FrameContext frame = hostFrame;
+    // One rule for both devices: the scene gets input while the cursor is over
+    // it. Splitting them - mouse by hover, keyboard by ImGui focus - is what
+    // made the keyboard feel broken while the mouse worked.
     if (!viewportHovered)
     {
         frame.input.mouseDeltaX = 0.0f;
         frame.input.mouseDeltaY = 0.0f;
+        frame.input.ClearKeyboard();
     }
-    if (uiCapturesKeyboard)
+    // A live text field is the one place a letter key means a letter.
+    if (uiWantsTextInput)
     {
         frame.input.ClearKeyboard();
     }

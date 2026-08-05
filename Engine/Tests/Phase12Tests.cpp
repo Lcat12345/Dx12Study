@@ -283,12 +283,26 @@ namespace
         host.input.keyDown['W'] = true;
         host.input.keyPressed['V'] = true;
 
-        const FrameContext blocked = MakeEditorFrameContext(host, false, true);
+        // Off the viewport: BOTH devices are silent, keyboard included. The
+        // manual defines the editor camera as driven over the Scene panel, so
+        // hovering the Inspector must not fly the camera.
+        const FrameContext blocked = MakeEditorFrameContext(host, false, false);
         CheckNear(blocked.input.mouseDeltaX, 0.0f, "editor accepted mouse off viewport");
         CheckNear(blocked.input.mouseDeltaY, 0.0f, "editor accepted mouse off viewport");
-        Check(!blocked.input.IsDown('W'), "editor ignored ImGui keyboard capture");
-        Check(!blocked.input.WasPressed('V'), "captured edge leaked into editor frame");
+        Check(!blocked.input.IsDown('W'), "editor accepted keyboard off viewport");
+        Check(!blocked.input.WasPressed('V'), "keyboard edge leaked in off viewport");
 
+        // Over the viewport with a text field live: letters belong to the
+        // field. The mouse still moves the camera, which is what makes this a
+        // narrower gate than the old WantCaptureKeyboard.
+        const FrameContext typing = MakeEditorFrameContext(host, true, true);
+        CheckNear(typing.input.mouseDeltaX, 7.0f, "text input stole the mouse too");
+        Check(!typing.input.IsDown('W'), "camera stole a key from a text field");
+        Check(!typing.input.WasPressed('V'), "keyboard edge leaked while typing");
+
+        // The case that regressed: cursor over the Scene, no text field. ImGui
+        // window focus alone used to clear this and leave WASD dead until the
+        // user clicked a bare pixel.
         const FrameContext editor = MakeEditorFrameContext(host, true, false);
         CheckNear(editor.input.mouseDeltaX, 7.0f, "editor lost viewport mouse input");
         Check(editor.input.IsDown('W'), "editor lost held keyboard state");

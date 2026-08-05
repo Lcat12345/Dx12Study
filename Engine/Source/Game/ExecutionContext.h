@@ -38,11 +38,24 @@ struct FrameContext
 };
 
 // An editor-hosted game only receives devices that the scene viewport owns.
-// These pure transforms are also the contract for the future Player host:
-// Player has no viewport-hover or ImGui-capture concepts to pass in.
+// These pure transforms are also the contract for the Player host, which has
+// no viewport-hover or text-input concepts to pass in.
+//
+// Both devices are gated on HOVER, matching what the manual promises: the
+// editor camera is driven "over the Scene panel". Keyboard used to be gated on
+// ImGui's WantCaptureKeyboard instead, which is a different question - with
+// keyboard navigation enabled that is true whenever ANY ImGui window has
+// focus. Once the panels were docked, clicking the Scene focused an ImGui
+// window and WASD went dead until the user clicked some bare, non-ImGui pixel
+// to blur it.
+//
+// uiWantsTextInput is the narrow case that genuinely conflicts: a live text
+// field, where W and S are letters rather than movement. ImGui's keyboard
+// navigation uses arrows, Tab, Enter and Space, none of which the camera
+// binds, so nav focus alone is not a reason to swallow input.
 FrameContext MakeEditorFrameContext(const FrameContext& hostFrame,
                                     bool viewportHovered,
-                                    bool uiCapturesKeyboard);
+                                    bool uiWantsTextInput);
 FrameContext MakePlayerFrameContext(const FrameContext& hostFrame);
 
 // Time and input whose lifetime begins at Play. Edges are copied per frame

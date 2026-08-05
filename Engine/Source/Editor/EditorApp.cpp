@@ -46,7 +46,7 @@ void EditorApp::OnUpdate(float dt)
     m_overlay->NewFrame();
     const FrameContext hostFrame = CaptureHostFrame(dt);
     const FrameContext frame = MakeEditorFrameContext(
-        hostFrame, m_viewportHovered, m_overlay->WantsKeyboard());
+        hostFrame, m_viewportHovered, m_overlay->WantsTextInput());
 
     if (m_editor.runMode == RunMode::Edit)
     {

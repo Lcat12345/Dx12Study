@@ -28,10 +28,17 @@ public:
     // BEFORE the back buffer transitions to PRESENT.
     void Render(ID3D12GraphicsCommandList* commandList);
 
-    // True when the cursor or keyboard is over the UI, so the game should
-    // not also act on it - otherwise dragging a slider spins the camera.
+    // True when the cursor is over the UI, so the game should not also act on
+    // it - otherwise dragging a slider spins the camera.
     bool WantsMouse() const;
-    bool WantsKeyboard() const;
+
+    // True only while a text field is taking input.
+    //
+    // Deliberately NOT WantCaptureKeyboard: with keyboard navigation enabled
+    // that is true whenever any ImGui window merely has focus, which with
+    // docked panels means "always", and it silently swallowed the editor's
+    // WASD. This asks the narrower question the camera actually cares about.
+    bool WantsTextInput() const;
 
     // Whether imgui.ini already existed when this layer started, i.e. whether
     // a previous run saved a panel arrangement.
