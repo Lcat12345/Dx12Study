@@ -7,16 +7,19 @@
 
 namespace
 {
-    // Slots kept spare in the shader-visible heap beyond what is staged.
+    // Recording-time headroom, for ImGui and nothing else.
     //
-    // The heap may only be replaced at a frame boundary, but descriptors are
-    // allocated at any time - ImGui's backend allocates from inside
-    // RenderDrawData, and loading a scene creates a texture per material and
-    // then draws it in the same frame. Anything allocated after the boundary
-    // has to fit in the heap the frame is already using, and the reserve is
-    // that room. Generous on purpose: a descriptor is 32 bytes, so 256 spare
-    // slots cost 8 KB, and running out is a hard error rather than a slow
-    // frame.
+    // The heap is grown inside RenderFrame, after everything the host loaded
+    // this frame has already been allocated and before a single command is
+    // recorded. So ordinary engine resources - a scene's worth of textures,
+    // an asset preview - never need this room; they are counted before the
+    // growth decision is made.
+    //
+    // What lands after that point is ImGui's backend allocating a descriptor
+    // from inside RenderDrawData when it creates a texture. That is a handful
+    // per frame at most, so 256 is generous, and at 32 bytes a descriptor it
+    // costs 8 KB. Exhausting it is a hard failure in GpuHandle rather than a
+    // silently wrong picture, which is the right way round.
     constexpr UINT kShaderVisibleReserve = 256;
 
     // The most descriptors a shader-visible CBV/SRV/UAV heap may hold. Both

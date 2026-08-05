@@ -389,6 +389,19 @@ engine 쪽도 같은 계약을 따른다. `SceneTextureId()`, `ShadowTextureId()
 `ResourceManager::TextureSrvIndex()`가 주소가 아니라 slot index를 돌려준다. 반면 scene
 pass가 직접 바인딩할 때 쓰는 `TextureSRV()`는 여전히 주소이고, 기록 시점에 resolve된다.
 
+논리 id에는 딸린 조건이 하나 있다. slot 0은 실재하는 slot이고(`ResourceManager`가 처음
+만드는 `#white`), ImGui의 기본 invalid id도 0이다. 그대로 두면 slot 0을 `ImGui::Image()`로
+표시하는 순간 `ImDrawCmd::GetTexID()`의 assert에 걸린다. `imgui.h`가 바로 이 경우를 위해
+안내하는 대로 `imconfig.h`에 다음을 정의했다.
+
+```cpp
+#define ImTextureID_Invalid ((ImTextureID)-1)
+```
+
+이건 backend 패치가 아니라 ImGui가 지정한 설정 지점이다. overlay 테스트가 slot 0을 매
+frame 실제로 그리고, `static_assert`로 이 정의가 사라지면 컴파일이 실패하게 고정했다
+(정의를 주석 처리하면 실제로 컴파일 에러가 나는 것을 확인했다).
+
 **2. `ImGui_ImplDX12_RebindDescriptorHeap()`.** backend가 `SetDescriptorHeaps`로 직접
 바인딩하는 `bd->pd3dSrvDescHeap`과 복사본 `InitInfo.SrvDescriptorHeap`을 새 heap으로
 바꾼다. 논리 id 계약 아래에서는 캐시된 주소가 하나도 없으므로 이것으로 끝이다(계약을

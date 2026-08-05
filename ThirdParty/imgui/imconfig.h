@@ -1,4 +1,4 @@
-//-----------------------------------------------------------------------------
+﻿//-----------------------------------------------------------------------------
 // DEAR IMGUI COMPILE-TIME OPTIONS
 // Runtime options (clipboard callbacks, enabling various features, etc.) can generally be set via the ImGuiIO structure.
 // You can use ImGui::SetAllocatorFunctions() before calling ImGui::CreateContext() to rewire memory allocation functions.
@@ -27,6 +27,15 @@
 //#define IMGUI_API __declspec(dllexport)                   // MSVC Windows: DLL export
 //#define IMGUI_API __declspec(dllimport)                   // MSVC Windows: DLL import
 //#define IMGUI_API __attribute__((visibility("default")))  // GCC/Clang: override visibility when set is hidden
+
+//---- [Dx12Engine] Make slot 0 a usable texture id.
+// This backend passes descriptor SLOT INDICES as ImTextureID and resolves them
+// at draw time (see SrvDescriptorResolveFn in imgui_impl_dx12.h). Index 0 is a
+// perfectly real slot - it is the ResourceManager's default #white texture -
+// but the stock invalid id is also 0, so showing that slot would trip the
+// assert in ImDrawCmd::GetTexID(). Moving "invalid" to -1 is the escape hatch
+// imgui.h itself points at for exactly this case.
+#define ImTextureID_Invalid ((ImTextureID)-1)
 
 //---- Don't define obsolete functions/enums/behaviors. Consider enabling from time to time after updating to clean your code of obsolete function/names.
 //#define IMGUI_DISABLE_OBSOLETE_FUNCTIONS

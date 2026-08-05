@@ -1792,9 +1792,23 @@ namespace
 
             // One overlay frame: build a window that shows an engine texture
             // through ImGui, then let the renderer record both passes.
+            // Slot 0 is a real texture - the ResourceManager creates #white
+            // first - and it is also the value of a stock ImTextureID_Invalid.
+            // Drawing it every frame is what keeps imconfig.h's override
+            // honest; without that override this trips an assert inside
+            // ImDrawCmd::GetTexID().
+            static_assert(ImTextureID_Invalid != (ImTextureID)0,
+                          "imconfig.h must move ImTextureID_Invalid off 0, or "
+                          "descriptor slot 0 cannot be shown through ImGui");
+            const UINT whiteSlot = resources.TextureSrvIndex(resources.DefaultTexture());
+            Check(whiteSlot == 0,
+                  "the default texture was not slot 0, so this fixture no "
+                  "longer covers the invalid-id collision");
+
             auto overlayFrame = [&]() {
                 overlay.NewFrame();
                 ImGui::Begin("growth");
+                ImGui::Image(ImTextureID(whiteSlot), ImVec2(64.0f, 64.0f));
                 ImGui::Image(ImTextureID(renderer.SceneTextureId()),
                              ImVec2(64.0f, 64.0f));
                 ImGui::Image(ImTextureID(renderer.ShadowTextureId()),
