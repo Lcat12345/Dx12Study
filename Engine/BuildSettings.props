@@ -40,6 +40,11 @@
       <OutputName>Basic.VS.cso</OutputName>
     </RuntimeShader>
     <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\Basic.hlsl">
+      <EntryPoint>VSInstanced</EntryPoint>
+      <Profile>vs_5_0</Profile>
+      <OutputName>Basic.Instanced.VS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\Basic.hlsl">
       <EntryPoint>PSMain</EntryPoint>
       <Profile>ps_5_0</Profile>
       <OutputName>Basic.PS.cso</OutputName>
@@ -58,6 +63,11 @@
       <EntryPoint>VSMain</EntryPoint>
       <Profile>vs_5_0</Profile>
       <OutputName>ShadowDepth.VS.cso</OutputName>
+    </RuntimeShader>
+    <RuntimeShader Include="$(MSBuildThisFileDirectory)Shaders\ShadowDepth.hlsl">
+      <EntryPoint>VSInstanced</EntryPoint>
+      <Profile>vs_5_0</Profile>
+      <OutputName>ShadowDepth.Instanced.VS.cso</OutputName>
     </RuntimeShader>
     <RuntimeAsset Include="$(MSBuildThisFileDirectory)Assets\**\*" />
   </ItemGroup>

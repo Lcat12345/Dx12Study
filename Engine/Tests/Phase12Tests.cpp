@@ -1225,6 +1225,48 @@ namespace
             renderer.RenderFrame(camera, lighting, items,
                                  Renderer::SceneOutput::SwapChain);
 
+            // Opaque keys differ by material value and submesh range, while
+            // invalid/default texture handles normalize to the same binding.
+            // Non-uniform scale exercises the per-instance inverse-transpose
+            // stream in both the main and shadow VS variants.
+            const MeshHandle instancedMesh =
+                renderer.Resources().ResolveMesh(L"#pyramid");
+            std::vector<DrawItem> opaqueItems(66);
+            for (size_t index = 0; index < opaqueItems.size(); ++index)
+            {
+                DrawItem& item = opaqueItems[index];
+                item.mesh = instancedMesh;
+                item.indexCount = 1;
+                item.layer = RenderLayer::Opaque;
+                DirectX::XMStoreFloat4x4(
+                    &item.world,
+                    DirectX::XMMatrixScaling(0.5f, 1.25f, 2.0f) *
+                    DirectX::XMMatrixTranslation(float(index) * 0.01f,
+                                                 0.0f, 2.0f));
+            }
+            opaqueItems[63].material.texture =
+                renderer.Resources().DefaultTexture();
+            opaqueItems[63].material.normalTexture =
+                renderer.Resources().DefaultNormalTexture();
+            opaqueItems[64].material.shininess = 17.0f;
+            opaqueItems[65].indexOffset = 1;
+
+            lighting.shadowsEnabled = false;
+            renderer.RenderFrame(camera, lighting, opaqueItems,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            Check(renderer.LastFrameStats().drawCalls == 3,
+                  "opaque main pass did not collapse 66 items into three batches");
+            Check(renderer.LastFrameStats().rootCbvBinds == 4,
+                  "opaque main pass did not bind b0 once per batch");
+
+            lighting.shadowsEnabled = true;
+            renderer.RenderFrame(camera, lighting, opaqueItems,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            Check(renderer.LastFrameStats().drawCalls == 6,
+                  "main and shadow did not reuse the same three opaque batches");
+            Check(renderer.LastFrameStats().rootCbvBinds == 5,
+                  "instanced shadow path performed per-instance CBV binds");
+
             // Grow through every M1 acceptance boundary. One-index draws keep
             // the WARP test cheap while still exercising all CBV addresses.
             const MeshHandle mesh = renderer.Resources().ResolveMesh(L"#cube");

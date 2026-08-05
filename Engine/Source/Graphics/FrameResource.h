@@ -62,6 +62,17 @@ struct PassConstants // b1 - written once per frame
     float               shadowBias = 0.0f;
     float               shadowStrength = 0.0f;
 };
+
+// Slot-1 vertex stream for opaque instancing. Unlike a constant buffer this
+// is tightly packed: the input assembler advances one record per instance.
+// Material data remains in b0 and is bound once for the whole batch.
+struct InstanceData
+{
+    DirectX::XMFLOAT4X4 world;
+    DirectX::XMFLOAT4X4 worldInvTranspose;
+};
+static_assert(sizeof(InstanceData) == 128,
+              "InstanceData must match the two four-row matrices in HLSL");
 static_assert(sizeof(PassConstants) == 304,
               "PassConstants C++ layout must match the three scene shaders");
 
@@ -90,6 +101,10 @@ struct FrameResource
     Microsoft::WRL::ComPtr<ID3D12Resource>         objectCB;
     uint8_t*                                       objectCBMapped = nullptr;
     UINT                                           objectCapacity = 0;
+    Microsoft::WRL::ComPtr<ID3D12Resource>         instanceBuffer;
+    uint8_t*                                       instanceBufferMapped = nullptr;
+    UINT                                           instanceCapacity = 0;
+    D3D12_VERTEX_BUFFER_VIEW                       instanceBufferView = {};
     Microsoft::WRL::ComPtr<ID3D12Resource>         passCB;
     uint8_t*                                       passCBMapped   = nullptr;
     // Fence value signalled when the GPU finishes the frame that used this

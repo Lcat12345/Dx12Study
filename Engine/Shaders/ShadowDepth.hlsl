@@ -50,9 +50,30 @@ struct VSInput
     float4 tangent  : TANGENT;
 };
 
+struct InstanceInput
+{
+    float4 world0 : INSTANCEWORLD0;
+    float4 world1 : INSTANCEWORLD1;
+    float4 world2 : INSTANCEWORLD2;
+    float4 world3 : INSTANCEWORLD3;
+    float4 worldInvTranspose0 : INSTANCEWORLDINVTRANSPOSE0;
+    float4 worldInvTranspose1 : INSTANCEWORLDINVTRANSPOSE1;
+    float4 worldInvTranspose2 : INSTANCEWORLDINVTRANSPOSE2;
+    float4 worldInvTranspose3 : INSTANCEWORLDINVTRANSPOSE3;
+};
+
 // SV_Position only - there is nothing downstream to interpolate for.
 float4 VSMain(VSInput input) : SV_Position
 {
     const float4 positionW = mul(float4(input.position, 1.0), gWorld);
+    return mul(positionW, gShadowViewProj);
+}
+
+
+float4 VSInstanced(VSInput input, InstanceInput instance) : SV_Position
+{
+    const float4x4 world = float4x4(
+        instance.world0, instance.world1, instance.world2, instance.world3);
+    const float4 positionW = mul(float4(input.position, 1.0), world);
     return mul(positionW, gShadowViewProj);
 }

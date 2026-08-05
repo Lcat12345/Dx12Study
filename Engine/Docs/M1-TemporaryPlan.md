@@ -171,14 +171,14 @@ DrawItem으로 통과하고, 적 253마리는 257 DrawItem으로 최초 실패�
 
 ### 5. Opaque 인스턴싱
 
-- [ ] batch key를 mesh, submesh range, texture/normal texture, material 값으로 정의한다.
-- [ ] main과 shadow가 공유할 per-frame instance upload buffer를 추가한다.
-- [ ] transform과 inverse-transpose를 per-instance vertex stream 또는 structured input으로
+- [x] batch key를 mesh, submesh range, texture/normal texture, material 값으로 정의한다.
+- [x] main과 shadow가 공유할 per-frame instance upload buffer를 추가한다.
+- [x] transform과 inverse-transpose를 per-instance vertex stream 또는 structured input으로
   전달한다. 머티리얼은 batch당 한 번 바인딩한다.
-- [ ] `PsoRole` 테이블을 sample/role/draw-variant 축으로 확장한다.
-- [ ] Basic과 ShadowDepth에 instanced VS variant를 추가한다.
-- [ ] opaque singleton은 기존 경로 또는 1-instance batch 중 측정상 나은 쪽을 쓴다.
-- [ ] transparent와 skybox는 기존 경로를 유지한다.
+- [x] `PsoRole` 테이블을 sample/role/draw-variant 축으로 확장한다.
+- [x] Basic과 ShadowDepth에 instanced VS variant를 추가한다.
+- [x] opaque singleton은 기존 경로 또는 1-instance batch 중 측정상 나은 쪽을 쓴다.
+- [x] transparent와 skybox는 기존 경로를 유지한다.
 
 종료 조건:
 
@@ -186,6 +186,24 @@ DrawItem으로 통과하고, 적 253마리는 257 DrawItem으로 최초 실패�
 - 비균일 scale의 normal과 shadow 위치가 기존 경로와 일치한다.
 - draw call 감소와 root CBV/descriptor bind 감소를 별도 counter로 확인한다.
 - 인스턴싱 단독 적용 전후 성능 행을 남긴다.
+
+#### 인스턴싱 단독 결과
+
+2026-08-05, Release, 1280×720, MSAA 4x, VSync off,
+NVIDIA GeForce RTX 5070 Ti에서 기준선과 같은 120 frame warm-up 및 600 frame 측정으로
+기록했다. 원본 행은 [M1-Instancing.tsv](M1-Instancing.tsv)에 보존한다. opaque singleton도
+동일한 1-instance batch 경로를 사용해 드로우 경로와 PSO 전환을 단순하게 유지했다.
+
+| 적 N | median/p95/max (ms) | draw | root CBV | main/shadow | DrawItem | Object CB | SRV |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 100 | 0.277 / 2.623 / 4.201 | 11 | 9 | 104 / 104 | 104 | 104 / 256 | 7 / 64 |
+| 500 | 0.373 / 2.576 / 4.096 | 11 | 9 | 504 / 504 | 504 | 504 / 512 | 7 / 64 |
+| 1000 | 0.611 / 2.961 / 3.994 | 11 | 9 | 1004 / 1004 | 1004 | 1004 / 1024 | 7 / 64 |
+| 2000 | 1.037 / 3.134 / 4.114 | 11 | 9 | 2004 / 2004 | 2004 | 2004 / 2048 | 7 / 64 |
+
+WARP 회귀 fixture에서 같은 mesh/material 64개와 material/range가 다른 2개를 main과
+shadow 각각 정확히 3 batch로 제출했다. 비균일 scale의 transform과 inverse-transpose를
+두 pass가 같은 instance buffer에서 읽었고 Debug Layer message count는 0이었다.
 
 ### 6. Main/Shadow 프러스텀 컬링
 

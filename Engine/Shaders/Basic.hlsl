@@ -57,6 +57,18 @@ struct VSInput
     float4 tangent  : TANGENT;  // xyz direction, w bitangent handedness
 };
 
+struct InstanceInput
+{
+    float4 world0 : INSTANCEWORLD0;
+    float4 world1 : INSTANCEWORLD1;
+    float4 world2 : INSTANCEWORLD2;
+    float4 world3 : INSTANCEWORLD3;
+    float4 worldInvTranspose0 : INSTANCEWORLDINVTRANSPOSE0;
+    float4 worldInvTranspose1 : INSTANCEWORLDINVTRANSPOSE1;
+    float4 worldInvTranspose2 : INSTANCEWORLDINVTRANSPOSE2;
+    float4 worldInvTranspose3 : INSTANCEWORLDINVTRANSPOSE3;
+};
+
 struct PSInput
 {
     float4 positionH : SV_Position; // clip space, for the rasterizer
@@ -67,20 +79,21 @@ struct PSInput
     float4 positionLightH : TEXCOORD1; // light clip space for shadow lookup
 };
 
-PSInput VSMain(VSInput input)
+PSInput TransformVertex(VSInput input, float4x4 world,
+                        float4x4 worldInvTranspose)
 {
     PSInput output;
 
     // Lighting happens in WORLD space, so the pixel shader needs the world
     // position and normal - not just the final clip-space position.
-    const float4 positionW = mul(float4(input.position, 1.0), gWorld);
+    const float4 positionW = mul(float4(input.position, 1.0), world);
     output.positionW = positionW.xyz;
     output.positionH = mul(positionW, gViewProj);
     output.positionLightH = mul(positionW, gShadowViewProj);
 
     // Normals use the inverse transpose, NOT the world matrix (see C++).
     // Cast to 3x3: normals are directions, translation must not apply.
-    output.normalW = mul(input.normal, (float3x3)gWorldInvTranspose);
+    output.normalW = mul(input.normal, (float3x3)worldInvTranspose);
 
     // The TANGENT uses gWorld, not the inverse transpose - the opposite of
     // the normal, and not a typo.
@@ -102,12 +115,27 @@ PSInput VSMain(VSInput input)
     // determinant() is unaffected by the row/col-major transpose already
     // baked into gWorld - det(A) == det(A^T) - so this reads the transform's
     // true handedness regardless of that storage detail.
-    const float handedness = determinant((float3x3)gWorld) < 0.0 ? -1.0 : 1.0;
-    output.tangentW = float4(mul(input.tangent.xyz, (float3x3)gWorld),
+    const float handedness = determinant((float3x3)world) < 0.0 ? -1.0 : 1.0;
+    output.tangentW = float4(mul(input.tangent.xyz, (float3x3)world),
                              input.tangent.w * handedness);
 
     output.uv = input.uv;
     return output;
+}
+
+PSInput VSMain(VSInput input)
+{
+    return TransformVertex(input, gWorld, gWorldInvTranspose);
+}
+
+PSInput VSInstanced(VSInput input, InstanceInput instance)
+{
+    const float4x4 world = float4x4(
+        instance.world0, instance.world1, instance.world2, instance.world3);
+    const float4x4 worldInvTranspose = float4x4(
+        instance.worldInvTranspose0, instance.worldInvTranspose1,
+        instance.worldInvTranspose2, instance.worldInvTranspose3);
+    return TransformVertex(input, world, worldInvTranspose);
 }
 
 // Percentage-closer filtering: each comparison asks whether this receiver

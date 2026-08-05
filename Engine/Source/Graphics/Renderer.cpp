@@ -5,10 +5,12 @@
 
 #include <DirectXMath.h>
 #include <algorithm>
+#include <bit>
 #include <cfloat>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <tuple>
 
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
@@ -115,6 +117,15 @@ Renderer::~Renderer()
     m_device.WaitForGpu();
 }
 
+bool Renderer::OpaqueBatchKey::operator<(const OpaqueBatchKey& other) const
+{
+    return std::tie(mesh, indexOffset, indexCount, texture, normalTexture,
+                    blendMode, materialBits) <
+           std::tie(other.mesh, other.indexOffset, other.indexCount,
+                    other.texture, other.normalTexture, other.blendMode,
+                    other.materialBits);
+}
+
 // Allocator = command memory, list = recorder, queue = where lists go.
 void Renderer::CreateCommandObjects()
 {
@@ -185,8 +196,15 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
     // An allocation failure therefore leaves all old resources and pointers
     // intact instead of producing a ring with mixed capacities.
     ComPtr<ID3D12Resource> replacements[kFramesInFlight];
+    ComPtr<ID3D12Resource> instanceReplacements[kFramesInFlight];
     uint8_t* mapped[kFramesInFlight] = {};
+    uint8_t* instanceMapped[kFramesInFlight] = {};
     D3D12_RANGE readRange = {};
+
+    if (capacity > (std::numeric_limits<UINT>::max)() / sizeof(InstanceData))
+    {
+        throw std::length_error("instance vertex buffer capacity overflow");
+    }
 
     for (UINT index = 0; index < kFramesInFlight; ++index)
     {
@@ -197,6 +215,14 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
                           0, &readRange,
                           reinterpret_cast<void**>(&mapped[index])),
                       "ObjectCB Map");
+
+        instanceReplacements[index] = CreateUploadBuffer(
+            m_device.Device(), nullptr, UINT64(sizeof(InstanceData)) * capacity,
+            "CreateCommittedResource(InstanceBuffer)");
+        ThrowIfFailed(instanceReplacements[index]->Map(
+                          0, &readRange,
+                          reinterpret_cast<void**>(&instanceMapped[index])),
+                      "InstanceBuffer Map");
     }
 
     for (UINT index = 0; index < kFramesInFlight; ++index)
@@ -206,9 +232,20 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
         {
             frame.objectCB->Unmap(0, nullptr);
         }
+        if (frame.instanceBuffer && frame.instanceBufferMapped)
+        {
+            frame.instanceBuffer->Unmap(0, nullptr);
+        }
         frame.objectCB = std::move(replacements[index]);
         frame.objectCBMapped = mapped[index];
         frame.objectCapacity = capacity;
+        frame.instanceBuffer = std::move(instanceReplacements[index]);
+        frame.instanceBufferMapped = instanceMapped[index];
+        frame.instanceCapacity = capacity;
+        frame.instanceBufferView.BufferLocation =
+            frame.instanceBuffer->GetGPUVirtualAddress();
+        frame.instanceBufferView.SizeInBytes = UINT(sizeof(InstanceData)) * capacity;
+        frame.instanceBufferView.StrideInBytes = sizeof(InstanceData);
     }
 
     m_objectCapacity = capacity;
@@ -333,7 +370,7 @@ void Renderer::CreateRootSignature()
 // mismatch is a Debug Layer error or a silently skipped draw. With one
 // template that is one place to be right instead of one per pass.
 D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate(
-    UINT sampleCount, UINT sampleQuality) const
+    UINT sampleCount, UINT sampleQuality, DrawVariant variant) const
 {
     // Offsets must match struct Vertex in Mesh.h exactly. Mismatches produce
     // no error - just a wrong picture.
@@ -346,6 +383,36 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate(
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
         { "TANGENT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
           D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+    };
+    static const D3D12_INPUT_ELEMENT_DESC kInstancedInputLayout[] = {
+        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0,  0,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "NORMAL",   0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT,    0, 24,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "TANGENT",  0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0, 32,
+          D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
+        { "INSTANCEWORLD", 0, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 0,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLD", 1, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 16,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLD", 2, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 32,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLD", 3, DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 48,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLDINVTRANSPOSE", 0,
+          DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 64,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLDINVTRANSPOSE", 1,
+          DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 80,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLDINVTRANSPOSE", 2,
+          DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 96,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
+        { "INSTANCEWORLDINVTRANSPOSE", 3,
+          DXGI_FORMAT_R32G32B32A32_FLOAT, 1, 112,
+          D3D12_INPUT_CLASSIFICATION_PER_INSTANCE_DATA, 1 },
     };
 
     D3D12_GRAPHICS_PIPELINE_STATE_DESC desc = {};
@@ -372,7 +439,10 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate(
     desc.DepthStencilState.DepthFunc      = D3D12_COMPARISON_FUNC_LESS;
     desc.DepthStencilState.StencilEnable  = FALSE;
 
-    desc.InputLayout           = { kInputLayout, _countof(kInputLayout) };
+    desc.InputLayout = variant == DrawVariant::Instanced
+        ? D3D12_INPUT_LAYOUT_DESC{ kInstancedInputLayout,
+                                  _countof(kInstancedInputLayout) }
+        : D3D12_INPUT_LAYOUT_DESC{ kInputLayout, _countof(kInputLayout) };
     desc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
 
     // The scene target's shape, not the window's.
@@ -507,7 +577,9 @@ void Renderer::CreatePipelineStates()
     // Load once, then bake the same shader programs into immutable 1x and
     // 4x PSOs. Sample count/quality is pipeline state in D3D12, not a dynamic
     // setting that can be changed at draw time.
-    const ShaderBytecode& vs    = m_resources.LoadShader(L"Basic.VS.cso");
+    const ShaderBytecode& vs = m_resources.LoadShader(L"Basic.VS.cso");
+    const ShaderBytecode& instancedVs =
+        m_resources.LoadShader(L"Basic.Instanced.VS.cso");
     const ShaderBytecode& ps    = m_resources.LoadShader(L"Basic.PS.cso");
     const ShaderBytecode& skyVs = m_resources.LoadShader(L"Skybox.VS.cso");
     const ShaderBytecode& skyPs = m_resources.LoadShader(L"Skybox.PS.cso");
@@ -515,15 +587,29 @@ void Renderer::CreatePipelineStates()
     auto createSceneVariants = [&](size_t variantIndex,
                                    UINT sampleCount, UINT sampleQuality) {
         D3D12_GRAPHICS_PIPELINE_STATE_DESC opaque =
-            SceneShadedPsoTemplate(sampleCount, sampleQuality);
+            SceneShadedPsoTemplate(sampleCount, sampleQuality,
+                                   DrawVariant::Singleton);
         opaque.VS = { vs.Data(), vs.Size() };
         opaque.PS = { ps.Data(), ps.Size() };
 
         ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                           &opaque,
+                           IID_PPV_ARGS(&m_pipelineStates[variantIndex]
+                                                       [size_t(PsoRole::Opaque)]
+                                                       [size_t(DrawVariant::Singleton)])),
+                       "CreateGraphicsPipelineState(Opaque)");
+
+        D3D12_GRAPHICS_PIPELINE_STATE_DESC opaqueInstanced =
+            SceneShadedPsoTemplate(sampleCount, sampleQuality,
+                                   DrawVariant::Instanced);
+        opaqueInstanced.VS = { instancedVs.Data(), instancedVs.Size() };
+        opaqueInstanced.PS = { ps.Data(), ps.Size() };
+        ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                          &opaqueInstanced,
                           IID_PPV_ARGS(&m_pipelineStates[variantIndex]
-                                                       [size_t(PsoRole::Opaque)])),
-                      "CreateGraphicsPipelineState(Opaque)");
+                                                       [size_t(PsoRole::Opaque)]
+                                                       [size_t(DrawVariant::Instanced)])),
+                      "CreateGraphicsPipelineState(OpaqueInstanced)");
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC transparent = opaque;
         D3D12_RENDER_TARGET_BLEND_DESC& blend = transparent.BlendState.RenderTarget[0];
@@ -538,12 +624,14 @@ void Renderer::CreatePipelineStates()
 
         ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                           &transparent,
-                          IID_PPV_ARGS(&m_pipelineStates[variantIndex]
-                                                       [size_t(PsoRole::Transparent)])),
+                           IID_PPV_ARGS(&m_pipelineStates[variantIndex]
+                                                       [size_t(PsoRole::Transparent)]
+                                                       [size_t(DrawVariant::Singleton)])),
                       "CreateGraphicsPipelineState(Transparent)");
 
         D3D12_GRAPHICS_PIPELINE_STATE_DESC skybox =
-            SceneShadedPsoTemplate(sampleCount, sampleQuality);
+            SceneShadedPsoTemplate(sampleCount, sampleQuality,
+                                   DrawVariant::Singleton);
         skybox.VS = { skyVs.Data(), skyVs.Size() };
         skybox.PS = { skyPs.Data(), skyPs.Size() };
         // The camera sees the cube's back faces. Its forced far-plane depth
@@ -554,8 +642,9 @@ void Renderer::CreatePipelineStates()
 
         ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                           &skybox,
-                          IID_PPV_ARGS(&m_pipelineStates[variantIndex]
-                                                       [size_t(PsoRole::Skybox)])),
+                           IID_PPV_ARGS(&m_pipelineStates[variantIndex]
+                                                       [size_t(PsoRole::Skybox)]
+                                                       [size_t(DrawVariant::Singleton)])),
                       "CreateGraphicsPipelineState(Skybox)");
     };
 
@@ -567,8 +656,11 @@ void Renderer::CreatePipelineStates()
 
     // --- shadow depth: the template with the COLOUR half removed ---
     const ShaderBytecode& shadowVs = m_resources.LoadShader(L"ShadowDepth.VS.cso");
+    const ShaderBytecode& shadowInstancedVs =
+        m_resources.LoadShader(L"ShadowDepth.Instanced.VS.cso");
 
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow = SceneShadedPsoTemplate(1, 0);
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadow = SceneShadedPsoTemplate(
+        1, 0, DrawVariant::Singleton);
     shadow.VS = { shadowVs.Data(), shadowVs.Size() };
 
     // NO pixel shader. Depth is written by the rasterizer whether or not one
@@ -591,9 +683,28 @@ void Renderer::CreatePipelineStates()
 
     ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
                       &shadow,
-                      IID_PPV_ARGS(&m_pipelineStates[0]
-                                                   [size_t(PsoRole::ShadowDepth)])),
+                       IID_PPV_ARGS(&m_pipelineStates[0]
+                                                    [size_t(PsoRole::ShadowDepth)]
+                                                    [size_t(DrawVariant::Singleton)])),
                   "CreateGraphicsPipelineState(ShadowDepth)");
+
+    D3D12_GRAPHICS_PIPELINE_STATE_DESC shadowInstanced =
+        SceneShadedPsoTemplate(1, 0, DrawVariant::Instanced);
+    shadowInstanced.VS = {
+        shadowInstancedVs.Data(), shadowInstancedVs.Size()
+    };
+    shadowInstanced.PS = {};
+    shadowInstanced.NumRenderTargets = 0;
+    shadowInstanced.RTVFormats[0] = DXGI_FORMAT_UNKNOWN;
+    shadowInstanced.RasterizerState.DepthBias = kShadowRasterDepthBias;
+    shadowInstanced.RasterizerState.SlopeScaledDepthBias =
+        kShadowRasterSlopeScaledBias;
+    ThrowIfFailed(m_device.Device()->CreateGraphicsPipelineState(
+                      &shadowInstanced,
+                      IID_PPV_ARGS(&m_pipelineStates[0]
+                                                   [size_t(PsoRole::ShadowDepth)]
+                                                   [size_t(DrawVariant::Instanced)])),
+                  "CreateGraphicsPipelineState(ShadowDepthInstanced)");
 
     m_skyboxMesh = m_resources.ResolveMesh(L"#cube");
 }
@@ -779,18 +890,43 @@ void Renderer::UpdateObjectConstants(FrameResource& frame,
     }
 }
 
+void Renderer::UpdateInstanceData(FrameResource& frame,
+                                  const std::vector<DrawItem>& items,
+                                  const DrawQueue& instanceOrder)
+{
+    if (instanceOrder.size() > frame.instanceCapacity)
+    {
+        throw std::logic_error(
+            "instance vertex buffer growth was not applied at the frame boundary");
+    }
+
+    for (size_t instanceIndex = 0; instanceIndex < instanceOrder.size();
+         ++instanceIndex)
+    {
+        const DrawItem& item = items[instanceOrder[instanceIndex]];
+        const XMMATRIX world = XMLoadFloat4x4(&item.world);
+
+        InstanceData data;
+        data.world = item.world;
+        XMStoreFloat4x4(&data.worldInvTranspose,
+                        XMMatrixTranspose(XMMatrixInverse(nullptr, world)));
+        memcpy(frame.instanceBufferMapped + instanceIndex * sizeof(InstanceData),
+               &data, sizeof(data));
+    }
+}
+
 // State every geometry pass into the scene target needs. Extracted so that
 // adding a pass is choosing a role, not copying six bind calls that must
 // stay in sync.
 void Renderer::BindScenePass(FrameResource& frame, const SceneAttachments& target,
-                             PsoRole role)
+                             PsoRole role, DrawVariant variant)
 {
     // Command lists are stateless after Reset: root signature, PSO,
     // viewport/scissor, topology and buffers are set every frame.
     m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
     const size_t sampleVariant = m_msaaEnabled ? 1u : 0u;
     m_commandList->SetPipelineState(
-        m_pipelineStates[sampleVariant][size_t(role)].Get());
+        m_pipelineStates[sampleVariant][size_t(role)][size_t(variant)].Get());
 
     // Bound ONCE for the whole frame - the payoff of splitting the constant
     // buffers by update frequency.
@@ -879,7 +1015,85 @@ void Renderer::BuildDrawQueues(const CameraView& camera,
     std::stable_sort(outTransparent.begin(), outTransparent.end(),
                      [&](size_t left, size_t right) {
                          return cameraDepth(left) > cameraDepth(right);
+                      });
+}
+
+void Renderer::BuildOpaqueBatches(const std::vector<DrawItem>& items,
+                                  const DrawQueue& opaqueItems,
+                                  DrawQueue& outInstanceOrder,
+                                  std::vector<OpaqueBatch>& outBatches) const
+{
+    struct KeyedItem
+    {
+        OpaqueBatchKey key;
+        size_t itemIndex = 0;
+    };
+
+    auto makeKey = [&](size_t itemIndex) {
+        const DrawItem& item = items[itemIndex];
+        const Mesh& mesh = m_resources.GetMesh(item.mesh);
+        const TextureHandle texture = item.material.texture.IsValid()
+                                    ? item.material.texture
+                                    : m_resources.DefaultTexture();
+        const TextureHandle normalTexture = item.material.normalTexture.IsValid()
+                                          ? item.material.normalTexture
+                                          : m_resources.DefaultNormalTexture();
+
+        OpaqueBatchKey key;
+        key.mesh = item.mesh.index;
+        key.indexOffset = item.indexOffset;
+        key.indexCount = item.indexCount != 0 ? item.indexCount : mesh.indexCount;
+        key.texture = texture.index;
+        key.normalTexture = normalTexture.index;
+        key.blendMode = static_cast<uint32_t>(item.material.blendMode);
+        const float values[] = {
+            item.material.diffuseAlbedo.x, item.material.diffuseAlbedo.y,
+            item.material.diffuseAlbedo.z, item.material.diffuseAlbedo.w,
+            item.material.specularColor.x, item.material.specularColor.y,
+            item.material.specularColor.z, item.material.shininess,
+            item.material.normalStrength
+        };
+        for (size_t index = 0; index < key.materialBits.size(); ++index)
+        {
+            key.materialBits[index] = std::bit_cast<uint32_t>(values[index]);
+        }
+        return key;
+    };
+
+    std::vector<KeyedItem> keyedItems;
+    keyedItems.reserve(opaqueItems.size());
+    for (const size_t itemIndex : opaqueItems)
+    {
+        keyedItems.push_back({ makeKey(itemIndex), itemIndex });
+    }
+    std::stable_sort(keyedItems.begin(), keyedItems.end(),
+                     [](const KeyedItem& left, const KeyedItem& right) {
+                         return left.key < right.key;
                      });
+
+    outInstanceOrder.clear();
+    outBatches.clear();
+    outInstanceOrder.reserve(keyedItems.size());
+    outBatches.reserve(keyedItems.size());
+
+    for (const KeyedItem& keyed : keyedItems)
+    {
+        const UINT instanceIndex = static_cast<UINT>(outInstanceOrder.size());
+        outInstanceOrder.push_back(keyed.itemIndex);
+
+        const bool startsBatch = outBatches.empty() ||
+            (outBatches.back().key < keyed.key) ||
+            (keyed.key < outBatches.back().key);
+        if (startsBatch)
+        {
+            outBatches.push_back({ keyed.key, keyed.itemIndex,
+                                   instanceIndex, 1 });
+        }
+        else
+        {
+            ++outBatches.back().instanceCount;
+        }
+    }
 }
 
 // One draw per item, with its per-object constants and texture.
@@ -941,7 +1155,7 @@ void Renderer::DrawItems(FrameResource& frame, const std::vector<DrawItem>& item
 // pass reads this map and has to find it already finished.
 void Renderer::DrawShadowDepthPass(FrameResource& frame,
                                    const std::vector<DrawItem>& items,
-                                   const DrawQueue& opaqueItems)
+                                   const std::vector<OpaqueBatch>& opaqueBatches)
 {
     // Back to writable. Skipped on the very first frame because DepthTarget
     // creates its resource already in DEPTH_WRITE - transitioning FROM a
@@ -979,7 +1193,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // Clearing to 1.0 (far) is the honest picture for "nothing to cast a
     // shadow": every texel reads as the far plane, same as a real pass over
     // an empty frustum would produce.
-    if (!m_shadowCastersExist || opaqueItems.empty())
+    if (!m_shadowCastersExist || opaqueBatches.empty())
     {
         D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
             m_shadowMap->Resource(),
@@ -996,7 +1210,8 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // is no pixel shader to sample them.
     m_commandList->SetGraphicsRootSignature(m_sceneRootSignature.Get());
     m_commandList->SetPipelineState(
-        m_pipelineStates[0][size_t(PsoRole::ShadowDepth)].Get());
+        m_pipelineStates[0][size_t(PsoRole::ShadowDepth)]
+                           [size_t(DrawVariant::Instanced)].Get());
     m_commandList->SetGraphicsRootConstantBufferView(
         1, frame.passCB->GetGPUVirtualAddress());
     ++m_lastFrameStats.rootCbvBinds;
@@ -1010,25 +1225,19 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // Every opaque item is a caster. Alpha-blended geometry is deliberately
     // absent: the depth-only shader cannot represent partial coverage and
     // would otherwise stamp a solid silhouette into the map.
-    const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase = frame.objectCB->GetGPUVirtualAddress();
-    for (const size_t itemIndex : opaqueItems)
+    for (const OpaqueBatch& batch : opaqueBatches)
     {
-        const DrawItem& item = items[itemIndex];
+        const DrawItem& item = items[batch.representativeItem];
         const Mesh&     mesh = m_resources.GetMesh(item.mesh);
 
-        // The SAME object constant buffer the main pass uses, at the same
-        // slot - the shadow pass needs the world matrix and nothing else, so
-        // there is no second upload and no chance of the two passes drawing
-        // the object in two different places.
-        m_commandList->SetGraphicsRootConstantBufferView(
-            0, objectCBBase + UINT64(itemIndex) * kObjectCBSize);
-        ++m_lastFrameStats.rootCbvBinds;
-
-        m_commandList->IASetVertexBuffers(0, 1, &mesh.vbv);
+        const D3D12_VERTEX_BUFFER_VIEW buffers[] = {
+            mesh.vbv, frame.instanceBufferView
+        };
+        m_commandList->IASetVertexBuffers(0, _countof(buffers), buffers);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
         m_commandList->DrawIndexedInstanced(
-            item.indexCount != 0 ? item.indexCount : mesh.indexCount,
-            1, item.indexOffset, 0, 0);
+            batch.key.indexCount, batch.instanceCount,
+            batch.key.indexOffset, 0, batch.firstInstance);
         ++m_lastFrameStats.drawCalls;
     }
 
@@ -1045,7 +1254,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
 void Renderer::DrawOpaquePass(FrameResource& frame,
                               const SceneAttachments& target,
                               const std::vector<DrawItem>& items,
-                              const DrawQueue& opaqueItems)
+                              const std::vector<OpaqueBatch>& opaqueBatches)
 {
     m_commandList->OMSetRenderTargets(1, &target.rtv, FALSE, &target.dsv);
     m_commandList->ClearRenderTargetView(target.rtv, kSceneClearColor,
@@ -1055,8 +1264,36 @@ void Renderer::DrawOpaquePass(FrameResource& frame,
     m_commandList->ClearDepthStencilView(target.dsv, D3D12_CLEAR_FLAG_DEPTH,
                                          1.0f, 0, 0, nullptr);
 
-    BindScenePass(frame, target, PsoRole::Opaque);
-    DrawItems(frame, items, opaqueItems);
+    BindScenePass(frame, target, PsoRole::Opaque, DrawVariant::Instanced);
+
+    const D3D12_GPU_VIRTUAL_ADDRESS objectCBBase =
+        frame.objectCB->GetGPUVirtualAddress();
+    for (const OpaqueBatch& batch : opaqueBatches)
+    {
+        const DrawItem& item = items[batch.representativeItem];
+        const Mesh& mesh = m_resources.GetMesh(item.mesh);
+
+        // b0 carries only the batch material in this variant. Transform and
+        // inverse-transpose come from slot 1 and are shared with shadow.
+        m_commandList->SetGraphicsRootConstantBufferView(
+            0, objectCBBase + UINT64(batch.representativeItem) * kObjectCBSize);
+        ++m_lastFrameStats.rootCbvBinds;
+        m_commandList->SetGraphicsRootDescriptorTable(
+            2, m_resources.TextureSRV(TextureHandle{ batch.key.texture }).gpu);
+        m_commandList->SetGraphicsRootDescriptorTable(
+            3, m_resources.TextureSRV(
+                   TextureHandle{ batch.key.normalTexture }).gpu);
+
+        const D3D12_VERTEX_BUFFER_VIEW buffers[] = {
+            mesh.vbv, frame.instanceBufferView
+        };
+        m_commandList->IASetVertexBuffers(0, _countof(buffers), buffers);
+        m_commandList->IASetIndexBuffer(&mesh.ibv);
+        m_commandList->DrawIndexedInstanced(
+            batch.key.indexCount, batch.instanceCount,
+            batch.key.indexOffset, 0, batch.firstInstance);
+        ++m_lastFrameStats.drawCalls;
+    }
 }
 
 // Fills whatever the opaque pass left untouched. Runs AFTER it rather than
@@ -1154,16 +1391,16 @@ void Renderer::RecordScenePasses(FrameResource& frame,
                                  const SceneAttachments& target,
                                  const LightingData& lighting,
                                  const std::vector<DrawItem>& items,
-                                 const DrawQueue& opaqueItems,
+                                 const std::vector<OpaqueBatch>& opaqueBatches,
                                  const DrawQueue& transparentItems)
 {
-    DrawShadowDepthPass(frame, items, opaqueItems);
+    DrawShadowDepthPass(frame, items, opaqueBatches);
 
     D3D12_RESOURCE_BARRIER toRenderTarget = TransitionBarrier(
         target.color, target.restingState, D3D12_RESOURCE_STATE_RENDER_TARGET);
     m_commandList->ResourceBarrier(1, &toRenderTarget);
 
-    DrawOpaquePass(frame, target, items, opaqueItems);
+    DrawOpaquePass(frame, target, items, opaqueBatches);
     DrawSkyboxPass(frame, target, lighting.skybox);
     DrawTransparentPass(frame, target, items, transparentItems);
 }
@@ -1343,6 +1580,9 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     DrawQueue opaqueItems;
     DrawQueue transparentItems;
     BuildDrawQueues(camera, items, opaqueItems, transparentItems);
+    DrawQueue opaqueInstanceOrder;
+    std::vector<OpaqueBatch> opaqueBatches;
+    BuildOpaqueBatches(items, opaqueItems, opaqueInstanceOrder, opaqueBatches);
 
     // Only now is it safe to overwrite this frame's constant buffers and
     // recycle its command memory.
@@ -1351,6 +1591,7 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
         ? 1.0f : float(target.width) / float(target.height);
     UpdatePassConstants(frame, camera, lighting, items, opaqueItems, renderAspect);
     UpdateObjectConstants(frame, items);
+    UpdateInstanceData(frame, items, opaqueInstanceOrder);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
     ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr),
@@ -1361,7 +1602,7 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
     RecordScenePasses(frame, target, lighting, items,
-                      opaqueItems, transparentItems);
+                      opaqueBatches, transparentItems);
     if (output == SceneOutput::OffscreenTexture)
     {
         PresentOffscreen(overlayRecorder);

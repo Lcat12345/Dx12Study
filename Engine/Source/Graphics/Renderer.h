@@ -11,6 +11,7 @@
 #include "Graphics/RenderData.h"
 #include "Core/RuntimePaths.h"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -165,7 +166,37 @@ private:
         Count
     };
 
+    // Orthogonal to pass role: the same opaque/shadow role can consume one
+    // object's b0 transform or a per-instance vertex stream.
+    enum class DrawVariant
+    {
+        Singleton,
+        Instanced,
+        Count
+    };
+
     using DrawQueue = std::vector<size_t>;
+
+    struct OpaqueBatchKey
+    {
+        uint32_t mesh = MeshHandle::kInvalid;
+        UINT indexOffset = 0;
+        UINT indexCount = 0;
+        uint32_t texture = TextureHandle::kInvalid;
+        uint32_t normalTexture = TextureHandle::kInvalid;
+        uint32_t blendMode = 0;
+        std::array<uint32_t, 9> materialBits = {};
+
+        bool operator<(const OpaqueBatchKey& other) const;
+    };
+
+    struct OpaqueBatch
+    {
+        OpaqueBatchKey key;
+        size_t representativeItem = 0;
+        UINT firstInstance = 0;
+        UINT instanceCount = 0;
+    };
 
     void CreateCommandObjects();
     void CreateConstantBuffers();
@@ -180,7 +211,7 @@ private:
     // and changes only what makes it that role - so a format mismatch is one
     // fix rather than four.
     D3D12_GRAPHICS_PIPELINE_STATE_DESC SceneShadedPsoTemplate(
-        UINT sampleCount, UINT sampleQuality) const;
+        UINT sampleCount, UINT sampleQuality, DrawVariant variant) const;
 
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                              const LightingData& lighting,
@@ -189,6 +220,9 @@ private:
                              float renderAspect);
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
+    void UpdateInstanceData(FrameResource& frame,
+                            const std::vector<DrawItem>& items,
+                            const DrawQueue& instanceOrder);
 
     // The world-space extent of everything that casts a shadow, as a sphere.
     // False when there is nothing to bound. Uses the ResourceManager the
@@ -210,12 +244,16 @@ private:
     void BuildDrawQueues(const CameraView& camera,
                          const std::vector<DrawItem>& items,
                          DrawQueue& outOpaque, DrawQueue& outTransparent) const;
+    void BuildOpaqueBatches(const std::vector<DrawItem>& items,
+                            const DrawQueue& opaqueItems,
+                            DrawQueue& outInstanceOrder,
+                            std::vector<OpaqueBatch>& outBatches) const;
     void DrawShadowDepthPass(FrameResource& frame,
                              const std::vector<DrawItem>& items,
-                             const DrawQueue& opaqueItems);
+                             const std::vector<OpaqueBatch>& opaqueBatches);
     void DrawOpaquePass(FrameResource& frame, const SceneAttachments& target,
                         const std::vector<DrawItem>& items,
-                        const DrawQueue& opaqueItems);
+                        const std::vector<OpaqueBatch>& opaqueBatches);
     // After opaque so it only fills pixels nothing has claimed, and before
     // transparent (11.6) so alpha has a background to blend against.
     void DrawSkyboxPass(FrameResource& frame, const SceneAttachments& target,
@@ -227,7 +265,7 @@ private:
     void RecordScenePasses(FrameResource& frame, const SceneAttachments& target,
                            const LightingData& lighting,
                            const std::vector<DrawItem>& items,
-                           const DrawQueue& opaqueItems,
+                           const std::vector<OpaqueBatch>& opaqueBatches,
                            const DrawQueue& transparentItems);
     void PresentOffscreen(const OverlayRecorder& overlayRecorder);
     void PresentSwapChain(const SceneAttachments& target,
@@ -238,7 +276,8 @@ private:
     // Shared setup every geometry pass needs, so adding a pass does not mean
     // copying six bind calls.
     void BindScenePass(FrameResource& frame, const SceneAttachments& target,
-                       PsoRole role);
+                       PsoRole role,
+                       DrawVariant variant = DrawVariant::Singleton);
     void DrawItems(FrameResource& frame, const std::vector<DrawItem>& items,
                    const DrawQueue& drawQueue);
 
@@ -303,7 +342,9 @@ private:
     // deliberately remains single-sample.
     static constexpr size_t kSceneSampleVariantCount = 2;
     Microsoft::WRL::ComPtr<ID3D12PipelineState>
-        m_pipelineStates[kSceneSampleVariantCount][size_t(PsoRole::Count)];
+        m_pipelineStates[kSceneSampleVariantCount]
+                        [size_t(PsoRole::Count)]
+                        [size_t(DrawVariant::Count)];
 
     bool m_4xMsaaSupported = false;
     bool m_msaaEnabled      = false;

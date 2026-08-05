@@ -1,0 +1,5 @@
+status	enemies	warmup_frames	sample_frames	median_ms	p95_ms	max_ms	vsync	msaa	width	height	adapter	draw_calls	root_cbv_binds	main_visible	shadow_visible	draw_items	object_capacity	srv_used	srv_capacity	error
+success	100	120	600	0.277	2.623	4.201	off	4x	1280	720	NVIDIA GeForce RTX 5070 Ti	11	9	104	104	104	256	7	64	""
+success	500	120	600	0.373	2.576	4.096	off	4x	1280	720	NVIDIA GeForce RTX 5070 Ti	11	9	504	504	504	512	7	64	""
+success	1000	120	600	0.611	2.961	3.994	off	4x	1280	720	NVIDIA GeForce RTX 5070 Ti	11	9	1004	1004	1004	1024	7	64	""
+success	2000	120	600	1.037	3.134	4.114	off	4x	1280	720	NVIDIA GeForce RTX 5070 Ti	11	9	2004	2004	2004	2048	7	64	""
