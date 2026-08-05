@@ -55,6 +55,12 @@ struct DebugUIContext
     const CameraView* viewportCamera = nullptr;
     RunMode           runMode        = RunMode::Edit;
     float             playElapsed    = 0.0f;
+    // Apply the built-in panel arrangement this frame, overwriting whatever
+    // is docked now. True on a first run (no imgui.ini to respect) and for the
+    // one frame after View > Reset layout. The caller owns the flag because
+    // only it knows whether a saved layout existed - see
+    // ImGuiLayer::HadSavedLayout.
+    bool              applyDefaultLayout = false;
 
     // --- out ---
     bool vsyncToggled = false;
@@ -68,6 +74,10 @@ struct DebugUIContext
     bool viewportHovered = false;
     bool    runModeChangeRequested = false;
     RunMode requestedRunMode       = RunMode::Edit;
+    // The user picked View > Reset layout. The caller feeds it back as
+    // applyDefaultLayout next frame rather than this one, because the panels
+    // for this frame have already been positioned by the time the menu runs.
+    bool    resetLayoutRequested   = false;
 };
 
 // Builds this frame's UI. Call between ImGuiLayer::NewFrame and Render.

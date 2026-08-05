@@ -38,6 +38,9 @@ private:
 
     std::unique_ptr<AssetBrowser> m_assets;
     std::unique_ptr<ImGuiLayer>   m_overlay;
+    // Rebuild the panel arrangement on the next frame: set for a first run
+    // with no saved layout, and by View > Reset layout.
+    bool                          m_applyDefaultLayout = false;
 
     std::vector<DrawItem> m_drawItems;
     CameraView            m_camera;

@@ -20,6 +20,12 @@ EditorApp::EditorApp(HINSTANCE instance, const RuntimePaths& runtimePaths)
         renderer.ShaderVisibleDescriptors(), renderer.OutputFormat(),
         DXGI_FORMAT_UNKNOWN, renderer.FramesInFlight());
 
+    // A first run has no imgui.ini, so nothing would place the panels and they
+    // would open overlapping. Any later run has a saved arrangement that is
+    // the user's, not ours, and must be left alone. Only the layer can tell
+    // the two apart, and only before ImGui loads the file.
+    m_applyDefaultLayout = !m_overlay->HadSavedLayout();
+
     GetWindow().SetMessageHook(
         [](HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam) {
             return ImGuiLayer::HandleMessage(hwnd, message, wParam, lParam);
@@ -106,9 +112,23 @@ void EditorApp::RunAlways(const FrameContext& frame)
     ui.viewportCamera   = &m_camera;
     ui.runMode          = m_editor.runMode;
     ui.playElapsed      = m_play.ElapsedSeconds();
+    // Consumed by this frame and cleared, so the layout is rebuilt exactly
+    // once. m_applyDefaultLayout starts true only when there was no imgui.ini
+    // to honour; View > Reset layout sets it again below.
+    ui.applyDefaultLayout = m_applyDefaultLayout;
+    m_applyDefaultLayout  = false;
 
     DrawDebugUI(m_world, GetRenderer().Resources(), *m_assets, m_editor, ui);
     m_viewportHovered = ui.viewportHovered;
+
+    // Deferred to the NEXT frame on purpose: this frame's panels have already
+    // been laid out by the time the menu item ran, and rebuilding the dock
+    // tree under them leaves the windows referencing nodes that no longer
+    // exist.
+    if (ui.resetLayoutRequested)
+    {
+        m_applyDefaultLayout = true;
+    }
 
     if (ui.viewportWidth > 0 && ui.viewportHeight > 0)
     {

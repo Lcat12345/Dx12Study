@@ -10,6 +10,11 @@
 #include "Core/TextEncoding.h"
 
 #include "imgui.h"
+// DockBuilder lives in the internal header. It is the only supported way to
+// describe a default layout in code rather than shipping a prebuilt
+// imgui.ini, which would have to be copied next to every build output and
+// would go stale the moment a panel is renamed.
+#include "imgui_internal.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -797,6 +802,19 @@ namespace
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("View"))
+        {
+            // The only way back from a layout that has been dragged into an
+            // unusable state. Without it the fix is to quit, find imgui.ini
+            // next to the exe and delete it - which requires knowing that the
+            // file exists, where it went, and that it is safe to remove.
+            if (ImGui::MenuItem("Reset layout"))
+            {
+                ui.resetLayoutRequested = true;
+            }
+            ImGui::EndMenu();
+        }
+
         if (ImGui::BeginMenu("Run"))
         {
             const bool editing = ui.runMode == RunMode::Edit;
@@ -1141,6 +1159,64 @@ namespace
     }
 }
 
+// Where each panel starts out, in code rather than in a shipped imgui.ini.
+//
+// The split fractions are of the node being split at that moment, not of the
+// window, which is why the right-hand 0.24 is taken before the left is
+// subdivided - reading them as "24% of the whole window" would give the wrong
+// picture of the second and third calls.
+void BuildDefaultLayout(ImGuiID dockspaceId)
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::DockBuilderRemoveNode(dockspaceId);
+    ImGui::DockBuilderAddNode(dockspaceId, ImGuiDockNodeFlags_DockSpace);
+    // WorkSize, not Size: the work area is what is left after the main menu
+    // bar. Sizing to the full viewport makes the dock space taller than the
+    // space it actually occupies, and the panels ride up over the menu.
+    ImGui::DockBuilderSetNodeSize(dockspaceId, viewport->WorkSize);
+    ImGui::DockBuilderSetNodePos(dockspaceId, viewport->WorkPos);
+
+    // Every split returns the node on the side it cut, and writes the LEFTOVER
+    // through its last parameter. That leftover has to be captured - after a
+    // split the original id names a parent with children, and docking into a
+    // parent puts windows somewhere nobody asked for.
+    ImGuiID centre = dockspaceId;
+    const ImGuiID right = ImGui::DockBuilderSplitNode(
+        centre, ImGuiDir_Right, 0.24f, nullptr, &centre);
+
+    ImGuiID leftColumn = ImGui::DockBuilderSplitNode(
+        centre, ImGuiDir_Left, 0.24f, nullptr, &centre);
+
+    // The left column is three stacked rows rather than tabs, because these
+    // three answer different questions and are read together: what the frame
+    // costs, what exists in the scene, what can be added to it.
+    ImGuiID belowFrame = 0;
+    const ImGuiID frameRow = ImGui::DockBuilderSplitNode(
+        leftColumn, ImGuiDir_Up, 0.20f, nullptr, &belowFrame);
+    ImGuiID entitiesRow = 0;
+    const ImGuiID assetsRow = ImGui::DockBuilderSplitNode(
+        belowFrame, ImGuiDir_Down, 0.55f, nullptr, &entitiesRow);
+
+    ImGui::DockBuilderDockWindow("Frame", frameRow);
+    ImGui::DockBuilderDockWindow("Entities", entitiesRow);
+    // Assets takes the largest share of the column - it is the only list long
+    // enough to need scrolling.
+    ImGui::DockBuilderDockWindow("Assets", assetsRow);
+
+    // Right column: what the selection IS. Shadow map shares the node as a
+    // tab rather than a second panel, since it is a diagnostic that should be
+    // available without permanently costing screen space.
+    ImGui::DockBuilderDockWindow("Inspector", right);
+    ImGui::DockBuilderDockWindow("Shadow map", right);
+
+    // The Scene keeps the centre, which is also the PassthruCentralNode - so
+    // the viewport image is what fills the window rather than a dock node's
+    // background.
+    ImGui::DockBuilderDockWindow("Scene", centre);
+
+    ImGui::DockBuilderFinish(dockspaceId);
+}
+
 void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
                  EditorSession& session, DebugUIContext& ui)
 {
@@ -1149,8 +1225,24 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
     DrawSaveAsPopup(world, resources, session, ui.runMode);
 
     // A full-window dock space so the panels can be rearranged and docked.
-    ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
-                                 ImGuiDockNodeFlags_PassthruCentralNode);
+    const ImGuiID dockspaceId =
+        ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(),
+                                     ImGuiDockNodeFlags_PassthruCentralNode);
+
+    // The dock space alone only makes docking POSSIBLE. Without a default
+    // arrangement every panel opens floating at the position its own
+    // SetNextWindowPos guessed, and they overlap: the Shadow map panel lands
+    // on top of the Inspector and the File menu, and the Inspector sits over
+    // the Scene it is describing. Clicking the viewport then raises Scene and
+    // hides the Inspector, so selecting an entity hides the thing that shows
+    // what was selected.
+    //
+    // Applied only when there is no layout to respect - a first run, or an
+    // explicit reset. Once the user has arranged panels, imgui.ini wins.
+    if (ui.applyDefaultLayout)
+    {
+        BuildDefaultLayout(dockspaceId);
+    }
 
     int entityCount = 0;
     world.ForEachEntity([&](Entity) { ++entityCount; });

@@ -6,6 +6,7 @@
 #include "backends/imgui_impl_win32.h"
 #include "backends/imgui_impl_dx12.h"
 
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -62,6 +63,13 @@ ImGuiLayer::ImGuiLayer(HWND hwnd, ID3D12Device* device,
         iniPath = (slash == std::string::npos ? std::string() : path.substr(0, slash + 1))
                 + "imgui.ini";
         io.IniFilename = iniPath.c_str();
+
+        // Whether a layout was saved from a previous run, decided HERE because
+        // this is the only place that knows where the file lives - and it has
+        // to be asked before ImGui loads it, after which the two cases are
+        // indistinguishable. The editor uses it to apply its default panel
+        // arrangement without overwriting one the user has since arranged.
+        m_hadSavedLayout = std::filesystem::exists(iniPath);
     }
 
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;

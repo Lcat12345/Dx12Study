@@ -33,7 +33,19 @@ public:
     bool WantsMouse() const;
     bool WantsKeyboard() const;
 
+    // Whether imgui.ini already existed when this layer started, i.e. whether
+    // a previous run saved a panel arrangement.
+    //
+    // The editor needs this to decide between "apply my default layout" and
+    // "leave the user's alone". It has to be captured at construction: once
+    // ImGui has loaded the file, a restored layout and a freshly built one
+    // look the same.
+    bool HadSavedLayout() const { return m_hadSavedLayout; }
+
     // Forwarded from the window procedure. Returns true when ImGui consumed
     // the message.
     static bool HandleMessage(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+private:
+    bool m_hadSavedLayout = false;
 };
