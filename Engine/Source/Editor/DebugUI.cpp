@@ -369,11 +369,15 @@ namespace
         {
             Queue(session, Command::Kind::Duplicate, session.selected);
         }
+        // Buttons cannot show a shortcut column the way menu items do, so the
+        // key lives in a tooltip - otherwise it is a feature nobody finds.
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Ctrl+D"); }
         ImGui::SameLine();
         if (ImGui::Button("Delete"))
         {
             Queue(session, Command::Kind::Destroy, session.selected);
         }
+        if (ImGui::IsItemHovered()) { ImGui::SetTooltip("Delete"); }
         ImGui::EndDisabled();
 
         ImGui::Separator();
@@ -746,7 +750,7 @@ namespace
         {
             const bool fileCommandsEnabled = ui.runMode == RunMode::Edit;
             ImGui::BeginDisabled(!fileCommandsEnabled);
-            if (ImGui::MenuItem("New"))
+            if (ImGui::MenuItem("New", "Ctrl+N"))
             {
                 QueueScene(session, Command::Kind::NewScene);
             }
@@ -788,12 +792,12 @@ namespace
 
             // Save falls back to Save As when the scene has no file yet -
             // otherwise it would silently do nothing on a brand new scene.
-            if (ImGui::MenuItem("Save", nullptr, false))
+            if (ImGui::MenuItem("Save", "Ctrl+S", false))
             {
                 if (session.scenePath.empty()) { session.openSaveAs = true; }
                 else { SaveTo(world, resources, session.scenePath, session); }
             }
-            if (ImGui::MenuItem("Save As..."))
+            if (ImGui::MenuItem("Save As...", "Ctrl+Shift+S"))
             {
                 session.openSaveAs = true;
             }
@@ -844,12 +848,14 @@ namespace
         {
             const bool editing = ui.runMode == RunMode::Edit;
             const bool playing = ui.runMode == RunMode::Play;
-            if (ImGui::MenuItem("Edit", nullptr, editing, !editing))
+            // F5 on both: it is one toggle, so whichever is not current is
+            // where F5 takes you.
+            if (ImGui::MenuItem("Edit", "F5", editing, !editing))
             {
                 ui.runModeChangeRequested = true;
                 ui.requestedRunMode = RunMode::Edit;
             }
-            if (ImGui::MenuItem("Play", nullptr, playing, !playing))
+            if (ImGui::MenuItem("Play", "F5", playing, !playing))
             {
                 ui.runModeChangeRequested = true;
                 ui.requestedRunMode = RunMode::Play;
@@ -1374,6 +1380,86 @@ namespace
     }
 }
 
+// Keyboard shortcuts for the editor's own commands.
+//
+// Read from ImGui, NOT from the FrameContext the camera uses, because the two
+// answer different questions. Camera input is scene input: it is gated on the
+// cursor being over the Scene panel, which is right for flying around and
+// wrong for Ctrl+S - saving should not depend on where the mouse happens to
+// rest. These are UI commands, so they follow the UI's rule: available unless
+// a text field is taking the keystrokes.
+//
+// ImGui also already tracks modifier state and which widget has focus, so
+// routing chords through it avoids teaching the Win32 InputContext about Ctrl
+// and Shift for this one purpose.
+void HandleShortcuts(World& world, ResourceManager& resources,
+                     EditorSession& session, DebugUIContext& ui)
+{
+    const ImGuiIO& io = ImGui::GetIO();
+
+    // Typing a name is the case where S is a letter, not a command.
+    if (io.WantTextInput)
+    {
+        return;
+    }
+    // A modal owns the keyboard while it is up - Save As and Package Project
+    // both have their own Enter/Escape handling to not fight with.
+    if (ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+    {
+        return;
+    }
+
+    const bool ctrl  = io.KeyCtrl;
+    const bool shift = io.KeyShift;
+
+    // Play toggles from anywhere: it is the one command wanted mid-gesture,
+    // and it is what makes Play/Stop feel like a button rather than a menu
+    // trip.
+    if (ImGui::IsKeyPressed(ImGuiKey_F5, false))
+    {
+        ui.runModeChangeRequested = true;
+        ui.requestedRunMode = ui.runMode == RunMode::Play ? RunMode::Edit : RunMode::Play;
+        return;
+    }
+
+    // Scene files are frozen during Play for the same reason the File menu
+    // greys them out: the world on screen is a simulation, not the document.
+    if (ui.runMode != RunMode::Edit)
+    {
+        return;
+    }
+
+    if (ctrl && ImGui::IsKeyPressed(ImGuiKey_N, false))
+    {
+        QueueScene(session, Command::Kind::NewScene);
+    }
+    else if (ctrl && shift && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    {
+        session.openSaveAs = true;
+    }
+    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+    {
+        // Same fallback as the menu: a scene with no file yet has nowhere to
+        // save to, so ask for a name instead of doing nothing.
+        if (session.scenePath.empty()) { session.openSaveAs = true; }
+        else { SaveTo(world, resources, session.scenePath, session); }
+    }
+    else if (ctrl && ImGui::IsKeyPressed(ImGuiKey_D, false))
+    {
+        if (world.IsAlive(session.selected))
+        {
+            Queue(session, Command::Kind::Duplicate, session.selected);
+        }
+    }
+    else if (ImGui::IsKeyPressed(ImGuiKey_Delete, false))
+    {
+        if (world.IsAlive(session.selected))
+        {
+            Queue(session, Command::Kind::Destroy, session.selected);
+        }
+    }
+}
+
 // Where each panel starts out, in code rather than in a shipped imgui.ini.
 //
 // The split fractions are of the node being split at that moment, not of the
@@ -1438,6 +1524,10 @@ void DrawDebugUI(World& world, ResourceManager& resources, AssetBrowser& assets,
 {
     // Before the dock space, which sizes itself around the menu bar.
     DrawMainMenuBar(world, resources, session, packages, ui);
+    // After the menu bar so a click and its equivalent chord cannot both fire
+    // in one frame, and before the panels so a queued command is applied by
+    // the same ApplyCommands call at the end.
+    HandleShortcuts(world, resources, session, ui);
     DrawSaveAsPopup(world, resources, session, ui.runMode);
     DrawPackageProjectPopup(world, resources, session, packages, ui.runMode);
 

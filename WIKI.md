@@ -178,6 +178,21 @@ Scene 패널 위에서 조작한다.
 
 Edit 상태의 EditorCamera는 World 밖에 있으므로 Scene에 저장되지 않는다.
 
+### 단축키
+
+| 키 | 동작 |
+|---|---|
+| `Ctrl+N` | 새 Scene |
+| `Ctrl+S` | 저장 (경로가 없으면 Save As) |
+| `Ctrl+Shift+S` | 다른 이름으로 저장 |
+| `Ctrl+D` | 선택한 Entity 복제 |
+| `Delete` | 선택한 Entity 삭제 |
+| `F5` | Play / Edit 전환 |
+
+카메라 키와 달리 커서 위치와 무관하게 동작한다. 단 **텍스트 입력 중이거나
+대화상자가 열려 있으면 무시된다** — 이름 칸에 `s`를 쓰는 것이 저장으로
+해석되면 안 되기 때문이다. Scene 파일 명령은 Play 중에는 잠긴다.
+
 ### Entity 편집
 
 1. **Entities** 패널에서 Entity를 선택한다.
