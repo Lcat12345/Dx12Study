@@ -67,5 +67,4 @@ Release 빌드는 `PlayerPackage/`를 자동으로 만든다. 이 폴더를 통�
 |---|---|
 | [WIKI.md](WIKI.md) | 사용설명서 — 에디터 조작, Scene·에셋, 배포, 문제 해결 |
 | [ROADMAP.md](ROADMAP.md) | 개발 순서와 각 단계의 완료 상태 |
-| [docs/](docs/) | Phase별 상세 설계·검증 기록 |
 | [Engine/Docs/](Engine/Docs/) | 경계 계약 문서 (실행·프로젝트·패키지) |

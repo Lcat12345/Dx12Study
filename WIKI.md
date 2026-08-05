@@ -485,7 +485,6 @@ Frame 패널에 unsupported 상태가 표시된다.
 ## 관련 문서
 
 - [전체 ROADMAP](ROADMAP.md)
-- [Phase 12 상세 계획](docs/Phase12-Plan.md)
 - [실행 컨텍스트와 시스템 경계](Engine/Docs/Phase12.1-ExecutionBoundary.md)
 - [presentation 경계](Engine/Docs/Phase12.3-PresentationBoundary.md)
 - [프로젝트와 링크 경계](Engine/Docs/Phase12.4-ProjectBoundary.md)
