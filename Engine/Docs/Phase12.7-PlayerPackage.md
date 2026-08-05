@@ -43,8 +43,35 @@ its `asset_policy=` line.
 The manifest records configuration, platform, source commit and dirty/clean
 state, default Scene, runtime DLL policy, and a sorted package file list. It has
 no timestamp or development-machine absolute path. Staging fails on source,
-project, HLSL, or ImGui files, re-audits the Player link map for Editor and
-ImGui symbols, and rejects an absolute repository path embedded in Player.exe.
+project, HLSL, or ImGui files, audits the Player link map as described below,
+and rejects an absolute repository path embedded in Player.exe.
+
+## How the link boundary is audited
+
+As a **whitelist**, not a list of forbidden names.
+
+The audit was originally six hardcoded strings (`ImGui::`, `DebugUI`, ...)
+searched for in `Player.map`. That only catches names somebody remembered to
+add: a new Editor-only file misfiled into `Game.vcxproj` would link into
+`Player.exe` and pass, because its name is not on the list. A blacklist cannot
+notice a name it has never heard of - and the point of this boundary is to keep
+out code that does not exist yet.
+
+Two checks replace it, both derived from the project files, so neither goes
+stale as sources are added:
+
+1. Every translation unit reaching `Player.exe` must come from `Engine.lib`,
+   `Game.lib`, or the Player project's own source list. The `.map` names each
+   contributor in a trailing `Lib:Object.obj` column; anything compiled
+   directly into the exe is compared against `Player.vcxproj`.
+2. No source may be compiled by both `Editor.vcxproj` and any of
+   `Engine`/`Game`/`Player`. This is what "Game.lib does not know the Editor"
+   means in build terms, and it fails at staging with the offending path.
+
+Verified by simulating the case the blacklist missed: registering a new
+`Source/Editor/Gizmo.cpp` in both `Editor.vcxproj` and `Game.vcxproj` is
+rejected with `Game.vcxproj compiles Editor-only sources, so they would reach
+Player.exe: Source\Editor\Gizmo.cpp`.
 Release uses `/PDBALTPATH:%_PDB%`, so its CodeView record names `Player.pdb`
 without recording the development output directory.
 

@@ -81,13 +81,75 @@ foreach ($required in @($playerExe, $assetSource, $shaderSource, $linkMap))
     }
 }
 
-$mapText = Get-Content -LiteralPath $linkMap -Raw
-foreach ($symbol in @('ImGui::', 'ImGui_Impl', 'DebugUI', 'AssetBrowser',
-                      'EditorSession', 'EditorApp'))
+# What linked into Player.exe, checked as a WHITELIST.
+#
+# This used to be a hardcoded list of six forbidden strings ('ImGui::',
+# 'DebugUI', ...). That only catches names somebody remembered to add: a new
+# Editor-only file misfiled into Game.vcxproj would link into Player.exe and
+# the check would pass, because its name is not on the list. A blacklist of
+# names cannot notice a name it has never heard of.
+#
+# The whitelist inverts it. Every translation unit that reaches Player.exe
+# must be one we deliberately allow, so anything new is refused until someone
+# says otherwise - which is the correct default for a boundary whose whole
+# purpose is to keep code OUT.
+#
+# The .map lists each contributor in a trailing "Lib:Object.obj" column, or a
+# bare "Object.obj" for sources compiled straight into the exe.
+$ourLibraries = @('Engine', 'Game')
+$playerObjects = @(Select-String -Path (Join-Path $PSScriptRoot '..\Player.vcxproj') `
+                                 -Pattern '<ClCompile Include="[^"]*\\([^\\"]+)\.cpp"' |
+    ForEach-Object { $_.Matches[0].Groups[1].Value })
+if ($playerObjects.Count -eq 0)
 {
-    if ($mapText.IndexOf($symbol, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+    throw 'Could not read the Player project source list to build the link whitelist'
+}
+
+$unexpected = New-Object System.Collections.Generic.HashSet[string]
+foreach ($line in Get-Content -LiteralPath $linkMap)
+{
+    if ($line -match '\s([A-Za-z0-9_.\-]+):([A-Za-z0-9_.\-]+)\.obj\s*$')
     {
-        throw "Player.map contains forbidden Editor/ImGui symbol '$symbol'"
+        $library = $Matches[1]
+        # Our own static libs are policed by which sources their projects
+        # compile; everything else with a library name is the CRT or a
+        # Windows SDK import lib, which Player is expected to use.
+        if ($ourLibraries -notcontains $library)
+        {
+            continue
+        }
+    }
+    elseif ($line -match '\s([A-Za-z0-9_.\-]+)\.obj\s*$')
+    {
+        # Compiled directly into the exe - must be one of Player's own sources.
+        if ($playerObjects -notcontains $Matches[1])
+        {
+            [void]$unexpected.Add($Matches[1] + '.obj (compiled into Player.exe)')
+        }
+    }
+}
+if ($unexpected.Count -gt 0)
+{
+    throw ("Player.exe links translation units outside Engine.lib, Game.lib and " +
+           "the Player project: " + (($unexpected | Sort-Object) -join ', '))
+}
+
+# The libraries Player links are policed at the project level instead: no
+# source may belong both to Editor.exe and to anything Player links, which is
+# what "Game.lib does not know the Editor" actually means in build terms.
+$editorSources = @(Select-String -Path (Join-Path $PSScriptRoot '..\Editor.vcxproj') `
+                                 -Pattern '<ClCompile Include="([^"]+)"' |
+    ForEach-Object { $_.Matches[0].Groups[1].Value.ToLowerInvariant() })
+foreach ($projectName in @('Engine', 'Game', 'Player'))
+{
+    $projectFile = Join-Path $PSScriptRoot "..\$projectName.vcxproj"
+    $shared = @(Select-String -Path $projectFile -Pattern '<ClCompile Include="([^"]+)"' |
+        ForEach-Object { $_.Matches[0].Groups[1].Value } |
+        Where-Object { $editorSources -contains $_.ToLowerInvariant() })
+    if ($shared.Count -gt 0)
+    {
+        throw ("$projectName.vcxproj compiles Editor-only sources, so they would " +
+               "reach Player.exe: " + ($shared -join ', '))
     }
 }
 
