@@ -48,6 +48,7 @@
     <ClCompile Include="Source\Core\Window.cpp" />
     <ClCompile Include="Source\Graphics\DepthTarget.cpp" />
     <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp" />
+    <ClCompile Include="Source\Graphics\Frustum.cpp" />
     <ClCompile Include="Source\Graphics\GraphicsDevice.cpp" />
     <ClCompile Include="Source\Graphics\Image.cpp" />
     <ClCompile Include="Source\Graphics\Mesh.cpp" />
@@ -70,6 +71,7 @@
     <ClInclude Include="Source\Graphics\DepthTarget.h" />
     <ClInclude Include="Source\Graphics\DescriptorAllocator.h" />
     <ClInclude Include="Source\Graphics\FrameResource.h" />
+    <ClInclude Include="Source\Graphics\Frustum.h" />
     <ClInclude Include="Source\Graphics\GraphicsDevice.h" />
     <ClInclude Include="Source\Graphics\Handles.h" />
     <ClInclude Include="Source\Graphics\Image.h" />

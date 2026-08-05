@@ -171,6 +171,12 @@ void Renderer::RequestObjectCapacity(size_t drawItemCount)
         m_requestedObjectCapacity, ObjectCapacityForDrawItems(drawItemCount));
 }
 
+void Renderer::RequestInstanceCapacity(size_t instanceCount)
+{
+    m_requestedInstanceCapacity = (std::max)(
+        m_requestedInstanceCapacity, ObjectCapacityForDrawItems(instanceCount));
+}
+
 // Two constant buffers, one per update frequency - duplicated per frame.
 void Renderer::CreateConstantBuffers()
 {
@@ -188,6 +194,7 @@ void Renderer::CreateConstantBuffers()
     }
 
     RecreateObjectConstantBuffers(m_objectCapacity);
+    RecreateInstanceBuffers(m_instanceCapacity);
 }
 
 void Renderer::RecreateObjectConstantBuffers(UINT capacity)
@@ -196,15 +203,8 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
     // An allocation failure therefore leaves all old resources and pointers
     // intact instead of producing a ring with mixed capacities.
     ComPtr<ID3D12Resource> replacements[kFramesInFlight];
-    ComPtr<ID3D12Resource> instanceReplacements[kFramesInFlight];
     uint8_t* mapped[kFramesInFlight] = {};
-    uint8_t* instanceMapped[kFramesInFlight] = {};
     D3D12_RANGE readRange = {};
-
-    if (capacity > (std::numeric_limits<UINT>::max)() / sizeof(InstanceData))
-    {
-        throw std::length_error("instance vertex buffer capacity overflow");
-    }
 
     for (UINT index = 0; index < kFramesInFlight; ++index)
     {
@@ -215,14 +215,6 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
                           0, &readRange,
                           reinterpret_cast<void**>(&mapped[index])),
                       "ObjectCB Map");
-
-        instanceReplacements[index] = CreateUploadBuffer(
-            m_device.Device(), nullptr, UINT64(sizeof(InstanceData)) * capacity,
-            "CreateCommittedResource(InstanceBuffer)");
-        ThrowIfFailed(instanceReplacements[index]->Map(
-                          0, &readRange,
-                          reinterpret_cast<void**>(&instanceMapped[index])),
-                      "InstanceBuffer Map");
     }
 
     for (UINT index = 0; index < kFramesInFlight; ++index)
@@ -232,15 +224,48 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
         {
             frame.objectCB->Unmap(0, nullptr);
         }
+        frame.objectCB = std::move(replacements[index]);
+        frame.objectCBMapped = mapped[index];
+        frame.objectCapacity = capacity;
+    }
+
+    m_objectCapacity = capacity;
+}
+
+// Same all-or-nothing shape as the object CB, but a separate call: culling
+// splits main and shadow into different instance runs, so the number of
+// instance slots a frame needs no longer follows the item count.
+void Renderer::RecreateInstanceBuffers(UINT capacity)
+{
+    if (capacity > (std::numeric_limits<UINT>::max)() / sizeof(InstanceData))
+    {
+        throw std::length_error("instance vertex buffer capacity overflow");
+    }
+
+    ComPtr<ID3D12Resource> replacements[kFramesInFlight];
+    uint8_t* mapped[kFramesInFlight] = {};
+    D3D12_RANGE readRange = {};
+
+    for (UINT index = 0; index < kFramesInFlight; ++index)
+    {
+        replacements[index] = CreateUploadBuffer(
+            m_device.Device(), nullptr, UINT64(sizeof(InstanceData)) * capacity,
+            "CreateCommittedResource(InstanceBuffer)");
+        ThrowIfFailed(replacements[index]->Map(
+                          0, &readRange,
+                          reinterpret_cast<void**>(&mapped[index])),
+                      "InstanceBuffer Map");
+    }
+
+    for (UINT index = 0; index < kFramesInFlight; ++index)
+    {
+        FrameResource& frame = m_frames[index];
         if (frame.instanceBuffer && frame.instanceBufferMapped)
         {
             frame.instanceBuffer->Unmap(0, nullptr);
         }
-        frame.objectCB = std::move(replacements[index]);
-        frame.objectCBMapped = mapped[index];
-        frame.objectCapacity = capacity;
-        frame.instanceBuffer = std::move(instanceReplacements[index]);
-        frame.instanceBufferMapped = instanceMapped[index];
+        frame.instanceBuffer = std::move(replacements[index]);
+        frame.instanceBufferMapped = mapped[index];
         frame.instanceCapacity = capacity;
         frame.instanceBufferView.BufferLocation =
             frame.instanceBuffer->GetGPUVirtualAddress();
@@ -248,7 +273,7 @@ void Renderer::RecreateObjectConstantBuffers(UINT capacity)
         frame.instanceBufferView.StrideInBytes = sizeof(InstanceData);
     }
 
-    m_objectCapacity = capacity;
+    m_instanceCapacity = capacity;
 }
 
 // The "function signature" of the pipeline:
@@ -455,18 +480,43 @@ D3D12_GRAPHICS_PIPELINE_STATE_DESC Renderer::SceneShadedPsoTemplate(
     return desc;
 }
 
+// Every item's world box, from the meshes' LOCAL boxes pushed through each
+// item's world matrix. No new DrawItem field is needed: the renderer already
+// holds the ResourceManager, so GetMesh(item.mesh).bounds is right there.
+void Renderer::BuildWorldBounds(const std::vector<DrawItem>& items,
+                                std::vector<Aabb>& outBounds,
+                                uint64_t& outUnboundedItems) const
+{
+    // An inverted box - what an item with no usable extent gets. Both the
+    // shadow fit and the frustum tests read it as "nothing to say", which
+    // means visible rather than culled.
+    constexpr Aabb kNoBounds = { { 1.0f, 1.0f, 1.0f }, { -1.0f, -1.0f, -1.0f } };
+
+    outBounds.assign(items.size(), kNoBounds);
+    outUnboundedItems = 0;
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        const DrawItem& item = items[i];
+        if (item.mesh.IsValid())
+        {
+            outBounds[i] = TransformAabb(m_resources.GetMesh(item.mesh).bounds,
+                                         XMLoadFloat4x4(&item.world));
+        }
+        if (outBounds[i].IsEmpty())
+        {
+            // Counted rather than silently tolerated: a scene that quietly
+            // stopped being cullable should show up as a number instead of
+            // as a mystery in the frame time.
+            ++outUnboundedItems;
+        }
+    }
+}
+
 // The world-space box every shadow caster fits inside.
-//
-// Built from the meshes' LOCAL boxes pushed through each item's world matrix,
-// which is why this needs no new DrawItem field: the renderer already holds
-// the ResourceManager, so GetMesh(item.mesh).bounds is right there. A local
-// box transformed by a matrix is not a box, so all EIGHT corners go through
-// and the result is the box around those - loose for a rotated object, but
-// never too small, which is the direction that matters for a shadow volume.
 //
 // Returns false for an empty scene: no casters means no sensible light
 // frustum, and the caller skips the pass rather than inventing one.
-bool Renderer::ComputeSceneBounds(const std::vector<DrawItem>& items,
+bool Renderer::ComputeSceneBounds(const std::vector<Aabb>& worldBounds,
                                   const DrawQueue& itemIndices,
                                   XMFLOAT3& outCenter, float& outRadius) const
 {
@@ -474,33 +524,20 @@ bool Renderer::ComputeSceneBounds(const std::vector<DrawItem>& items,
     XMVECTOR maxCorner = XMVectorReplicate(-FLT_MAX);
     bool any = false;
 
+    // The same boxes the culling tests use: a light volume built from looser
+    // or tighter bounds than visibility is decided with would shadow-map
+    // geometry the caster queue does not contain.
     for (const size_t itemIndex : itemIndices)
     {
-        const DrawItem& item = items[itemIndex];
-        if (!item.mesh.IsValid())
-        {
-            continue;
-        }
-        const Aabb& local = m_resources.GetMesh(item.mesh).bounds;
-        if (local.IsEmpty())
+        const Aabb& world = worldBounds[itemIndex];
+        if (world.IsEmpty())
         {
             continue;
         }
 
-        const XMMATRIX world = XMLoadFloat4x4(&item.world);
-        for (int corner = 0; corner < 8; ++corner)
-        {
-            // Bit 0/1/2 pick min or max on x/y/z - the eight combinations.
-            const XMVECTOR localPoint = XMVectorSet(
-                (corner & 1) ? local.max.x : local.min.x,
-                (corner & 2) ? local.max.y : local.min.y,
-                (corner & 4) ? local.max.z : local.min.z,
-                1.0f);
-            const XMVECTOR worldPoint = XMVector3TransformCoord(localPoint, world);
-            minCorner = XMVectorMin(minCorner, worldPoint);
-            maxCorner = XMVectorMax(maxCorner, worldPoint);
-            any = true;
-        }
+        minCorner = XMVectorMin(minCorner, XMLoadFloat3(&world.min));
+        maxCorner = XMVectorMax(maxCorner, XMLoadFloat3(&world.max));
+        any = true;
     }
 
     if (!any)
@@ -761,24 +798,63 @@ void Renderer::SetMsaaEnabled(bool enabled)
     m_swapChainDepth->SetSampleDesc(sampleCount, sampleQuality);
 }
 
+// The light's frustum has to be rebuilt every frame because it is derived
+// from where the casters ARE - a spinning crate changes the box.
+//
+// It runs BEFORE culling, and is fitted to every opaque item rather than to
+// the ones the camera can see. Two reasons: the caster test needs a light
+// frustum to test against, and a volume that followed the camera would
+// rescale the shadow map as the player turns, which crawls visibly along
+// every shadow edge.
+//
+// m_shadowCastersExist doubles as the pass's own "should I run" flag,
+// recorded rather than recomputed so the pass, the caster queue and the
+// constant buffer can never disagree about whether a light frustum exists.
+XMMATRIX Renderer::PrepareShadowFrustum(const LightingData& lighting,
+                                        const std::vector<Aabb>& worldBounds,
+                                        const DrawQueue& allOpaque,
+                                        float& outShadowStrength)
+{
+    // Scene loading and the editor already validate this, but keep the
+    // renderer boundary defensive for programmatic LightingData callers.
+    // NaN defeats std::clamp, so reject it explicitly.
+    outShadowStrength = std::isfinite(lighting.shadowStrength)
+                      ? (std::clamp)(lighting.shadowStrength, 0.0f, 1.0f)
+                      : 0.0f;
+
+    // Zero, not uninitialized: ComputeSceneBounds only WRITES outCenter when
+    // it returns true, and this gets copied into m_shadowSceneCenter and read
+    // back by the debug UI unconditionally. An uninitialized XMFLOAT3 there
+    // is stack garbage on screen for an empty scene - not wrong maths, just
+    // never-written memory - and garbage bit patterns are one of the few
+    // things a float can hold that legitimately prints as NaN.
+    XMFLOAT3 sceneCenter = { 0.0f, 0.0f, 0.0f };
+    float    sceneRadius = 0.0f;
+    m_shadowCastersExist = lighting.shadowsEnabled && outShadowStrength > 0.0f &&
+                           ComputeSceneBounds(worldBounds, allOpaque,
+                                              sceneCenter, sceneRadius);
+    m_shadowSceneCenter = sceneCenter;
+    m_shadowSceneRadius = m_shadowCastersExist ? sceneRadius : 0.0f;
+    if (!m_shadowCastersExist)
+    {
+        outShadowStrength = 0.0f;
+        return XMMatrixIdentity();
+    }
+    return ComputeShadowViewProj(lighting, sceneCenter, sceneRadius);
+}
+
 // Written ONCE per frame: camera and lights are shared by every object.
 // Every value here now arrives from the caller - the light positions and
 // colours used to be hardcoded in this function.
 void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                                    const LightingData& lighting,
-                                   const std::vector<DrawItem>& items,
-                                   const DrawQueue& shadowCasters,
-                                   float renderAspect)
+                                   FXMMATRIX shadowViewProj,
+                                   float shadowStrength, float renderAspect)
 {
-    // Scene loading and the editor already validate these values, but keep
-    // this renderer boundary defensive for programmatic LightingData callers.
-    // NaN defeats both std::max and std::clamp, so reject it explicitly.
+    // Same defensive treatment as shadow strength, for the same reason.
     const float shadowBias = std::isfinite(lighting.shadowBias)
                            ? (std::max)(lighting.shadowBias, 0.0f)
                            : 0.0f;
-    const float shadowStrength = std::isfinite(lighting.shadowStrength)
-                               ? (std::clamp)(lighting.shadowStrength, 0.0f, 1.0f)
-                               : 0.0f;
 
     const XMVECTOR eye     = XMLoadFloat3(&camera.position);
     const XMVECTOR forward = XMVector3Normalize(XMLoadFloat3(&camera.forward));
@@ -800,31 +876,6 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
     XMMATRIX skyView = view;
     skyView.r[3] = XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f);
 
-    // The light's frustum has to be rebuilt every frame because it is derived
-    // from where the casters ARE - a spinning crate changes the box. Computed
-    // here, next to the camera matrices, so one function decides everything
-    // the frame is rendered from.
-    //
-    // m_shadowCastersExist doubles as the pass's own "should I run" flag,
-    // recorded rather than recomputed so the pass and the constant buffer can
-    // never disagree about whether a light frustum was written.
-    // Zero, not uninitialized: ComputeSceneBounds only WRITES outCenter when
-    // it returns true, and this gets copied into m_shadowSceneCenter and
-    // read back by the debug UI unconditionally below. An uninitialized
-    // XMFLOAT3 there is stack garbage on screen for an empty scene - not
-    // wrong maths, just never-written memory - and garbage bit patterns are
-    // one of the few things a float can hold that legitimately prints as NaN.
-    XMFLOAT3 sceneCenter = { 0.0f, 0.0f, 0.0f };
-    float    sceneRadius = 0.0f;
-    m_shadowCastersExist = lighting.shadowsEnabled && shadowStrength > 0.0f &&
-                           ComputeSceneBounds(items, shadowCasters,
-                                              sceneCenter, sceneRadius);
-    const XMMATRIX shadowViewProj =
-        m_shadowCastersExist ? ComputeShadowViewProj(lighting, sceneCenter, sceneRadius)
-                             : XMMatrixIdentity();
-    m_shadowSceneCenter = sceneCenter;
-    m_shadowSceneRadius = m_shadowCastersExist ? sceneRadius : 0.0f;
-
     PassConstants constants;
     XMStoreFloat4x4(&constants.viewProj, XMMatrixTranspose(view * proj));
     XMStoreFloat4x4(&constants.skyViewProj, XMMatrixTranspose(skyView * proj));
@@ -842,7 +893,7 @@ void Renderer::UpdatePassConstants(FrameResource& frame, const CameraView& camer
         1.0f / float(m_shadowMap->Height())
     };
     constants.shadowBias       = shadowBias;
-    constants.shadowStrength   = m_shadowCastersExist ? shadowStrength : 0.0f;
+    constants.shadowStrength   = shadowStrength;
 
     memcpy(frame.passCBMapped, &constants, sizeof(constants));
 }
@@ -965,28 +1016,120 @@ void Renderer::QueryMsaaSupport()
     m_4xMsaaQuality   = m_4xMsaaSupported ? commonLevels - 1 : 0;
 }
 
+// Every potential caster, in submission order. Separate from BuildDrawQueues
+// because the light volume is fitted to this list and the caster test needs
+// that volume - the fit cannot depend on its own result.
+void Renderer::CollectOpaqueItems(const std::vector<DrawItem>& items,
+                                  DrawQueue& outAllOpaque)
+{
+    outAllOpaque.clear();
+    outAllOpaque.reserve(items.size());
+    for (size_t i = 0; i < items.size(); ++i)
+    {
+        if (items[i].layer != RenderLayer::Transparent)
+        {
+            outAllOpaque.push_back(i);
+        }
+    }
+}
+
 // Build pass membership without moving DrawItems themselves. Their position
 // in the source array is also their Object CB slot, so sorting that array or
 // renumbering a queue independently would bind the wrong transform.
+//
+// Three queues, not two, because "visible" is a different question per pass:
+// the camera decides what is drawn, the light decides what casts. An item can
+// be in either, both, or neither, and the case that matters most is the one
+// that is easy to get wrong - off screen but casting INTO the screen.
 void Renderer::BuildDrawQueues(const CameraView& camera,
+                               const LightingData& lighting,
                                const std::vector<DrawItem>& items,
-                               DrawQueue& outOpaque,
-                               DrawQueue& outTransparent) const
+                               const std::vector<Aabb>& worldBounds,
+                               FXMMATRIX shadowViewProj,
+                               float renderAspect,
+                               FrameVisibility& outVisibility) const
 {
-    outOpaque.clear();
-    outTransparent.clear();
-    outOpaque.reserve(items.size());
-    outTransparent.reserve(items.size());
+    outVisibility.mainOpaque.clear();
+    outVisibility.mainTransparent.clear();
+    outVisibility.shadowCasters.clear();
+    outVisibility.mainOpaque.reserve(items.size());
+    outVisibility.mainTransparent.reserve(items.size());
+    outVisibility.shadowCasters.reserve(items.size());
+
+    // The camera's own frustum, rebuilt from the same matrices the pass
+    // constants will carry - including renderAspect, so a narrow viewport
+    // culls to what that viewport actually shows.
+    XMVECTOR forwardAxis = XMVector3Normalize(XMLoadFloat3(&camera.forward));
+    if (!std::isfinite(XMVectorGetX(forwardAxis)))
+    {
+        forwardAxis = XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f);
+    }
+    const XMMATRIX cameraViewProj =
+        XMMatrixLookToLH(XMLoadFloat3(&camera.position), forwardAxis,
+                         XMLoadFloat3(&camera.up)) *
+        XMMatrixPerspectiveFovLH(camera.fovY, renderAspect,
+                                 camera.nearZ, camera.farZ);
+    const Frustum cameraFrustum = ExtractFrustum(cameraViewProj);
+    const Frustum lightFrustum  = ExtractFrustum(shadowViewProj);
+
+    // Shadows travel along the light direction, so an object can only cast
+    // into the view if it lies somewhere along the ray BACK toward the light
+    // from the camera frustum. Sweeping the camera frustum that way is
+    // exactly the volume of "everything whose shadow can land on screen".
+    //
+    // The light frustum bounds it a second time: outside the shadow map's
+    // own volume there is nowhere for a caster to be recorded. With the
+    // volume fitted to every opaque item that second test currently rejects
+    // nothing - it is the guard that keeps the queue honest if the fit ever
+    // stops covering the whole scene, not where the reduction comes from.
+    const XMVECTOR lightDirection = XMLoadFloat3(&lighting.directionalDirection);
+    const uint32_t casterPlaneMask =
+        ExtrudedPlaneMask(cameraFrustum, XMVectorNegate(lightDirection));
 
     for (size_t i = 0; i < items.size(); ++i)
     {
-        if (items[i].layer == RenderLayer::Transparent)
+        const DrawItem& item = items[i];
+        const bool transparent = item.layer == RenderLayer::Transparent;
+
+        // Culling off must reproduce the pre-M1.6 queues exactly, so the
+        // switch is here rather than around each test: no bounds are built,
+        // nothing is counted as unbounded, and every item is submitted.
+        if (!m_frustumCullingEnabled)
         {
-            outTransparent.push_back(i);
+            (transparent ? outVisibility.mainTransparent
+                         : outVisibility.mainOpaque).push_back(i);
+            if (!transparent && m_shadowCastersExist)
+            {
+                outVisibility.shadowCasters.push_back(i);
+            }
+            continue;
         }
-        else
+
+        // An item with no usable box reads as "inside" from both tests, which
+        // is the only direction culling is allowed to be wrong in.
+        const Aabb& bounds = worldBounds[i];
+        const bool mainVisible = IntersectsFrustum(cameraFrustum, bounds);
+        if (mainVisible)
         {
-            outOpaque.push_back(i);
+            (transparent ? outVisibility.mainTransparent
+                         : outVisibility.mainOpaque).push_back(i);
+        }
+
+        // Alpha-blended geometry is deliberately not a caster: the depth-only
+        // shader cannot represent partial coverage and would stamp a solid
+        // silhouette into the map.
+        //
+        // `mainVisible ||` is not an optimisation. Batching relies on every
+        // main-visible opaque item also being a caster so that one instance
+        // run can serve both passes, and a light volume fitted to all opaque
+        // items already contains them - stating it here makes that an
+        // invariant of the code rather than a property of the geometry.
+        if (!transparent && m_shadowCastersExist &&
+            (mainVisible ||
+             (IntersectsFrustum(lightFrustum, bounds) &&
+              IntersectsFrustum(cameraFrustum, bounds, casterPlaneMask))))
+        {
+            outVisibility.shadowCasters.push_back(i);
         }
     }
 
@@ -1012,14 +1155,24 @@ void Renderer::BuildDrawQueues(const CameraView& camera,
 
     // Largest camera-space Z first: straight-alpha blending needs every
     // farther surface already in the target when a nearer surface arrives.
-    std::stable_sort(outTransparent.begin(), outTransparent.end(),
+    std::stable_sort(outVisibility.mainTransparent.begin(),
+                     outVisibility.mainTransparent.end(),
                      [&](size_t left, size_t right) {
                          return cameraDepth(left) > cameraDepth(right);
                       });
 }
 
+// Group everything either pass will draw into batches, ONCE.
+//
+// Culling gives the two passes different membership, which invites building
+// two batch lists over two instance runs. Ordering each batch's run
+// main-visible-first serves both from one run instead: the main pass draws
+// the prefix, the shadow pass draws all of it. That keeps the per-frame
+// instance writes at "one per drawn item" no matter how the two sets differ,
+// which is what stops culling from costing more CPU than it saves.
 void Renderer::BuildOpaqueBatches(const std::vector<DrawItem>& items,
-                                  const DrawQueue& opaqueItems,
+                                  const DrawQueue& mainOpaque,
+                                  const DrawQueue& shadowCasters,
                                   DrawQueue& outInstanceOrder,
                                   std::vector<OpaqueBatch>& outBatches) const
 {
@@ -1027,6 +1180,8 @@ void Renderer::BuildOpaqueBatches(const std::vector<DrawItem>& items,
     {
         OpaqueBatchKey key;
         size_t itemIndex = 0;
+        bool   mainVisible = false;
+        bool   caster = false;
     };
 
     auto makeKey = [&](size_t itemIndex) {
@@ -1060,15 +1215,39 @@ void Renderer::BuildOpaqueBatches(const std::vector<DrawItem>& items,
         return key;
     };
 
-    std::vector<KeyedItem> keyedItems;
-    keyedItems.reserve(opaqueItems.size());
-    for (const size_t itemIndex : opaqueItems)
+    // Bit 0 is "the camera sees it", bit 1 is "it casts". Marking both onto
+    // one array is what lets a single pass over the union produce both.
+    std::vector<uint8_t> membership(items.size(), 0u);
+    for (const size_t itemIndex : mainOpaque)
     {
-        keyedItems.push_back({ makeKey(itemIndex), itemIndex });
+        membership[itemIndex] |= 1u;
     }
+    for (const size_t itemIndex : shadowCasters)
+    {
+        membership[itemIndex] |= 2u;
+    }
+
+    std::vector<KeyedItem> keyedItems;
+    keyedItems.reserve(mainOpaque.size() + shadowCasters.size());
+    for (size_t itemIndex = 0; itemIndex < items.size(); ++itemIndex)
+    {
+        const uint8_t flags = membership[itemIndex];
+        if (flags == 0)
+        {
+            continue;
+        }
+        keyedItems.push_back({ makeKey(itemIndex), itemIndex,
+                               (flags & 1u) != 0, (flags & 2u) != 0 });
+    }
+
+    // Batch key first, then main-visible before caster-only. The second term
+    // is what makes each batch's run a main prefix followed by the extra
+    // casters, so two draws can share it.
     std::stable_sort(keyedItems.begin(), keyedItems.end(),
                      [](const KeyedItem& left, const KeyedItem& right) {
-                         return left.key < right.key;
+                         if (left.key < right.key) { return true; }
+                         if (right.key < left.key) { return false; }
+                         return left.mainVisible && !right.mainVisible;
                      });
 
     outInstanceOrder.clear();
@@ -1086,12 +1265,44 @@ void Renderer::BuildOpaqueBatches(const std::vector<DrawItem>& items,
             (keyed.key < outBatches.back().key);
         if (startsBatch)
         {
-            outBatches.push_back({ keyed.key, keyed.itemIndex,
-                                   instanceIndex, 1 });
+            outBatches.push_back({ keyed.key, keyed.itemIndex, instanceIndex,
+                                   0, 0 });
         }
-        else
+        OpaqueBatch& batch = outBatches.back();
+        if (keyed.mainVisible)
         {
-            ++outBatches.back().instanceCount;
+            // The main count is a PREFIX length, so it may only grow while
+            // the run is still all main-visible - which the sort guarantees.
+            ++batch.mainInstanceCount;
+            // A batch is bound with one material; the main pass needs a
+            // representative it actually draws.
+            if (batch.mainInstanceCount == 1)
+            {
+                batch.representativeItem = keyed.itemIndex;
+            }
+        }
+        if (keyed.caster)
+        {
+            ++batch.casterInstanceCount;
+        }
+    }
+
+    // The shadow pass draws [firstInstance, firstInstance + casterInstanceCount),
+    // which is only the right span if the casters in a run are all of it or
+    // none of it. That follows from every main-visible opaque item also being
+    // a caster - check it here rather than trusting a caller two functions
+    // away, because the failure would be a silently wrong set of shadows.
+    for (size_t index = 0; index < outBatches.size(); ++index)
+    {
+        const UINT runEnd = index + 1 < outBatches.size()
+                          ? outBatches[index + 1].firstInstance
+                          : static_cast<UINT>(outInstanceOrder.size());
+        const UINT runLength = runEnd - outBatches[index].firstInstance;
+        const UINT casters = outBatches[index].casterInstanceCount;
+        if (casters != 0 && casters != runLength)
+        {
+            throw std::logic_error(
+                "a main-visible opaque item was not treated as a shadow caster");
         }
     }
 }
@@ -1193,7 +1404,10 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     // Clearing to 1.0 (far) is the honest picture for "nothing to cast a
     // shadow": every texel reads as the far plane, same as a real pass over
     // an empty frustum would produce.
-    if (!m_shadowCastersExist || opaqueBatches.empty())
+    const bool anyCaster = std::any_of(
+        opaqueBatches.begin(), opaqueBatches.end(),
+        [](const OpaqueBatch& batch) { return batch.casterInstanceCount != 0; });
+    if (!m_shadowCastersExist || !anyCaster)
     {
         D3D12_RESOURCE_BARRIER toShaderResource = TransitionBarrier(
             m_shadowMap->Resource(),
@@ -1222,11 +1436,15 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
     m_commandList->RSSetScissorRects(1, &scissor);
     m_commandList->IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
 
-    // Every opaque item is a caster. Alpha-blended geometry is deliberately
-    // absent: the depth-only shader cannot represent partial coverage and
-    // would otherwise stamp a solid silhouette into the map.
+    // The WHOLE of each batch's run, where the main pass below draws only its
+    // main-visible prefix: an item the camera cannot see still reaches the
+    // map, and one whose shadow cannot reach the screen never entered the run.
     for (const OpaqueBatch& batch : opaqueBatches)
     {
+        if (batch.casterInstanceCount == 0)
+        {
+            continue;
+        }
         const DrawItem& item = items[batch.representativeItem];
         const Mesh&     mesh = m_resources.GetMesh(item.mesh);
 
@@ -1236,7 +1454,7 @@ void Renderer::DrawShadowDepthPass(FrameResource& frame,
         m_commandList->IASetVertexBuffers(0, _countof(buffers), buffers);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
         m_commandList->DrawIndexedInstanced(
-            batch.key.indexCount, batch.instanceCount,
+            batch.key.indexCount, batch.casterInstanceCount,
             batch.key.indexOffset, 0, batch.firstInstance);
         ++m_lastFrameStats.drawCalls;
     }
@@ -1270,6 +1488,12 @@ void Renderer::DrawOpaquePass(FrameResource& frame,
         frame.objectCB->GetGPUVirtualAddress();
     for (const OpaqueBatch& batch : opaqueBatches)
     {
+        // A batch with no main-visible prefix exists only for the shadow
+        // pass - everything in it is off screen.
+        if (batch.mainInstanceCount == 0)
+        {
+            continue;
+        }
         const DrawItem& item = items[batch.representativeItem];
         const Mesh& mesh = m_resources.GetMesh(item.mesh);
 
@@ -1290,7 +1514,7 @@ void Renderer::DrawOpaquePass(FrameResource& frame,
         m_commandList->IASetVertexBuffers(0, _countof(buffers), buffers);
         m_commandList->IASetIndexBuffer(&mesh.ibv);
         m_commandList->DrawIndexedInstanced(
-            batch.key.indexCount, batch.instanceCount,
+            batch.key.indexCount, batch.mainInstanceCount,
             batch.key.indexOffset, 0, batch.firstInstance);
         ++m_lastFrameStats.drawCalls;
     }
@@ -1343,6 +1567,23 @@ void Renderer::DrawTransparentPass(FrameResource& frame,
 
     BindScenePass(frame, target, PsoRole::Transparent);
     DrawItems(frame, items, transparentItems);
+}
+
+void Renderer::PendingRenderSize(SceneOutput output, UINT& outWidth,
+                                 UINT& outHeight) const
+{
+    if (output == SceneOutput::SwapChain)
+    {
+        outWidth  = m_swapChain.Width();
+        outHeight = m_swapChain.Height();
+        return;
+    }
+
+    const bool resizePending = m_requestedViewportWidth != 0 &&
+        (m_requestedViewportWidth != m_sceneColor->Width() ||
+         m_requestedViewportHeight != m_sceneColor->Height());
+    outWidth  = resizePending ? m_requestedViewportWidth : m_sceneColor->Width();
+    outHeight = resizePending ? m_requestedViewportHeight : m_sceneColor->Height();
 }
 
 Renderer::SceneAttachments Renderer::GetSceneAttachments(SceneOutput output) const
@@ -1532,6 +1773,42 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
 
     RequestObjectCapacity(items.size());
 
+    // Everything from here to the fence wait is CPU-only work over the
+    // submitted items and their meshes' local boxes. It runs FIRST because
+    // the instance capacity it settles has to be known at the growth point
+    // below - culling is what decides how many instance slots the frame
+    // needs, and that is no longer simply the item count.
+    //
+    // The attachments themselves cannot be read yet: a pending viewport
+    // resize is applied further down, so the SIZE this frame will render at
+    // is asked for separately. Building the frustum from the old aspect would
+    // cull to the wrong shape for one frame on every drag of the splitter.
+    UINT cullWidth = 1;
+    UINT cullHeight = 1;
+    PendingRenderSize(output, cullWidth, cullHeight);
+    const float renderAspect = cullHeight == 0
+        ? 1.0f : float(cullWidth) / float(cullHeight);
+
+    // Bound, partition, fit the light volume, then cull - in that order. The
+    // caster test needs a light frustum, and the light frustum is fitted to
+    // every opaque item rather than to whatever survived culling.
+    FrameVisibility visibility;
+    BuildWorldBounds(items, visibility.worldBounds, visibility.unboundedItems);
+    CollectOpaqueItems(items, visibility.allOpaque);
+    float shadowStrength = 0.0f;
+    const XMMATRIX shadowViewProj = PrepareShadowFrustum(
+        lighting, visibility.worldBounds, visibility.allOpaque, shadowStrength);
+    BuildDrawQueues(camera, lighting, items, visibility.worldBounds,
+                    shadowViewProj, renderAspect, visibility);
+
+    // Queues contain source indices, so transparent sorting and batch
+    // reordering never change the item-to-Object-CB mapping.
+    DrawQueue instanceOrder;
+    std::vector<OpaqueBatch> opaqueBatches;
+    BuildOpaqueBatches(items, visibility.mainOpaque, visibility.shadowCasters,
+                       instanceOrder, opaqueBatches);
+    RequestInstanceCapacity(instanceOrder.size());
+
     FrameResource& frame = m_frames[m_currentFrame];
 
     // Wait only until the GPU is done with THIS set of resources - which,
@@ -1551,11 +1828,13 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
          m_requestedViewportHeight != m_sceneColor->Height());
     const bool growObjectBuffers =
         m_requestedObjectCapacity > m_objectCapacity;
+    const bool growInstanceBuffers =
+        m_requestedInstanceCapacity > m_instanceCapacity;
 
-    // Both operations replace resources that any frame in flight may still
-    // reference. Coalescing them keeps even a resize+growth frame to one full
-    // drain, while the normal path performs neither Signal nor full wait.
-    if (resizeViewport || growObjectBuffers)
+    // All three operations replace resources that any frame in flight may
+    // still reference. Coalescing them keeps even a resize+growth frame to one
+    // full drain, while the normal path performs neither Signal nor full wait.
+    if (resizeViewport || growObjectBuffers || growInstanceBuffers)
     {
         m_device.WaitForGpu();
         ++m_lastFrameStats.fullGpuWaits;
@@ -1563,6 +1842,10 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
         if (growObjectBuffers)
         {
             RecreateObjectConstantBuffers(m_requestedObjectCapacity);
+        }
+        if (growInstanceBuffers)
+        {
+            RecreateInstanceBuffers(m_requestedInstanceCapacity);
         }
 
         // Both halves of the attachment, together - a colour and depth pair
@@ -1574,24 +1857,17 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
         }
     }
     m_lastFrameStats.objectCapacity = m_objectCapacity;
-
-    // Queues contain source indices, so transparent sorting never changes
-    // the item-to-Object-CB mapping established below.
-    DrawQueue opaqueItems;
-    DrawQueue transparentItems;
-    BuildDrawQueues(camera, items, opaqueItems, transparentItems);
-    DrawQueue opaqueInstanceOrder;
-    std::vector<OpaqueBatch> opaqueBatches;
-    BuildOpaqueBatches(items, opaqueItems, opaqueInstanceOrder, opaqueBatches);
+    m_lastFrameStats.instanceCapacity = m_instanceCapacity;
 
     // Only now is it safe to overwrite this frame's constant buffers and
-    // recycle its command memory.
+    // recycle its command memory. The attachments are read after the resize,
+    // and their aspect agrees with the one culling used above.
     const SceneAttachments target = GetSceneAttachments(output);
-    const float renderAspect = target.height == 0
-        ? 1.0f : float(target.width) / float(target.height);
-    UpdatePassConstants(frame, camera, lighting, items, opaqueItems, renderAspect);
+    UpdatePassConstants(frame, camera, lighting, shadowViewProj, shadowStrength,
+                        target.height == 0
+                            ? 1.0f : float(target.width) / float(target.height));
     UpdateObjectConstants(frame, items);
-    UpdateInstanceData(frame, items, opaqueInstanceOrder);
+    UpdateInstanceData(frame, items, instanceOrder);
 
     ThrowIfFailed(frame.commandAllocator->Reset(), "Allocator Reset");
     ThrowIfFailed(m_commandList->Reset(frame.commandAllocator.Get(), nullptr),
@@ -1601,8 +1877,8 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     ID3D12DescriptorHeap* heaps[] = { m_srvAllocator.Heap() };
     m_commandList->SetDescriptorHeaps(_countof(heaps), heaps);
 
-    RecordScenePasses(frame, target, lighting, items,
-                      opaqueBatches, transparentItems);
+    RecordScenePasses(frame, target, lighting, items, opaqueBatches,
+                      visibility.mainTransparent);
     if (output == SceneOutput::OffscreenTexture)
     {
         PresentOffscreen(overlayRecorder);
@@ -1624,9 +1900,16 @@ void Renderer::RenderFrame(const CameraView& camera, const LightingData& lightin
     // next Render() that lands back on this FrameResource checks this value.
     frame.fenceValue = m_device.Signal();
 
-    m_lastFrameStats.mainVisible = opaqueItems.size() + transparentItems.size();
-    m_lastFrameStats.shadowVisible = m_shadowCastersExist
-        ? opaqueItems.size() : 0;
+    m_lastFrameStats.mainVisible =
+        visibility.mainOpaque.size() + visibility.mainTransparent.size();
+    m_lastFrameStats.shadowVisible = visibility.shadowCasters.size();
+    m_lastFrameStats.mainCulled = items.size() - m_lastFrameStats.mainVisible;
+    // Against the potential casters, not against every item: transparent
+    // geometry was never a caster, so counting it as culled would inflate
+    // what culling is credited with.
+    m_lastFrameStats.shadowCulled =
+        visibility.allOpaque.size() - visibility.shadowCasters.size();
+    m_lastFrameStats.unboundedItems = visibility.unboundedItems;
     m_lastFrameStats.renderWidth = target.width;
     m_lastFrameStats.renderHeight = target.height;
 

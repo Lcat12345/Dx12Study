@@ -6,6 +6,7 @@
 #include "Graphics/FrameResource.h"
 #include "Graphics/DescriptorAllocator.h"
 #include "Graphics/DepthTarget.h"
+#include "Graphics/Frustum.h"
 #include "Graphics/RenderTarget.h"
 #include "Graphics/ResourceManager.h"
 #include "Graphics/RenderData.h"
@@ -30,10 +31,20 @@ public:
         uint64_t mainVisible      = 0;
         uint64_t shadowVisible    = 0;
         uint64_t submittedItems   = 0;
+        // What culling removed, counted separately from what survived so a
+        // benchmark row shows the work avoided rather than only the work done.
+        uint64_t mainCulled       = 0;
+        uint64_t shadowCulled     = 0;
+        // Items drawn without a usable world box - an invalid mesh, an empty
+        // mesh box, or a transform that produced non-finite corners. They are
+        // forced visible, so this counter is the only way to notice that
+        // culling silently stopped applying to part of the scene.
+        uint64_t unboundedItems   = 0;
         // Full queue drains performed inside this RenderFrame. Per-frame
         // fence waits are intentionally not counted here.
         uint64_t fullGpuWaits     = 0;
         UINT     objectCapacity   = 0;
+        UINT     instanceCapacity = 0;
         UINT     srvUsed           = 0;
         UINT     srvCapacity       = 0;
         UINT     renderWidth       = 0;
@@ -113,6 +124,12 @@ public:
     }
     static UINT ObjectCapacityForDrawItems(size_t drawItemCount);
 
+    // Frustum culling off submits every item to both passes, which is what
+    // the pre-M1.6 renderer did. Kept as a switch rather than a build flag so
+    // one binary can produce the on and off rows of the same benchmark.
+    void SetFrustumCullingEnabled(bool enabled) { m_frustumCullingEnabled = enabled; }
+    bool IsFrustumCullingEnabled() const { return m_frustumCullingEnabled; }
+
     // Takes flattened data, not a scene graph. Scene passes are shared by
     // both outputs; only the final presentation path differs. The optional
     // recorder is a host extension point and may be empty.
@@ -190,18 +207,47 @@ private:
         bool operator<(const OpaqueBatchKey& other) const;
     };
 
+    // One contiguous run of the per-frame instance buffer, shared by both
+    // passes. Main-visible items sort to the FRONT of the run, so the main
+    // pass draws its prefix and the shadow pass draws the whole thing - no
+    // second sort and no second copy of the transforms.
+    //
+    // That works only because every main-visible opaque item is also a
+    // caster, which BuildDrawQueues guarantees outright rather than leaving
+    // to geometry.
     struct OpaqueBatch
     {
         OpaqueBatchKey key;
         size_t representativeItem = 0;
         UINT firstInstance = 0;
-        UINT instanceCount = 0;
+        UINT mainInstanceCount = 0;
+        UINT casterInstanceCount = 0;
+    };
+
+    // What one frame's culling decided, kept together because the three
+    // queues are answers to the same question and must be built from one set
+    // of world boxes.
+    struct FrameVisibility
+    {
+        // Every opaque item, before the camera is consulted. The light's
+        // volume is fitted to THIS, not to what survived culling: sizing it
+        // to a camera-dependent set would make the shadow map's scale change
+        // as the player turns, and a shadow map that rescales between frames
+        // crawls along every edge.
+        DrawQueue allOpaque;
+        DrawQueue mainOpaque;
+        DrawQueue mainTransparent;
+        DrawQueue shadowCasters;
+        std::vector<Aabb> worldBounds;
+        uint64_t  unboundedItems = 0;
     };
 
     void CreateCommandObjects();
     void CreateConstantBuffers();
     void RequestObjectCapacity(size_t drawItemCount);
+    void RequestInstanceCapacity(size_t instanceCount);
     void RecreateObjectConstantBuffers(UINT capacity);
+    void RecreateInstanceBuffers(UINT capacity);
     void CreateRootSignature();
     void CreatePipelineStates();
     void QueryMsaaSupport();
@@ -215,9 +261,8 @@ private:
 
     void UpdatePassConstants(FrameResource& frame, const CameraView& camera,
                              const LightingData& lighting,
-                             const std::vector<DrawItem>& items,
-                             const DrawQueue& shadowCasters,
-                             float renderAspect);
+                             DirectX::FXMMATRIX shadowViewProj,
+                             float shadowStrength, float renderAspect);
     void UpdateObjectConstants(FrameResource& frame,
                                const std::vector<DrawItem>& items);
     void UpdateInstanceData(FrameResource& frame,
@@ -228,12 +273,28 @@ private:
     // False when there is nothing to bound. Uses the ResourceManager the
     // renderer already holds. The DrawItem centre added in 11.6 is the
     // transparent sort key, not a replacement for all eight corners here.
-    bool ComputeSceneBounds(const std::vector<DrawItem>& items,
+    bool ComputeSceneBounds(const std::vector<Aabb>& worldBounds,
                             const DrawQueue& itemIndices,
                             DirectX::XMFLOAT3& outCenter, float& outRadius) const;
+
+    // One world box per item, built once per frame. The shadow volume fit and
+    // both culling tests all want the same eight-corner box, and computing it
+    // twice costs more than the culling it pays for.
+    void BuildWorldBounds(const std::vector<DrawItem>& items,
+                          std::vector<Aabb>& outBounds,
+                          uint64_t& outUnboundedItems) const;
     DirectX::XMMATRIX ComputeShadowViewProj(const LightingData& lighting,
                                             const DirectX::XMFLOAT3& center,
                                             float radius) const;
+
+    // Decides, once per frame and before anything is culled, whether there is
+    // a light frustum at all and what it is. Records m_shadowCastersExist and
+    // the debug sphere, returns the matrix the pass constants and the caster
+    // test both use, and reports the validated shadow strength.
+    DirectX::XMMATRIX PrepareShadowFrustum(const LightingData& lighting,
+                                           const std::vector<Aabb>& worldBounds,
+                                           const DrawQueue& allOpaque,
+                                           float& outShadowStrength);
 
     // --- the passes, in the order they run ---
     // Written out rather than hidden behind a render graph: at this many
@@ -241,11 +302,17 @@ private:
     // barriers.
     // First: the light's own depth-only view of the casters, into a target
     // that has nothing to do with the scene viewport.
-    void BuildDrawQueues(const CameraView& camera,
+    static void CollectOpaqueItems(const std::vector<DrawItem>& items,
+                                   DrawQueue& outAllOpaque);
+    void BuildDrawQueues(const CameraView& camera, const LightingData& lighting,
                          const std::vector<DrawItem>& items,
-                         DrawQueue& outOpaque, DrawQueue& outTransparent) const;
+                         const std::vector<Aabb>& worldBounds,
+                         DirectX::FXMMATRIX shadowViewProj,
+                         float renderAspect,
+                         FrameVisibility& outVisibility) const;
     void BuildOpaqueBatches(const std::vector<DrawItem>& items,
-                            const DrawQueue& opaqueItems,
+                            const DrawQueue& mainOpaque,
+                            const DrawQueue& shadowCasters,
                             DrawQueue& outInstanceOrder,
                             std::vector<OpaqueBatch>& outBatches) const;
     void DrawShadowDepthPass(FrameResource& frame,
@@ -262,6 +329,11 @@ private:
                              const std::vector<DrawItem>& items,
                              const DrawQueue& transparentItems);
     SceneAttachments GetSceneAttachments(SceneOutput output) const;
+    // The size this frame will be drawn at, including a viewport resize that
+    // has been requested but not yet applied. Culling runs before that point
+    // and needs the aspect the frame will actually use.
+    void PendingRenderSize(SceneOutput output, UINT& outWidth,
+                           UINT& outHeight) const;
     void RecordScenePasses(FrameResource& frame, const SceneAttachments& target,
                            const LightingData& lighting,
                            const std::vector<DrawItem>& items,
@@ -331,6 +403,12 @@ private:
     UINT          m_currentFrame = 0;
     UINT          m_objectCapacity = kInitialObjectCapacity;
     UINT          m_requestedObjectCapacity = kInitialObjectCapacity;
+    // Sized independently of the object CB: one item may occupy an instance
+    // slot in the main batch AND another in the shadow batch, so the two
+    // capacities are not the same number.
+    UINT          m_instanceCapacity = kInitialObjectCapacity;
+    UINT          m_requestedInstanceCapacity = kInitialObjectCapacity;
+    bool          m_frustumCullingEnabled = true;
 
     // Shared by the scene passes for as long as they need the same inputs.
     // Not a rule: a pass whose contract genuinely differs - shadow depth

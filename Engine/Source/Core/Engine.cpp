@@ -85,6 +85,7 @@ void Engine::RecordFrameSample(float dt)
         << " max_ms=" << summary->maxMilliseconds
         << " vsync=" << (m_renderer->IsVSync() ? "on" : "off")
         << " msaa=" << m_renderer->MsaaSampleCount() << 'x'
+        << " culling=" << (m_renderer->IsFrustumCullingEnabled() ? "on" : "off")
         << " width=" << frame.renderWidth
         << " height=" << frame.renderHeight
         << " adapter=\"" << ToUtf8(m_renderer->AdapterName()) << '"'
@@ -93,7 +94,11 @@ void Engine::RecordFrameSample(float dt)
         << " root_cbv_binds=" << frame.rootCbvBinds
         << " main_visible=" << frame.mainVisible
         << " shadow_visible=" << frame.shadowVisible
+        << " main_culled=" << frame.mainCulled
+        << " shadow_culled=" << frame.shadowCulled
+        << " unbounded=" << frame.unboundedItems
         << " object_capacity=" << frame.objectCapacity
+        << " instance_capacity=" << frame.instanceCapacity
         << " full_gpu_waits=" << frame.fullGpuWaits
         << " srv_used=" << frame.srvUsed
         << " srv_capacity=" << frame.srvCapacity;

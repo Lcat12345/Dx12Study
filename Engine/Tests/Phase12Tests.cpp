@@ -8,6 +8,7 @@
 #include "Game/Scene.h"
 #include "Game/Systems.h"
 #include "Graphics/DescriptorAllocator.h"
+#include "Graphics/Frustum.h"
 #include "Graphics/GraphicsDevice.h"
 #include "Graphics/Renderer.h"
 #include "Graphics/ResourceManager.h"
@@ -20,6 +21,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <locale>
 #include <sstream>
 #include <stdexcept>
@@ -380,6 +382,25 @@ namespace
         Check(startup.benchmark.outputPath ==
                   (paths.root / L"Results/baseline.tsv").lexically_normal(),
               "custom benchmark output was not rooted beside Player.exe");
+
+        // Culling defaults to on and is independent of benchmark mode, so the
+        // same switch produces the on and off rows of one comparison.
+        Check(startup.frustumCulling,
+              "frustum culling did not default to on");
+        const wchar_t* cullingOff[] = {
+            L"Player.exe", L"--benchmark", L"1000", L"--culling", L"off"
+        };
+        Check(ParsePlayerStartup(5, cullingOff, paths, startup, error) &&
+                  !startup.frustumCulling,
+              "--culling off was not applied");
+        const wchar_t* cullingOn[] = { L"Player.exe", L"--culling", L"on" };
+        Check(ParsePlayerStartup(3, cullingOn, paths, startup, error) &&
+                  startup.frustumCulling,
+              "--culling on outside benchmark mode was rejected");
+        const wchar_t* cullingBad[] = { L"Player.exe", L"--culling", L"maybe" };
+        Check(!ParsePlayerStartup(3, cullingBad, paths, startup, error) &&
+                  error.find(L"on or off") != std::wstring::npos,
+              "an unsupported --culling value lacked a clear error");
 
         const wchar_t* unsupportedBenchmark[] = {
             L"Player.exe", L"--benchmark", L"256"
@@ -1331,6 +1352,232 @@ namespace
         UnregisterClassW(className, windowClass.hInstance);
     }
 
+    // The three cases M1.6 exists to keep apart, decided without a device.
+    //
+    // "In shadow but out of main" is the one that is easy to get wrong and
+    // impossible to notice from a frame rate: cull it and the shadow of
+    // everything just off screen disappears.
+    void FrustumClassifiesMainAndShadowSeparately()
+    {
+        using namespace DirectX;
+
+        // Eye at the origin looking down +Z, square viewport.
+        const XMMATRIX cameraViewProj =
+            XMMatrixLookToLH(XMVectorSet(0.0f, 0.0f, 0.0f, 1.0f),
+                             XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f),
+                             XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f)) *
+            XMMatrixPerspectiveFovLH(XM_PIDIV4, 1.0f, 0.1f, 100.0f);
+        const Frustum cameraFrustum = ExtractFrustum(cameraViewProj);
+
+        // The sun straight down, and a deliberately TIGHT light volume: it
+        // covers a 20-unit square around the origin and nothing beyond, which
+        // is what makes "inside the camera but outside the light" reachable.
+        const XMVECTOR lightDirection = XMVectorSet(0.0f, -1.0f, 0.0f, 0.0f);
+        const XMMATRIX lightViewProj =
+            XMMatrixLookToLH(XMVectorSet(0.0f, 50.0f, 0.0f, 1.0f), lightDirection,
+                             XMVectorSet(0.0f, 0.0f, 1.0f, 0.0f)) *
+            XMMatrixOrthographicLH(20.0f, 20.0f, 0.1f, 200.0f);
+        const Frustum lightFrustum = ExtractFrustum(lightViewProj);
+        const uint32_t casterMask =
+            ExtrudedPlaneMask(cameraFrustum, XMVectorNegate(lightDirection));
+
+        Check((casterMask & (1u << Frustum::Top)) == 0,
+              "sweeping toward an overhead sun kept the frustum's top plane");
+        Check((casterMask & (1u << Frustum::Near)) != 0 &&
+                  (casterMask & (1u << Frustum::Bottom)) != 0,
+              "sweeping toward an overhead sun dropped a plane it must keep");
+
+        const Aabb unitBox = { { -0.5f, -0.5f, -0.5f }, { 0.5f, 0.5f, 0.5f } };
+        auto boxAt = [&](float x, float y, float z) {
+            return TransformAabb(unitBox, XMMatrixTranslation(x, y, z));
+        };
+
+        // Well above the view at z = 5, where the frustum is only ~2 units
+        // tall, but directly over ground the camera can see.
+        const Aabb aboveView = boxAt(0.0f, 8.0f, 5.0f);
+        Check(!IntersectsFrustum(cameraFrustum, aboveView),
+              "a box above the view was not culled from the main queue");
+        Check(IntersectsFrustum(lightFrustum, aboveView) &&
+                  IntersectsFrustum(cameraFrustum, aboveView, casterMask),
+              "an off-screen caster over the visible ground was dropped");
+
+        // In front of the camera but past the edge of the light's volume.
+        const Aabb beyondLight = boxAt(0.0f, 0.0f, 40.0f);
+        Check(IntersectsFrustum(cameraFrustum, beyondLight),
+              "a box straight ahead was culled from the main queue");
+        Check(!IntersectsFrustum(lightFrustum, beyondLight),
+              "a box outside the light's volume was still called a caster");
+
+        // Behind the camera, and behind it in the swept volume too: the near
+        // plane survives the sweep, so nothing back there can cast forward.
+        const Aabb behindCamera = boxAt(0.0f, 0.0f, -30.0f);
+        Check(!IntersectsFrustum(cameraFrustum, behindCamera),
+              "a box behind the camera was not culled from the main queue");
+        Check(!IntersectsFrustum(cameraFrustum, behindCamera, casterMask),
+              "a box behind the camera was kept as a caster");
+
+        // A large, rotated, non-uniformly scaled mesh straddling the right
+        // edge. Culling may cost a wasted draw at a boundary; it may never
+        // make something on screen vanish.
+        const XMMATRIX edgeWorld = XMMatrixScaling(3.0f, 0.5f, 1.0f) *
+                                   XMMatrixRotationY(0.7f) *
+                                   XMMatrixTranslation(5.4f, 0.0f, 10.0f);
+        const Aabb straddling = TransformAabb(unitBox, edgeWorld);
+        Check(IntersectsFrustum(cameraFrustum, straddling),
+              "a rotated mesh crossing the screen edge was culled");
+
+        // Every box exactly on a plane counts as inside, at both the near
+        // plane and the sides, so a tie never removes geometry.
+        Check(IntersectsFrustum(cameraFrustum, boxAt(0.0f, 0.0f, 0.6f)),
+              "a box touching the near plane was culled");
+
+        // No usable bounds means no decision to make, in either direction.
+        // "Empty" is the INVERTED box ComputeBounds returns for no vertices,
+        // not a zero-size one: min == max is a point, and a point is testable.
+        const Aabb emptyLocal = ComputeBounds(nullptr, 0);
+        Check(emptyLocal.IsEmpty(), "no vertices did not produce an empty box");
+        Check(TransformAabb(emptyLocal, XMMatrixIdentity()).IsEmpty(),
+              "an empty local box did not stay empty through a transform");
+        Check(IntersectsFrustum(cameraFrustum, TransformAabb(
+                  emptyLocal, XMMatrixIdentity())),
+              "an item without bounds was culled instead of assumed visible");
+
+        // A transform holding non-finite values must degrade to the same
+        // "assume visible" answer rather than testing garbage corners.
+        XMMATRIX broken = XMMatrixIdentity();
+        broken.r[3] = XMVectorSet(std::numeric_limits<float>::quiet_NaN(),
+                                  0.0f, 0.0f, 1.0f);
+        Check(TransformAabb(unitBox, broken).IsEmpty(),
+              "a non-finite transform produced a box culling would trust");
+    }
+
+    // The same three cases again, but through the renderer, where they have
+    // to survive the split into two batch lists over one instance buffer and
+    // the switch that turns culling off.
+    void CullingSplitsMainAndShadowQueues(TestContext&)
+    {
+        constexpr wchar_t className[] = L"Dx12EngineM16CullingTest";
+        WNDCLASSEXW windowClass = {};
+        windowClass.cbSize = sizeof(windowClass);
+        windowClass.lpfnWndProc = DefWindowProcW;
+        windowClass.hInstance = GetModuleHandleW(nullptr);
+        windowClass.lpszClassName = className;
+        const ATOM atom = RegisterClassExW(&windowClass);
+        Check(atom != 0 || GetLastError() == ERROR_CLASS_ALREADY_EXISTS,
+              "could not register culling test window");
+
+        HWND hwnd = CreateWindowExW(0, className, L"M1.6 Culling Test",
+                                    WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT,
+                                    320, 200, nullptr, nullptr,
+                                    windowClass.hInstance, nullptr);
+        Check(hwnd != nullptr, "could not create culling test window");
+
+        try
+        {
+            Renderer renderer(hwnd, 320, 200,
+                              RuntimePaths::FromRoot(GetExecutableDir()),
+                              GraphicsDevice::AdapterPolicy::SoftwareOnly);
+            renderer.SetMsaaEnabled(false);
+
+            CameraView camera; // origin, looking down +Z
+            LightingData lighting;
+            lighting.shadowsEnabled = true;
+            lighting.directionalDirection = { 0.0f, -1.0f, 0.0f };
+
+            const MeshHandle mesh = renderer.Resources().ResolveMesh(L"#cube");
+            auto itemAt = [&](float x, float y, float z) {
+                DrawItem item;
+                item.mesh = mesh;
+                item.layer = RenderLayer::Opaque;
+                DirectX::XMStoreFloat4x4(
+                    &item.world, DirectX::XMMatrixTranslation(x, y, z));
+                item.worldBoundsCenter = { x, y, z };
+                return item;
+            };
+
+            // In view; well above the view but over ground it can see; and
+            // behind the camera, where nothing can cast forward.
+            const std::vector<DrawItem> items = {
+                itemAt(0.0f, 0.0f, 10.0f),
+                itemAt(0.0f, 30.0f, 10.0f),
+                itemAt(0.0f, 0.0f, -30.0f),
+            };
+
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            const Renderer::FrameStats culled = renderer.LastFrameStats();
+            Check(culled.submittedItems == 3, "culling frame lost a submitted item");
+            Check(culled.mainVisible == 1 && culled.mainCulled == 2,
+                  "the main queue did not keep exactly the item in view");
+            Check(culled.shadowVisible == 2 && culled.shadowCulled == 1,
+                  "the shadow queue did not keep the off-screen caster only");
+            Check(culled.unboundedItems == 0,
+                  "a cube with real bounds was reported as unbounded");
+            // One batch per pass: the two passes name disjoint runs of the
+            // shared instance buffer, so they cannot collapse into one draw.
+            Check(culled.drawCalls == 2,
+                  "main and shadow did not each submit one culled batch");
+
+            // Off, the renderer must submit exactly what it did before M1.6.
+            renderer.SetFrustumCullingEnabled(false);
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            const Renderer::FrameStats uncelled = renderer.LastFrameStats();
+            Check(uncelled.mainVisible == 3 && uncelled.mainCulled == 0,
+                  "culling off still removed items from the main queue");
+            Check(uncelled.shadowVisible == 3 && uncelled.shadowCulled == 0,
+                  "culling off still removed casters");
+
+            // Back on, and with the light turned off entirely: no light
+            // frustum means no caster queue, and the shadow pass must not be
+            // handed batches it would draw into a map nothing sampled.
+            renderer.SetFrustumCullingEnabled(true);
+            lighting.shadowsEnabled = false;
+            renderer.RenderFrame(camera, lighting, items,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            Check(renderer.LastFrameStats().shadowVisible == 0,
+                  "casters survived a frame with shadows disabled");
+            Check(renderer.LastFrameStats().drawCalls == 1,
+                  "the shadow pass drew without a light frustum");
+
+            // Main and shadow differ for 300 items, half of them off screen
+            // but casting into it. One instance slot per DRAWN item is the
+            // whole point of the shared run: a second run for the shadow pass
+            // would need 600 slots and grow the buffer one step further.
+            lighting.shadowsEnabled = true;
+            std::vector<DrawItem> split;
+            split.reserve(300);
+            for (size_t index = 0; index < 300; ++index)
+            {
+                const float x = float(index % 10u) * 0.01f;
+                split.push_back(index % 2 == 0 ? itemAt(x, 0.0f, 10.0f)
+                                               : itemAt(x, 30.0f, 10.0f));
+            }
+            renderer.RenderFrame(camera, lighting, split,
+                                 Renderer::SceneOutput::OffscreenTexture);
+            const Renderer::FrameStats shared = renderer.LastFrameStats();
+            Check(shared.mainVisible == 150 && shared.shadowVisible == 300,
+                  "the split fixture did not separate main from casters");
+            Check(shared.objectCapacity == 512 && shared.instanceCapacity == 512,
+                  "the shadow pass was given its own copy of the instances");
+
+            if (renderer.HasDebugLayer())
+            {
+                Check(renderer.DebugMessageCount() == 0,
+                      "culling recorded a D3D12 debug message");
+            }
+        }
+        catch (...)
+        {
+            DestroyWindow(hwnd);
+            UnregisterClassW(className, windowClass.hInstance);
+            throw;
+        }
+
+        DestroyWindow(hwnd);
+        UnregisterClassW(className, windowClass.hInstance);
+    }
+
     struct TestCase
     {
         const char* name;
@@ -1358,6 +1605,8 @@ namespace
             { "functional/arena-nearest-attack-xp",
               ArenaNearestAttackDeathAndXpPickup },
             { "functional/player-startup-arguments", PlayerStartupArguments },
+            { "unit/frustum-main-shadow-classification",
+              FrustumClassifiesMainAndShadowSeparately },
         };
 
         bool allPassed = true;
@@ -1422,6 +1671,8 @@ int main()
             { "regression/classic-locale", SerializationForcesClassicLocale },
             { "functional/presentation-and-dynamic-object-buffers",
               PresentationPathsAndDynamicObjectBuffersStayClean },
+            { "functional/main-shadow-culling-queues",
+              CullingSplitsMainAndShadowQueues },
             { "regression/d3d12-debug-layer-clean", D3D12DebugLayerStaysClean },
             { "functional/runtime-paths-and-compiled-shaders",
               RuntimePathsAndCompiledShaderCache },

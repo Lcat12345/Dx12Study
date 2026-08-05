@@ -46,6 +46,8 @@ PlayerApp::PlayerApp(HINSTANCE instance, const RuntimePaths& runtimePaths,
 
 void PlayerApp::OnInit()
 {
+    GetRenderer().SetFrustumCullingEnabled(m_startup.frustumCulling);
+
     std::string error;
     if (!LoadScene(m_startup.scenePath, GetRenderer().Resources(), m_world, error))
     {
@@ -211,10 +213,11 @@ bool PlayerApp::WriteBenchmarkRow(std::string_view status,
     if (writeHeader)
     {
         stream << "status\tenemies\twarmup_frames\tsample_frames"
-                  "\tmedian_ms\tp95_ms\tmax_ms\tvsync\tmsaa"
+                  "\tmedian_ms\tp95_ms\tmax_ms\tvsync\tmsaa\tculling"
                   "\twidth\theight\tadapter\tdraw_calls\troot_cbv_binds"
-                  "\tmain_visible\tshadow_visible\tdraw_items"
-                  "\tobject_capacity\tsrv_used\tsrv_capacity\terror\n";
+                  "\tmain_visible\tshadow_visible\tmain_culled\tshadow_culled"
+                  "\tunbounded\tdraw_items\tobject_capacity\tinstance_capacity"
+                  "\tsrv_used\tsrv_capacity\terror\n";
     }
 
     stream.imbue(std::locale::classic());
@@ -228,11 +231,15 @@ bool PlayerApp::WriteBenchmarkRow(std::string_view status,
            << (summary ? summary->maxMilliseconds : 0.0) << '\t'
            << (GetRenderer().IsVSync() ? "on" : "off") << '\t'
            << GetRenderer().MsaaSampleCount() << 'x' << '\t'
+           << (GetRenderer().IsFrustumCullingEnabled() ? "on" : "off") << '\t'
            << frame.renderWidth << '\t' << frame.renderHeight << '\t'
            << TsvField(ToUtf8(GetRenderer().AdapterName())) << '\t'
            << frame.drawCalls << '\t' << frame.rootCbvBinds << '\t'
            << frame.mainVisible << '\t' << frame.shadowVisible << '\t'
+           << frame.mainCulled << '\t' << frame.shadowCulled << '\t'
+           << frame.unboundedItems << '\t'
            << m_drawItems.size() << '\t' << GetRenderer().MaxDrawItems() << '\t'
+           << frame.instanceCapacity << '\t'
            << GetRenderer().ShaderVisibleDescriptors().UsedCount() << '\t'
            << GetRenderer().ShaderVisibleDescriptors().Capacity() << '\t'
            << TsvField(error) << '\n';

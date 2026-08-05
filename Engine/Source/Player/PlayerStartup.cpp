@@ -13,12 +13,15 @@ bool ParsePlayerStartup(int argc, const wchar_t* const* argv,
 {
     constexpr std::wstring_view usage =
         L"Usage: Player.exe [--scene <path>] "
-        L"[--benchmark <100|500|1000|2000>] [--benchmark-output <path>]";
+        L"[--benchmark <100|500|1000|2000>] [--benchmark-output <path>] "
+        L"[--culling <on|off>]";
     std::filesystem::path requested = PLAYER_DEFAULT_SCENE;
     std::filesystem::path benchmarkOutput;
     bool                  sawScene           = false;
     bool                  sawBenchmark       = false;
     bool                  sawBenchmarkOutput = false;
+    bool                  sawCulling         = false;
+    bool                  frustumCulling     = true;
     uint32_t              benchmarkEnemies  = 0;
 
     for (int index = 1; index < argc; ++index)
@@ -99,6 +102,30 @@ bool ParsePlayerStartup(int argc, const wchar_t* const* argv,
             continue;
         }
 
+        if (option == L"--culling")
+        {
+            if (sawCulling)
+            {
+                outError = L"--culling may be specified only once";
+                return false;
+            }
+            if (++index >= argc || !argv[index] || argv[index][0] == L'\0')
+            {
+                outError = L"--culling requires on or off\n" + std::wstring(usage);
+                return false;
+            }
+
+            const std::wstring_view value = argv[index];
+            if (value != L"on" && value != L"off")
+            {
+                outError = L"--culling must be on or off";
+                return false;
+            }
+            frustumCulling = value == L"on";
+            sawCulling = true;
+            continue;
+        }
+
         outError = L"unknown Player option: " + std::wstring(option) +
                    L"\n" + std::wstring(usage);
         return false;
@@ -117,6 +144,7 @@ bool ParsePlayerStartup(int argc, const wchar_t* const* argv,
     outStartup.scenePath = (requested.is_absolute()
                                 ? requested
                                 : runtimePaths.root / requested).lexically_normal();
+    outStartup.frustumCulling = frustumCulling;
     outStartup.benchmark = {};
     if (sawBenchmark)
     {

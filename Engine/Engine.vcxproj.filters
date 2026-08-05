@@ -15,6 +15,7 @@
     <ClCompile Include="Source\Core\Window.cpp"><Filter>Core</Filter></ClCompile>
     <ClCompile Include="Source\Graphics\DepthTarget.cpp"><Filter>Graphics</Filter></ClCompile>
     <ClCompile Include="Source\Graphics\DescriptorAllocator.cpp"><Filter>Graphics</Filter></ClCompile>
+    <ClCompile Include="Source\Graphics\Frustum.cpp"><Filter>Graphics</Filter></ClCompile>
     <ClCompile Include="Source\Graphics\GraphicsDevice.cpp"><Filter>Graphics</Filter></ClCompile>
     <ClCompile Include="Source\Graphics\Image.cpp"><Filter>Graphics</Filter></ClCompile>
     <ClCompile Include="Source\Graphics\Mesh.cpp"><Filter>Graphics</Filter></ClCompile>
@@ -37,6 +38,7 @@
     <ClInclude Include="Source\Graphics\DepthTarget.h"><Filter>Graphics</Filter></ClInclude>
     <ClInclude Include="Source\Graphics\DescriptorAllocator.h"><Filter>Graphics</Filter></ClInclude>
     <ClInclude Include="Source\Graphics\FrameResource.h"><Filter>Graphics</Filter></ClInclude>
+    <ClInclude Include="Source\Graphics\Frustum.h"><Filter>Graphics</Filter></ClInclude>
     <ClInclude Include="Source\Graphics\GraphicsDevice.h"><Filter>Graphics</Filter></ClInclude>
     <ClInclude Include="Source\Graphics\Handles.h"><Filter>Graphics</Filter></ClInclude>
     <ClInclude Include="Source\Graphics\Image.h"><Filter>Graphics</Filter></ClInclude>

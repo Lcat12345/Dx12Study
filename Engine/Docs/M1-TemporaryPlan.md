@@ -127,9 +127,13 @@ Debug Layer 오류의 원인을 분리할 수 없다.
 ```powershell
 Player.exe --benchmark 100
 Player.exe --benchmark 500 --benchmark-output Logs\custom-baseline.tsv
+Player.exe --benchmark 2000 --culling off
 ```
 
 - `--benchmark`는 `100`, `500`, `1000`, `2000`만 허용한다.
+- `--culling`은 `on`(기본)과 `off`만 허용하며 benchmark 모드와 무관하게 쓸 수 있다.
+  `off`는 M1.6 이전처럼 모든 item을 두 pass에 제출한다. 한 바이너리로 같은 비교의
+  on 행과 off 행을 만들기 위한 토글이다.
 - `--scene`이 없으면 `Arena.scene`을 선택하고, 고정 seed에서 초기 적 수와 최대 적 수를
   같은 값으로 설정한다.
 - VSync를 끄고 120 frame을 warm-up한 뒤 600 frame만 측정한다. 완료되면 Player가
@@ -207,18 +211,81 @@ shadow 각각 정확히 3 batch로 제출했다. 비균일 scale의 transform과
 
 ### 6. Main/Shadow 프러스텀 컬링
 
-- [ ] local AABB의 8개 corner와 world matrix로 보수적인 world bounds를 계산한다.
-- [ ] camera view-projection plane과 directional-light view-projection plane을 각각 만든다.
-- [ ] `BuildDrawQueues`를 main opaque, main transparent, shadow caster 결과로 분리한다.
-- [ ] main에서 보이지 않아도 shadow에 영향을 주는 caster는 shadow queue에 남긴다.
-- [ ] 컬링 뒤 보이는 opaque item만 batch로 묶는다.
-- [ ] 잘못된/빈 bounds는 false negative가 없도록 visible로 취급하고 로그 counter로 센다.
+- [x] local AABB의 8개 corner와 world matrix로 보수적인 world bounds를 계산한다.
+- [x] camera view-projection plane과 directional-light view-projection plane을 각각 만든다.
+- [x] `BuildDrawQueues`를 main opaque, main transparent, shadow caster 결과로 분리한다.
+- [x] main에서 보이지 않아도 shadow에 영향을 주는 caster는 shadow queue에 남긴다.
+- [x] 컬링 뒤 보이는 opaque item만 batch로 묶는다.
+- [x] 잘못된/빈 bounds는 false negative가 없도록 visible로 취급하고 로그 counter로 센다.
 
 종료 조건:
 
-- main 밖/shadow 안, main 안/shadow 밖, 양쪽 밖의 세 fixture가 올바른 queue에 들어간다.
-- 화면 경계의 큰/회전/비균일 scale mesh가 갑자기 사라지지 않는다.
-- 컬링 단독 기여를 비교할 수 있도록 on/off 측정 행을 남긴다.
+- [x] main 밖/shadow 안, main 안/shadow 밖, 양쪽 밖의 세 fixture가 올바른 queue에 들어간다.
+- [x] 화면 경계의 큰/회전/비균일 scale mesh가 갑자기 사라지지 않는다.
+- [x] 컬링 단독 기여를 비교할 수 있도록 on/off 측정 행을 남긴다.
+
+#### 구현 결정
+
+`Graphics/Frustum.h`의 순수 함수 3개가 판정의 전부다. 렌더러 밖에서 시험할 수 있는
+형태로 분리했기 때문에 queue 분류를 device 없이 단위 테스트로 고정할 수 있다.
+
+- world bounds는 프레임당 item마다 한 번만 만든다. 그림자 볼륨 fit과 두 컬링 판정이
+  같은 8-corner box를 쓰는데, 이를 두 번 계산했을 때는 컬링으로 아낀 것보다 비용이
+  더 컸다.
+- 그림자 볼륨은 컬링 **전에**, 그리고 컬링 결과가 아니라 모든 opaque item에 맞춘다.
+  카메라를 따라가는 볼륨은 플레이어가 돌 때마다 그림자 맵 배율을 바꾸고, 배율이
+  프레임마다 흔들리는 그림자 맵은 모든 경계에서 기어다닌다.
+- caster 판정은 camera frustum을 빛의 반대 방향으로 쓸어낸 볼륨이다. 안쪽 법선이
+  쓸기 방향과 같은 평면만 남기면 결과는 실제 쓸린 볼륨을 항상 포함한다. 화면 밖에
+  있어도 화면 안으로 그림자를 던질 수 있는 caster는 이 볼륨에 들어온다.
+- main에서 보이는 opaque item은 무조건 caster로 둔다. 기하학적으로도 참이지만,
+  batch가 이 포함 관계에 의존하므로 코드에 명시해 불변식으로 만들었다.
+- batch는 한 벌만 만든다. 각 batch의 instance run을 main-visible 먼저 정렬해 두면
+  main pass는 앞부분만, shadow pass는 전체를 그린다. 두 pass가 다른 집합을 그리면서도
+  프레임당 instance 기록은 "그려지는 item당 하나"로 유지된다.
+- 평면 판정에는 world 단위 `1e-4` 여유를 준다. 컬링은 최적화이므로 반올림과 다투다
+  지면 두 번 그릴지언정 빠뜨리면 안 된다.
+
+#### 컬링 단독 결과
+
+2026-08-05, Release, 1280×720, MSAA 4x, VSync off,
+NVIDIA GeForce RTX 5070 Ti. 원본 행은 [M1-Culling.tsv](M1-Culling.tsv)에 보존한다.
+
+on/off를 N마다 바로 이어서 짝지어 12회씩 돌리고, 12개 median의 중앙값을 적었다. 컬링
+off는 M1.6 이전 렌더러와 같은 queue를 제출하므로 이 표의 off 열이 인스턴싱 단독
+기준선이다. 절대값이 [M1-Instancing.tsv](M1-Instancing.tsv)와 다른 것은 세션이 다르기
+때문이며, 짝지어 잰 on/off 사이만 비교에 쓴다.
+
+한 셀의 median조차 실행마다 ±15%씩 흔들린다(예: off 2000은 1.060~1.308). 4회로는
+부호가 뒤집혔고 12회에서야 안정됐다. 아래 차이는 그 흔들림보다 작으므로 **추세로만**
+읽어야 한다.
+
+| 적 N | off median (ms) | on median (ms) | 변화 | main visible | shadow visible |
+|---:|---:|---:|---:|---:|---:|
+| 100 | 0.679 | 0.665 | -2% | 104 → 42 | 104 |
+| 500 | 0.773 | 0.731 | -5% | 504 → 215 | 504 |
+| 1000 | 0.921 | 0.869 | -6% | 1004 → 451 | 1004 |
+| 2000 | 1.139 | 1.128 | -1% | 2004 → 911 | 2004 |
+
+draw call은 두 설정 모두 11이다. 컬링은 batch 수가 아니라 batch당 instance 수를 줄인다.
+object/instance capacity도 두 설정에서 같다. instance capacity가 두 배가 되지 않는 것이
+main/shadow가 instance run을 공유한다는 증거이며, 회귀 테스트가 이 값을 고정한다.
+
+**보이는 item을 55% 줄였는데 프레임타임은 0~6%만 줄었다.** 이 구간에서 컬링이 지우지
+못하는 항목이 프레임타임의 대부분이라는 뜻이고, 그중 하나는 이미 특정된다.
+`UpdateObjectConstants`는 여전히 제출된 item 전부에 176바이트를 쓰는데, 인스턴싱 경로의
+b0는 batch당 한 번만 읽힌다. 2000마리에서 이 기록의 거의 전부가 아무도 읽지 않는
+바이트다. 컬링을 더 조여도 여기는 줄지 않으므로 다음 지렛대는 8번 작업에 둔다.
+
+`shadow_culled`는 모든 행에서 0이다. 추측이 아니라 Arena의 배치 때문이다. Arena Camera의
+forward는 약 `(0, -0.659, 0.752)`, Arena Sun의 방향은 약 `(-0.325, -0.783, 0.530)`으로
+사잇각이 24°밖에 되지 않는다. 태양이 카메라 뒤에서 카메라가 보는 쪽으로 비치므로 쓸기
+방향이 시선 반대 방향과 거의 같고, far plane을 제외한 모든 평면이 쓸기에서 풀린다.
+즉 **화면 앞의 거의 모든 것이 화면 안으로 그림자를 던질 수 있다** — 판정이 아니라 이
+조명 배치의 사실이다. 태양이 시선을 가로지르는 scene에서는 같은 코드가 caster를 줄인다.
+그림자 쪽에서 더 얻으려면 광원 볼륨을 카메라가 보는 영역에 맞춰야 하는데, 그림자 맵
+배율 안정성을 포기하는 변경이므로 M1.6 범위 밖으로 둔다.
+
 
 ### 7. SRV heap 상한 제거
 
@@ -246,6 +313,9 @@ D3D12 descriptor heap 자체는 resize할 수 없으므로 단순 `64 -> 큰 수
 - [ ] 임시 benchmark 옵션이 일반 Player 시작 경로와 패키지를 바꾸지 않는지 확인한다.
 - [ ] `Arena.scene`을 M1 기본 실행 대상으로 정하되 `--scene` 계약은 유지한다.
 - [ ] 코드에 남은 고정 256/64 가정과 오래된 오류 문구를 제거한다.
+- [ ] `UpdateObjectConstants`가 제출된 item 전부에 쓰는 것을 줄인다. 인스턴싱 경로의
+  b0는 batch당 한 번만 읽히므로 2000마리에서 기록의 대부분은 읽히지 않는다. 6번
+  작업의 측정에서 나온 항목이다.
 - [ ] 결과표와 Debug Layer 결과를 `ROADMAP.md`의 M1 기록에 반영한다.
 - [ ] M1 체크박스와 `v1.4` 완료 조건을 모두 확인한 뒤 이 임시 문서를 삭제한다.
 
